@@ -30,7 +30,7 @@ A possible direction in scaling the model includes recovery from simulated senso
 
 In order to ensure a wide range of input data, the `cmd_vel` input will be supplied with a mouse-based teleoperation node that acts in the continuous domain without too much efforts. Data will be sampled and possibly aggregated at regular intervals to reduce chances of collecting redundant data.
 
-Given a relatively unsophisticated problem definition, ...
+Given a relatively constrained input space (i.e. I will limit the training and testing operating environments to a indoor room-like environments), I anticipate the size of the dataset in a range from 1000-10000. If the problem space will be extended to a more general version, I'll try to incorporate other datasets if the exist; since the plan is to incorporate multiple sensors, there may not exist a dataset already (or it may, given the the sensors under consideration are sampled from a relatively standard set) but this is an area for research.
 
 ## Algorithm
 
