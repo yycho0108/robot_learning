@@ -1,0 +1,161 @@
+<?xml version='1.0'?>
+<robot name="robot" xmlns:xacro="http://ros.org/wiki/xacro">
+    <xacro:include filename="$(find robot_learning)/urdf/common.xacro"/>
+    <xacro:include filename="$(find robot_learning)/urdf/robot.gazebo"/>
+
+	<!-- body -->
+    <xacro:property name="br" value="${6.5*inch}"/>
+    <xacro:property name="bh" value="${2.5*inch}"/>
+
+	<!-- wheel -->
+    <xacro:property name="wr" value="${3.0/2.0 * inch}"/>
+    <xacro:property name="wd" value="0.248"/>
+    <xacro:property name="wt" value="${0.75 * inch}"/>
+
+	<!-- caster -->
+	<xacro:property name="cr" value="0.04"/>
+
+    <link name="base_link"></link>
+
+    <!-- base_footprint alias for ground plane projection -->
+    <link name="base_footprint"></link>
+    <joint name="base_footprint_joint" type="fixed">
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <parent link="base_link"/>
+        <child link="base_footprint"/>
+    </joint>
+
+    <joint name="chassis_joint" type="fixed">
+        <origin xyz="${-3*inch} 0 ${0.5 * inch}" rpy="0 0 0" />
+        <parent link="base_link"/>
+        <child link="chassis" />
+    </joint>
+
+    <link name='chassis'>
+        <inertial>
+            <mass value="${9 * lb}"/>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <cylinder_inertia m="${9 * lb}" r="${br}" h="${bh}"/>
+        </inertial>
+
+        <visual>
+            <origin
+                xyz="0 0 0"
+                rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://robot_learning/urdf/neato_body.stl" />
+            </geometry>
+            <material
+                name="">
+                <color
+                    rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+            </material>
+        </visual>
+
+        <collision>
+            <origin
+                xyz="0 0 0"
+                rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://robot_learning/urdf/neato_body.stl" />
+            </geometry>
+            <material
+                name="">
+                <color
+                    rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+            </material>
+        </collision>
+
+    </link>
+
+	<xacro:wheel wheel_prefix="left" wheel_mass="5" wheel_radius="${wr}" wheel_thickness="${wt}" parent="base_link">
+        <origin xyz="0 ${wd/2} ${wr}" rpy="${-pi/2} 0 0"/>
+    </xacro:wheel>
+
+	<xacro:wheel wheel_prefix="right" wheel_mass="5" wheel_radius="${wr}" wheel_thickness="${wt}" parent="base_link">
+        <origin xyz="0 ${-wd/2} ${wr}" rpy="${-pi/2} 0 0"/>
+    </xacro:wheel>
+
+    <link name="caster">
+        <inertial>
+            <mass value="0.1"/>
+            <sphere radius="${3.0/2 * inch}"/>
+            <sphere_inertia m="0.1" r="${3.0/2 * inch}"/>
+        </inertial>
+        <visual>
+            <geometry>
+                <sphere radius="${3.0/2 * inch}"/>
+            </geometry>
+            <material name="black">
+                <color rgba="0 0 0 0.5"/>
+            </material>
+        </visual>
+        <collision>
+            <geometry>
+                <sphere radius="${3.0/2 * inch}"/>
+            </geometry>
+        </collision>
+    </link>
+
+    <joint name="caster_joint" type="fixed">
+        <origin xyz="${5.0*inch} 0 ${3.0/2*inch}" rpy="0 0 0"/>
+        <parent link="base_link"/>
+        <child link="caster"/>
+    </joint>
+
+    <link name="camera">
+        <inertial>
+            <mass value="0.1"/>
+            <inertia ixx="1e-6" ixy="0" ixz="0" iyy="1e-6" iyz="0" izz="1e-6"/>
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <box size="0.05 0.05 0.05"/>
+            </geometry>
+        </visual>
+        <collision>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <box size="0.05 0.05 0.05"/>
+            </geometry>
+        </collision>
+    </link>
+
+    <joint name="camera_joint" type="fixed">
+        <parent link="chassis"/>
+        <child link="camera"/>
+        <origin xyz="${0.1-3*inch} 0 0.1" rpy="0 0 0"/>
+    </joint>
+
+	<link name="camera_optical"/>
+	<joint name="camera_optical_joint" type="fixed">
+		<origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
+        <parent link="camera"/>
+        <child link="camera_optical"/>
+	</joint>
+
+    <link name="base_laser_link">
+        <inertial>
+            <mass value="0.1"/>
+            <cylinder_inertia m="0.1" r="${4*inch}" h="${0.1*inch}"/>
+        </inertial>
+        <visual>
+            <geometry>
+                <cylinder length="${0.1*inch}" radius="${4*inch}"/>
+            </geometry>
+        </visual>
+        <collision>
+            <geometry>
+                <cylinder length="${0.1*inch}" radius="${4*inch}"/>
+            </geometry>
+        </collision>
+    </link>
+
+    <joint name="laser_joint" type="fixed">
+        <parent link="base_link"/>
+        <child link="base_laser_link"/>
+        <origin xyz="${-3*inch} 0 ${2.5 * inch + 0.1 * inch}" rpy="0 0 -3.14"/>
+    </joint>
+
+</robot>

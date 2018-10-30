@@ -1,0 +1,77 @@
+<?xml version='1.0'?>
+<robot name="common" xmlns:xacro="http://ros.org/wiki/xacro">
+
+	<!-- units begin -->
+	<xacro:property name="inch" value="0.0254"/>
+	<xacro:property name="lb" value="0.453592"/>
+	<xacro:property name="deg" value="${pi/180.0}"/>
+	<!-- units end -->
+
+    <!-- inertial begin -->
+    <xacro:macro name="cylinder_inertia" params="m r h">
+		<inertia  ixx="${m*(3*r*r+h*h)/12}" ixy = "0" ixz = "0"
+			iyy="${m*(3*r*r+h*h)/12}" iyz = "0"
+			izz="${m*r*r/2}"
+			/>
+	</xacro:macro>
+	<xacro:macro name="box_inertia" params="x y z mass">
+		<inertia ixx="${0.0833333 * mass * (y*y + z*z)}" ixy="0.0" ixz="0.0"
+			iyy="${0.0833333 * mass * (x*x + z*z)}" iyz="0.0"
+			izz="${0.0833333 * mass * (x*x + y*y)}" />
+	</xacro:macro>
+
+    <xacro:macro name="sphere_inertia" params="r m">
+		<inertia ixx="${0.4*m*r*r}" ixy="0.0" ixz="0.0"
+			iyy="${0.4*m*r*r}" iyz="0.0"
+			izz="${0.4*m*r*r}" />
+    </xacro:macro> 
+    <!-- inertial end -->
+
+	<xacro:macro name="wheel" params="wheel_prefix wheel_mass wheel_radius wheel_thickness parent *origin">
+		<link name="${wheel_prefix}_wheel_link">
+			<inertial>
+				<mass value="${wheel_mass}"/>
+				<cylinder_inertia m="${wheel_mass}" r="${wheel_radius}" h="${wheel_thickness}"/>
+			</inertial>
+			<visual>
+				<origin xyz="0 0 0" rpy="0 0 0"/>
+				<geometry>
+					<cylinder length="${wheel_thickness}" radius="${wheel_radius}"/>
+				</geometry>
+				<material name="black">
+					<color rgba="0 0 0 0.5"/>
+				</material>
+			</visual>
+			<collision>
+				<self_collide>false</self_collide>
+				<origin xyz="0.0 0.0 0" rpy="0 0 0"/>
+				<geometry>
+					<cylinder length="${wheel_thickness}" radius="${wheel_radius}"/>
+				</geometry>
+			</collision>
+		</link>
+
+		<joint name="${wheel_prefix}_wheel_joint" type="continuous">
+			<parent link="${parent}"/>
+			<child link="${wheel_prefix}_wheel_link"/>
+			<xacro:insert_block name="origin"/>
+			<!---<joint_properties damping="0.0" friction="0.5"/>-->
+			<axis xyz="0 0 1"/>
+			<limit effort="10000" velocity="1000"/>
+			<dynamics damping="1.0" friction="1.0"/>
+		</joint>
+
+		<transmission name="${wheel_prefix}_wheel_transmission">
+			<type>transmission_interface/SimpleTransmission</type>
+			<!--<type>hardware_interface</type>-->
+			<actuator name="${wheel_prefix}_wheel_motor">
+				<hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
+				<mechanicalReduction>1</mechanicalReduction>
+			</actuator>
+			<joint name="${wheel_prefix}_wheel_joint">
+				<hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
+			</joint>
+		</transmission>
+	</xacro:macro>
+
+</robot>

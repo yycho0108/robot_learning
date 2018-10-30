@@ -1,0 +1,9 @@
+<launch>
+    <arg name="gt_odom" default="false" doc="if gt_odom:=true, publish ground truth information"/>
+	<param name="robot_description"
+		command="$(find xacro)/xacro '$(find robot_learning)/urdf/robot.xacro' --inorder" />
+
+    <node name="joint_state_publisher" pkg="joint_state_publisher" type="joint_state_publisher" respawn="true" output="screen"/>
+    <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" respawn="true" output="screen"/>
+
+</launch>

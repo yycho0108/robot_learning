@@ -1,0 +1,24 @@
+<launch>
+    <arg name="host"/>
+    <arg name="cam" default="false"/>
+    <param name="use_sim_time" value="false"/>
+
+    <!-- transforms -->
+    <include file="$(find robot_learning)/launch/urdf.launch"/>
+
+    <!-- standard data  -->
+    <node name="neato" pkg="neato_node" type="neato_hybrid.py" output="screen">
+        <param name="host" value="$(arg host)" />
+    </node>
+    <node name="scan_stabilizer" pkg="neato_node" type="fix_scan_fast"/>
+
+    <!-- camera -->
+    <include file="$(find gscam)/examples/raspi_nodelet_udp.launch" if="$(arg cam)">
+        <arg name="host" value="$(arg host)"/>
+        <arg name="receive_port" value="5000"/>
+        <arg name="width" value="640"/>
+        <arg name="height" value="480"/>
+        <arg name="fps" value="30"/>
+    </include>
+
+</launch>
