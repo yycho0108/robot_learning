@@ -1,0 +1,6 @@
+<launch>
+    <node pkg="robot_localization" type="ukf_localization_node" name="fuse_local">
+        <rosparam command="load" file="$(find pwm_localization)/config/fuse_local.yaml"/>
+		<remap from="odometry/filtered/" to="/odom/local"/>
+    </node>
+</launch>

@@ -1,0 +1,8 @@
+<launch>
+    <arg name="orb_path" default="$(find ORB_SLAM2)/../../.."/>
+    <node pkg="ORB_SLAM2" type="Mono" name="vo"
+        args="$(arg orb_path)/Vocabulary/ORBvoc.txt $(find robot_learning)/config/camera.yaml"
+        output="screen"
+        >
+    </node>
+</launch>

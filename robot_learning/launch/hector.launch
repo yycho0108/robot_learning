@@ -1,4 +1,6 @@
 <launch>
+    <arg name="scan_topic" default="scan"/>
+
 	<!-- Hector mapping -->
 	<node pkg="hector_mapping" type="hector_mapping" name="hector_mapping" output="screen">
 		<!-- Frame names -->
@@ -34,7 +36,7 @@
 		<!-- Advertising config -->
 		<param name="advertise_map_service"      value="true"/> 
 		<param name="scan_subscriber_queue_size" value="10"/>
-		<param name="scan_topic" value="/stable_scan"/>
+		<param name="scan_topic" value="$(arg scan_topic)"/>
 
 	</node>
 

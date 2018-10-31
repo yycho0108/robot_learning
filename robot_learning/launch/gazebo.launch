@@ -1,16 +1,27 @@
 <launch>
+    <arg name="world" default="$(find warmup_project)/worlds/garage.world"/>
+    <arg name="pose" default="-x 0 -y 0 -z 0 -R 0 -P 0 -Y 0"/>
+
     <param name="use_sim_time" value="true"/>
 
     <include file="$(find warmup_project)/launch/empty_world_remap.launch">
         <arg name="use_sim_time" value="true"/>
         <arg name="debug" value="false"/>
         <!--<arg name="world_name" value="$(find warmup_project)/worlds/jackal_race.world"/>-->
-        <arg name="world_name" value="$(find warmup_project)/worlds/garage.world"/>
+        <arg name="world_name" value="$(arg world)"/>
     </include>
 
+    <!--
     <include file="$(find neato_simulator)/launch/includes/neato.launch.xml"/>
+    -->
 
+    <include file="$(find robot_learning)/launch/urdf.launch"/>
+    <node name="spawn_neato_model" pkg="gazebo_ros" type="spawn_model"
+        args="-urdf -param robot_description -model neato -unpause $(arg pose)"/>
+
+    <!--
     <node pkg="robot_state_publisher" type="robot_state_publisher" name="robot_state_publisher">
         <param name="publish_frequency" type="double" value="30.0" />
     </node>
+    -->
 </launch>
