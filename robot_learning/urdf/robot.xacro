@@ -76,7 +76,7 @@
         <origin xyz="0 ${-wd/2} ${wr}" rpy="${-pi/2} 0 0"/>
     </xacro:wheel>
 
-    <link name="caster">
+    <link name="front_caster">
         <inertial>
             <mass value="0.1"/>
             <sphere radius="${3.0/2 * inch}"/>
@@ -97,11 +97,39 @@
         </collision>
     </link>
 
-    <joint name="caster_joint" type="fixed">
+    <joint name="front_caster_joint" type="fixed">
         <origin xyz="${5.0*inch} 0 ${3.0/2*inch}" rpy="0 0 0"/>
         <parent link="base_link"/>
-        <child link="caster"/>
+        <child link="front_caster"/>
     </joint>
+
+    <link name="back_caster">
+        <inertial>
+            <mass value="0.1"/>
+            <sphere radius="${3.0/2 * inch}"/>
+            <sphere_inertia m="0.1" r="${3.0/2 * inch}"/>
+        </inertial>
+        <visual>
+            <geometry>
+                <sphere radius="${3.0/2 * inch}"/>
+            </geometry>
+            <material name="black">
+                <color rgba="0 0 0 0.5"/>
+            </material>
+        </visual>
+        <collision>
+            <geometry>
+                <sphere radius="${3.0/2 * inch}"/>
+            </geometry>
+        </collision>
+    </link>
+
+    <joint name="back_caster_joint" type="fixed">
+        <origin xyz="${-3.0*inch} 0 ${3.0/2*inch}" rpy="0 0 0"/>
+        <parent link="base_link"/>
+        <child link="back_caster"/>
+    </joint>
+
 
     <link name="camera">
         <inertial>
@@ -138,16 +166,16 @@
     <link name="base_laser_link">
         <inertial>
             <mass value="0.1"/>
-            <cylinder_inertia m="0.1" r="${4*inch}" h="${0.1*inch}"/>
+            <cylinder_inertia m="0.1" r="${2*inch}" h="${0.1*inch}"/>
         </inertial>
         <visual>
             <geometry>
-                <cylinder length="${0.1*inch}" radius="${4*inch}"/>
+                <cylinder length="${0.1*inch}" radius="${2*inch}"/>
             </geometry>
         </visual>
         <collision>
             <geometry>
-                <cylinder length="${0.1*inch}" radius="${4*inch}"/>
+                <cylinder length="${0.1*inch}" radius="${2*inch}"/>
             </geometry>
         </collision>
     </link>
@@ -155,7 +183,7 @@
     <joint name="laser_joint" type="fixed">
         <parent link="base_link"/>
         <child link="base_laser_link"/>
-        <origin xyz="${-3*inch} 0 ${2.5 * inch + 0.1 * inch}" rpy="0 0 -3.14"/>
+        <origin xyz="${-3*inch} 0 ${2.5 * inch + 0.8 * inch}" rpy="0 0 -3.14"/>
     </joint>
 
 </robot>

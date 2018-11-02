@@ -7,7 +7,10 @@ Panels:
         - /Global Options1
         - /Status1
         - /TF1/Frames1
-        - /Image1
+        - /OdomWheel1/Shape1
+        - /OdomICP1/Status1
+        - /OdomICP1/Shape1
+        - /GroundTruth1/Status1
       Splitter Ratio: 0.5
     Tree Height: 391
   - Class: rviz/Selection
@@ -51,55 +54,19 @@ Visualization Manager:
       Reference Frame: <Fixed Frame>
       Value: true
     - Class: rviz/TF
-      Enabled: true
+      Enabled: false
       Frame Timeout: 15
       Frames:
         All Enabled: false
-        base_footprint:
-          Value: true
-        base_laser_link:
-          Value: true
-        base_link:
-          Value: true
-        camera:
-          Value: false
-        camera_optical:
-          Value: false
-        caster:
-          Value: false
-        chassis:
-          Value: false
-        left_wheel_link:
-          Value: false
-        odom:
-          Value: true
-        right_wheel_link:
-          Value: false
       Marker Scale: 1
       Name: TF
       Show Arrows: true
       Show Axes: true
       Show Names: true
       Tree:
-        base_link:
-          base_footprint:
-            {}
-          base_laser_link:
-            {}
-          caster:
-            {}
-          chassis:
-            camera:
-              camera_optical:
-                {}
-          left_wheel_link:
-            {}
-          right_wheel_link:
-            {}
-        odom:
-          {}
+        {}
       Update Interval: 0
-      Value: true
+      Value: false
     - Alpha: 0.5
       Class: rviz/RobotModel
       Collision Enabled: true
@@ -110,6 +77,11 @@ Visualization Manager:
         Expand Link Details: false
         Expand Tree: false
         Link Tree Style: Links in Alphabetic Order
+        back_caster:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
         base_footprint:
           Alpha: 1
           Show Axes: false
@@ -132,12 +104,12 @@ Visualization Manager:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-        caster:
+        chassis:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        chassis:
+        front_caster:
           Alpha: 1
           Show Axes: false
           Show Trail: false
@@ -226,11 +198,113 @@ Visualization Manager:
       Transport Hint: raw
       Unreliable: false
       Value: true
+    - Angle Tolerance: 0.100000001
+      Class: rviz/Odometry
+      Covariance:
+        Orientation:
+          Alpha: 0.5
+          Color: 255; 255; 127
+          Color Style: Unique
+          Frame: Local
+          Offset: 1
+          Scale: 1
+          Value: true
+        Position:
+          Alpha: 0.300000012
+          Color: 204; 51; 204
+          Scale: 1
+          Value: true
+        Value: false
+      Enabled: true
+      Keep: 100
+      Name: OdomWheel
+      Position Tolerance: 0.100000001
+      Shape:
+        Alpha: 0.5
+        Axes Length: 1
+        Axes Radius: 0.100000001
+        Color: 255; 25; 0
+        Head Length: 0.300000012
+        Head Radius: 0.100000001
+        Shaft Length: 0.5
+        Shaft Radius: 0.0500000007
+        Value: Arrow
+      Topic: /odom
+      Unreliable: false
+      Value: true
+    - Angle Tolerance: 0.100000001
+      Class: rviz/Odometry
+      Covariance:
+        Orientation:
+          Alpha: 0.5
+          Color: 255; 255; 127
+          Color Style: Unique
+          Frame: Local
+          Offset: 1
+          Scale: 1
+          Value: true
+        Position:
+          Alpha: 0.300000012
+          Color: 204; 51; 204
+          Scale: 1
+          Value: true
+        Value: false
+      Enabled: true
+      Keep: 100
+      Name: OdomICP
+      Position Tolerance: 0.100000001
+      Shape:
+        Alpha: 0.5
+        Axes Length: 1
+        Axes Radius: 0.100000001
+        Color: 53; 255; 178
+        Head Length: 0.300000012
+        Head Radius: 0.100000001
+        Shaft Length: 0.5
+        Shaft Radius: 0.0500000007
+        Value: Arrow
+      Topic: /odom_icp
+      Unreliable: false
+      Value: true
+    - Angle Tolerance: 0.100000001
+      Class: rviz/Odometry
+      Covariance:
+        Orientation:
+          Alpha: 0.5
+          Color: 255; 255; 127
+          Color Style: Unique
+          Frame: Local
+          Offset: 1
+          Scale: 1
+          Value: true
+        Position:
+          Alpha: 0.300000012
+          Color: 204; 51; 204
+          Scale: 1
+          Value: true
+        Value: true
+      Enabled: false
+      Keep: 100
+      Name: GroundTruth
+      Position Tolerance: 0.100000001
+      Shape:
+        Alpha: 1
+        Axes Length: 1
+        Axes Radius: 0.100000001
+        Color: 255; 25; 0
+        Head Length: 0.300000012
+        Head Radius: 0.100000001
+        Shaft Length: 1
+        Shaft Radius: 0.0500000007
+        Value: Arrow
+      Topic: /ground_truth_pose
+      Unreliable: false
+      Value: false
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
     Default Light: true
-    Fixed Frame: base_link
+    Fixed Frame: odom
     Frame Rate: 32
   Name: root
   Tools:
@@ -251,25 +325,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 12.7183809
+      Distance: 22.147953
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.0599999987
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: -0.13983804
-        Y: 0.147062242
-        Z: 0.205895185
+        X: 4.21326208
+        Y: 4.05505657
+        Z: 0.591686785
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.0500000007
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.00999999978
-      Pitch: 1.15479493
+      Pitch: 1.56479633
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 4.22818279
+      Yaw: 4.76817608
     Saved: ~
 Window Geometry:
   Displays:

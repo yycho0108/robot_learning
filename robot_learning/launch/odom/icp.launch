@@ -1,0 +1,43 @@
+<launch>
+    <arg name="scan_topic"       default="/stable_scan"/>
+    <arg name="scan_cloud_topic" default="/scan_cloud"/>
+    <arg name="odom_topic"       default="/odom_icp"/>
+
+    <arg name="frame_id" default="base_link"/>
+    <arg name="odom_frame_id" default=""/> <!-- use odom topic -->
+    <arg name="vo_frame_id" default="$(arg odom_topic)"/> <!-- use odom topic -->
+
+    <!-- no ground truth -->
+    <arg name="ground_truth_frame_id" default=""/>
+    <arg name="ground_truth_base_frame_id" default=""/>
+
+    <arg name="wait_for_transform" default="0.2"/>
+    <arg name="cfg" default=""/>
+    <arg name="queue_size" default="10"/>
+    <arg name="odom_guess_frame_id" default="odom"/>
+    <arg name="odom_guess_min_translation" default="0"/>
+    <arg name="odom_guess_min_rotation" default="0"/>
+
+    <node pkg="rtabmap_ros" type="icp_odometry" name="icp" output="screen">
+        <remap from="scan"                   to="$(arg scan_topic)"/>
+        <remap from="scan_cloud"             to="$(arg scan_cloud_topic)"/>
+        <remap from="odom"                   to="$(arg odom_topic)"/>
+
+        <param name="frame_id"                    type="string" value="$(arg frame_id)"/>
+        <param name="odom_frame_id"               type="string" value="$(arg vo_frame_id)"/>
+        <param name="ground_truth_frame_id"       type="string" value="$(arg ground_truth_frame_id)"/>
+        <param name="ground_truth_base_frame_id"  type="string" value="$(arg ground_truth_base_frame_id)"/>
+        <param name="wait_for_transform_duration" type="double" value="$(arg wait_for_transform)"/>
+        <param name="config_path"                 type="string" value="$(arg cfg)"/>
+        <param name="queue_size"                  type="int"    value="$(arg queue_size)"/>
+        <param name="guess_frame_id"              type="string" value="$(arg odom_guess_frame_id)"/>
+        <param name="guess_min_translation"       type="double" value="$(arg odom_guess_min_translation)"/>
+        <param name="guess_min_rotation"          type="double" value="$(arg odom_guess_min_rotation)"/>
+
+        <!-- more configuration params -->
+		<param name="Odom/Holonomic" type="string" value="false"/>
+        <param name="Odom/Strategy" type="string" value="1"/> <!-- F2F -->
+        <param name="Reg/Strategy" type="string" value="1"/>
+
+    </node>
+</launch>
