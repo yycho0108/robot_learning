@@ -12,6 +12,12 @@ from sensor_msgs.msg import LaserScan, Image
 from geometry_msgs.msg import Pose, PoseStamped, PoseArray, Vector3
 from visualization_msgs.msg import Marker, MarkerArray
 import message_filters
+from functools import partial
+
+try:
+  from pathlib import Path
+except ImportError:
+  from pathlib2 import Path  # python 2 backport
 
 # TODO : finish implementation
 
@@ -219,6 +225,7 @@ class DataCollector(object):
         self.scan_ = None
 
     def save(self, path='/tmp'):
+        Path(path).mkdir(parents=True, exist_ok=True)
         data = zip(*self.dataset_) # reformat to [time, img, odom, scan]
         dtypes = [np.float32, np.uint8, np.float32, np.float32]
         data = [np.asarray(d, dtype=t) for (d,t) in zip(data, dtypes)]
@@ -241,11 +248,15 @@ def main():
 
     min_dr = rospy.get_param('~min_dr', 0.01) #min of 1cm/1deg for "next data"
     min_dh = rospy.get_param('~min_dh', np.deg2rad(1.0))
+    run_id = rospy.get_param('~run_id', len(os.listdir('/tmp/data')))
+    path   = os.path.join('/tmp/data/', str(run_id))
 
     rospy.loginfo('== Parameters ==')
     rospy.loginfo('use_tf : {}'.format(use_tf))
     rospy.loginfo('sync   : {}'.format(sync))
     rospy.loginfo('slop   : {}'.format(slop))
+    rospy.loginfo('rate   : {}'.format(rate))
+    rospy.loginfo('path   : {}'.format(path))
     rospy.loginfo('================')
 
     dc = DataCollector(start=True,
@@ -254,7 +265,8 @@ def main():
             min_dh=min_dh
             )
 
-    rospy.on_shutdown(dc.save) # save on shutdown
+    save_fn = partial(dc.save, path=path)
+    rospy.on_shutdown(save_fn) # save on shutdown
     rate = rospy.Rate(rate)
     while not rospy.is_shutdown():
         if dc.new_data_:
