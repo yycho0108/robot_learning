@@ -75,39 +75,55 @@ def main():
             q_i = [q_img, q_lab]
             q_t = [e.dtype for e in q_i]
             q_s = [e.shape[1:] for e in q_i]
-            Q = tf.FIFOQueue(capacity=256, dtypes=q_t, shapes=q_s)
+            Q = tf.FIFOQueue(capacity=128, dtypes=q_t, shapes=q_s)
             enqueue_op = Q.enqueue_many(q_i)
             
             img, lab = Q.dequeue_many(cfg.BATCH_SIZE)
 
-        with tf.name_scope('net_t'):
-            net = VONet(global_step, img=img, lab=lab, batch_size=cfg.BATCH_SIZE, train=is_training, log=print)
-        with tf.name_scope('net_v'):
-            net_v = VONet(global_step, batch_size=cfg.VAL_BATCH_SIZE, train=False, log=no_op, reuse=True)
-
-        learning_rate = tf.train.exponential_decay(cfg.LEARNING_RATE,
+        # initial ramp-up 1e-6 -> 1e-4
+        lr0 = tf.train.exponential_decay(1e-6,
+                global_step, 100, 1e2, staircase=False)
+        
+        # standard decay 1e-4 -> 1e-3
+        lr1 = tf.train.exponential_decay(cfg.LEARNING_RATE,
                 global_step, cfg.STEPS_PER_DECAY, cfg.DECAY_FACTOR, staircase=True)
-        learning_rate = tf.where(global_step < 50, 1e-6, learning_rate) # employ slow initial learning rate
-        tf.summary.scalar('qsize', Q.size())
-        tf.summary.scalar('learning_rate',learning_rate, collections='train')
+        learning_rate = tf.where(global_step < 100, lr0, lr1) # employ slow initial learning rate
+        
+        # option 2 : standard
+        #learning_rate = tf.train.exponential_decay(cfg.LEARNING_RATE,
+        #        global_step, cfg.STEPS_PER_DECAY, cfg.DECAY_FACTOR, staircase=True)
 
-        summary_t = tf.summary.merge_all('train')
+        with tf.name_scope('net_t'):
+            net = VONet(global_step,
+                    learning_rate=learning_rate, img=img, lab=lab,
+                    batch_size=cfg.BATCH_SIZE,
+                    train=is_training, log=print)
+        with tf.name_scope('net_v'):
+            net_v = VONet(global_step,
+                    batch_size=cfg.VAL_BATCH_SIZE,
+                    train=False, log=no_op, reuse=True)
+
+        tf.summary.scalar('qsize', Q.size(), collections=['train'])
+        tf.summary.scalar('learning_rate',learning_rate, collections=['train'])
+
+        summary_t = tf.summary.merge([tf.summary.merge_all(), tf.summary.merge_all('train')])
         summary_v = tf.summary.merge_all('valid')
+
         writer_t = tf.summary.FileWriter(log_root_t, graph)
         writer_v = tf.summary.FileWriter(log_root_v, graph)
         saver = tf.train.Saver()
 
-    gpu_options = tf.GPUOptions(allow_growth=True, per_process_gpu_memory_fraction=0.95)
-    config = tf.ConfigProto(log_device_placement=False, gpu_options=gpu_options)
+    #gpu_options = tf.GPUOptions(allow_growth=True, per_process_gpu_memory_fraction=0.95)
+    #config = tf.ConfigProto(log_device_placement=False, gpu_options=gpu_options)
+    config = None
 
     with tf.Session(graph=graph, config=config) as sess:
         coord = tf.train.Coordinator()
         def enqueue():
             q_ts = [q_img, q_lab] # input tensors
             while not coord.should_stop():
-                q_vs = dm.get(batch_size=32, time_steps=cfg.TIME_STEPS, aug=True)
+                q_vs = dm.get(batch_size=8, time_steps=cfg.TIME_STEPS, aug=True)
                 sess.run(enqueue_op, feed_dict={t:v for (t,v) in zip(q_ts, q_vs)})
-
 
         # initialization
         sess.run(tf.global_variables_initializer())
@@ -131,7 +147,7 @@ def main():
                     {net.img_ : img, net.lab_ : lab})
             writer_t.add_summary(s, i)
 
-            if (i>0) and (i%cfg.VAL_STEPS) ==0:
+            if (i>0) and (i%cfg.VAL_STEPS)==0:
                 # validation
                 img, lab = dm_v.get(batch_size=cfg.VAL_BATCH_SIZE, time_steps=cfg.TIME_STEPS, aug=False)
                 img = proc_img(img)

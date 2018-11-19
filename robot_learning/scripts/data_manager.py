@@ -141,8 +141,9 @@ class DataManager(object):
 
         if flip:
             # flip left-right
-            img = img[:,:,::-1]
+            img = np.copy(img[:,:,::-1])
             # flip sign for dy-dh
+            lab = np.copy(lab)
             lab[:,1:] = lab[:,1:] * -1.0
 
         #if aug:
@@ -168,8 +169,7 @@ class DataManager(object):
         img, lab = zip(*data)
         if aug:
             img = np.stack([batch_augment(self.seq_, timg) for timg in img], axis=0)
-            #seqs = [self.seq_.to_deterministic() for _ in range(batch_size)]
-            #img = np.stack([np.stack([seqs[i].augment_image(img1) for img1 in img[i]],axis=0) for i in range(batch_size)], axis=0)
+            #img  = np.stack(img, axis=0)
         else:
             img = np.stack(img, axis=0) # [NxTxHxWxC]
         lab = np.stack(lab, axis=0) # [Nx3]
@@ -255,7 +255,18 @@ def main():
     dirs = None
 
     dm = DataManager(dirs=dirs, log=print)
-    dm.inspect()
+
+    s = np.random.randint(65536)
+    np.random.seed(s)
+    img1, lab1 = dm.get_1(dm.data_[0],4,flip=False)
+    np.random.seed(s)
+    img2, lab2 = dm.get_1(dm.data_[0],4,flip=True)
+
+    fig, ((ax0, ax2), (ax1, ax3)) = plt.subplots(2,2)
+    dm.show(img1, lab1, fig, ax0, ax1, draw=False,  label='orig', color='k')
+    dm.show(img2, lab2, fig, ax2, ax3, clear=False, label='flip', color='k')
+    plt.show()
+    #dm.inspect()
 
 if __name__ == "__main__":
     main()

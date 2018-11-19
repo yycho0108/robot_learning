@@ -7,7 +7,7 @@ from utils import no_op
 from tensorflow.contrib.framework import nest
 
 class VONet(object):
-    def __init__(self, step,
+    def __init__(self, step, learning_rate=None,
             img=None, lab=None,
             batch_size=None, 
             train=True, reuse=tf.AUTO_REUSE,
@@ -16,13 +16,14 @@ class VONet(object):
         self.img_ = img
         self.lab_ = lab
         self.col_ = [('train' if train else 'valid')]
+        self.learning_rate_ = (cfg.LEARNING_RATE if (learning_rate is None) else learning_rate)
 
         self.step_ = step
         self.train_ = train
         self.reuse_ = reuse
         self.log_ = log
 
-        # unroll some parameters
+        # override some parameters
         self.batch_size_ = (cfg.BATCH_SIZE if (batch_size is None) else batch_size)
         self._build(cfg=cfg, log=log)
 
@@ -47,8 +48,9 @@ class VONet(object):
         rnn, rnn_s1, rnn_s0 = self._build_rnn(cnn, log)
         pos = self._build_pos(rnn, log)
         err = self._build_err(pos, lab, log=log)
+
         if self.train_:
-            opt = self._build_opt(err, log=log)
+            opt       = self._build_opt(err, log=log)
             self.opt_ = opt
         _   = self._build_log(log=log, err=err, lab=lab, pos=pos)
 
@@ -165,11 +167,19 @@ class VONet(object):
 
     def _build_opt(self, c, log=no_op):
         log('- build-opt -')
-        opt = tf.train.AdamOptimizer(learning_rate=cfg.LEARNING_RATE)
+        opt = tf.train.AdamOptimizer(learning_rate=self.learning_rate_)
 
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops):
-            train_op = opt.minimize(c, global_step=self.step_)
+            #grads, vars = zip(*opt.compute_gradients(c))
+            #grads_c, _ = tf.clip_by_global_norm(grads, 1.0)
+            #train_op = opt.apply_gradients(zip(grads_c, vars), global_step=self.step_)
+            ##train_op = opt.minimize(c, global_step=self.step_)
+            train_op = tf.contrib.layers.optimize_loss(c, self.step_,
+                    learning_rate=self.learning_rate_,
+                    optimizer='Adam',
+                    clip_gradients=1.0,
+                    summaries=['loss', 'learning_rate', 'global_gradient_norm', 'gradients'])
 
         log('-------------')
         return train_op
@@ -179,6 +189,8 @@ class VONet(object):
         tf.summary.scalar('err', tensors['err'], collections=self.col_)
         tf.summary.histogram('pos', tensors['pos'], collections=self.col_)
         tf.summary.histogram('lab', tensors['lab'], collections=self.col_)
+        #if self.train_:
+        #    tf.summary.histogram('grad', tensors['grad'], collections=self.col_)
         log('-------------')
         return None
 
