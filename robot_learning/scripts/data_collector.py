@@ -12,6 +12,12 @@ from sensor_msgs.msg import LaserScan, Image
 from geometry_msgs.msg import Pose, PoseStamped, PoseArray, Vector3
 from visualization_msgs.msg import Marker, MarkerArray
 import message_filters
+from functools import partial
+
+try:
+  from pathlib import Path
+except ImportError:
+  from pathlib2 import Path  # python 2 backport
 
 # TODO : finish implementation
 
@@ -33,7 +39,9 @@ class DataCollector(object):
             note that pose_ is only supported when use_tf:=False.
     """
     def __init__(self, start=True,
-            use_tf=True, sync=True, slop=0.05):
+            use_tf=True, sync=True, slop=0.05,
+            min_dr=0.01, min_dh=np.deg2rad(1.0)
+            ):
         """
         Args:
             use_tf(bool): Get Odom from tf (default : True)
@@ -43,6 +51,8 @@ class DataCollector(object):
         self.use_tf_ = use_tf
         self.sync_   = (not use_tf) and sync
         self.slop_   = slop
+        self.min_dr_ = min_dr
+        self.min_dh_ = min_dh
 
         # Data
         self.time_ = None
@@ -51,6 +61,7 @@ class DataCollector(object):
         self.scan_ = None
         self.dataset_ = []
         self.new_data_ = False
+        self.last_data_ = None
 
         # ROS Handles
         self.scan_sub_ = None
@@ -172,10 +183,13 @@ class DataCollector(object):
         msg = self.scan_
         if msg is not None:
             self.scan_ = None # clear msg
-            angles = anorm(np.linspace(0, 2*np.pi, len(msg.ranges), endpoint=True))
+            #angles = anorm(np.linspace(0, 2*np.pi, len(msg.ranges), endpoint=True))
+            #angles = msg.angle_min + np.arange(msg.ranges)*msg.angle_increment
             ranges = np.asarray(msg.ranges, dtype=np.float32)
-            mask = (msg.range_min < ranges) & (ranges < msg.range_max)
-            return np.stack([angles[mask], ranges[mask]], axis=-1)
+            mask   = (msg.range_min < ranges) & (ranges < msg.range_max) & np.isfinite(ranges)
+            ranges[~mask] = 0.0
+            return np.stack([ranges,mask], axis=-1)
+            #return np.stack([angles[mask], ranges[mask]], axis=-1)
         else:
             #rospy.loginfo_throttle(1.0, "No scan msg available")
             return None
@@ -193,7 +207,16 @@ class DataCollector(object):
         check = [(e is not None) for e in data]
         rospy.loginfo_throttle(1.0, 'check : {}'.format(check))
         if np.alltrue(check):
+            if (self.last_data_ is not None):
+                # check against last data for minimum motion
+                (x0,y0,h0) = self.last_data_[2]
+                (x1,y1,h1) = data[2]
+                dr = np.linalg.norm([x1-x0, y1-y0])
+                dh = anorm(np.abs(h1-h0))
+                if(dr <= self.min_dr_ and dh <= self.min_dh_):
+                    return
             self.dataset_.append(data)
+            self.last_data_ = data
 
     def reset(self):
         self.time_ = None
@@ -202,6 +225,7 @@ class DataCollector(object):
         self.scan_ = None
 
     def save(self, path='/tmp'):
+        Path(path).mkdir(parents=True, exist_ok=True)
         data = zip(*self.dataset_) # reformat to [time, img, odom, scan]
         dtypes = [np.float32, np.uint8, np.float32, np.float32]
         data = [np.asarray(d, dtype=t) for (d,t) in zip(data, dtypes)]
@@ -220,18 +244,30 @@ def main():
     use_tf = rospy.get_param('~use_tf', False)
     sync   = rospy.get_param('~sync', True)
     slop   = rospy.get_param('~slop', 0.01)
+    rate   = rospy.get_param('~rate', 10.0)
+
+    min_dr = rospy.get_param('~min_dr', 0.01) #min of 1cm/1deg for "next data"
+    min_dh = rospy.get_param('~min_dh', np.deg2rad(1.0))
+    run_id = rospy.get_param('~run_id', len(os.listdir('/tmp/data')))
+    path   = os.path.join('/tmp/data/', str(run_id))
 
     rospy.loginfo('== Parameters ==')
     rospy.loginfo('use_tf : {}'.format(use_tf))
     rospy.loginfo('sync   : {}'.format(sync))
     rospy.loginfo('slop   : {}'.format(slop))
+    rospy.loginfo('rate   : {}'.format(rate))
+    rospy.loginfo('path   : {}'.format(path))
     rospy.loginfo('================')
 
     dc = DataCollector(start=True,
-            use_tf=use_tf, sync=sync, slop=slop)
+            use_tf=use_tf, sync=sync, slop=slop,
+            min_dr=min_dr,
+            min_dh=min_dh
+            )
 
-    rospy.on_shutdown(dc.save) # save on shutdown
-    rate = rospy.Rate(50)
+    save_fn = partial(dc.save, path=path)
+    rospy.on_shutdown(save_fn) # save on shutdown
+    rate = rospy.Rate(rate)
     while not rospy.is_shutdown():
         if dc.new_data_:
             dc.new_data_ = False
