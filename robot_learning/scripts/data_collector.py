@@ -1,5 +1,7 @@
 #!/usr/bin/env python2
 import rospy
+import rospkg
+
 import tf
 import numpy as np
 import os
@@ -199,7 +201,7 @@ class DataCollector(object):
         """ Get latest data+scan
 
         Returns:
-            odom,scan : refer to RosBoss.odom() and RosBoss.scan().
+            odom,scan : refer to DataCollector.odom() and DataCollector.scan().
         """
         return (self.time_, self.img, self.odom, self.scan)
 
@@ -248,8 +250,18 @@ def main():
 
     min_dr = rospy.get_param('~min_dr', 0.01) #min of 1cm/1deg for "next data"
     min_dh = rospy.get_param('~min_dh', np.deg2rad(1.0))
-    run_id = rospy.get_param('~run_id', len(os.listdir('/tmp/data')))
-    path   = os.path.join('/tmp/data/', str(run_id))
+
+    rospack   = rospkg.RosPack() 
+    pkg_root  = rospack.get_path('robot_learning') # Gets the package
+    data_root = os.path.join(pkg_root, 'data')
+
+    try:
+        run_id = rospy.get_param('~run_id', len(os.listdir(data_root)))
+    except Exception as e:
+        # TODO : lazy
+        run_id = 0
+
+    path   = os.path.join(pkgroot, 'data', str(run_id))
 
     rospy.loginfo('== Parameters ==')
     rospy.loginfo('use_tf : {}'.format(use_tf))
