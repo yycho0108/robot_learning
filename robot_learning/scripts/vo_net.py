@@ -7,28 +7,49 @@ from utils import no_op
 from tensorflow.contrib.framework import nest
 
 class VONet(object):
-    def __init__(self, step, train=True, reuse=None, cfg=cfg, log=print):
+    def __init__(self, step,
+            img=None, lab=None,
+            batch_size=None, 
+            train=True, reuse=tf.AUTO_REUSE,
+            cfg=cfg, log=print):
+
+        self.img_ = img
+        self.lab_ = lab
+        self.col_ = [('train' if train else 'valid')]
+
         self.step_ = step
         self.train_ = train
         self.reuse_ = reuse
         self.log_ = log
+
+        # unroll some parameters
+        self.batch_size_ = (cfg.BATCH_SIZE if (batch_size is None) else batch_size)
         self._build(cfg=cfg, log=log)
 
     def _build(self, cfg=cfg, log=no_op):
         log('- configuration -')
         log(open(cfg.__file__.replace('.pyc','.py'), 'r').read())
         log('-----------------')
+
         with tf.name_scope('input'):
             # NTCHW
-            img = tf.placeholder(tf.float32, 
-                    [None, None, cfg.IMG_HEIGHT, cfg.IMG_WIDTH, cfg.IMG_DEPTH], name='img')
-            lab = tf.placeholder(tf.float32, [None, None, 3], name='lab') # label
+            if self.img_ is None:
+                img = tf.placeholder(tf.float32, 
+                        [None, None, cfg.IMG_HEIGHT, cfg.IMG_WIDTH, cfg.IMG_DEPTH], name='img')
+            else:
+                img = self.img_
+            if self.lab_ is None:
+                lab = tf.placeholder(tf.float32, [None, None, 3], name='lab') # label
+            else:
+                lab = self.lab_
 
         cnn = self._build_cnn(img, log)
         rnn, rnn_s1, rnn_s0 = self._build_rnn(cnn, log)
         pos = self._build_pos(rnn, log)
         err = self._build_err(pos, lab, log=log)
-        opt = self._build_opt(err, log=log)
+        if self.train_:
+            opt = self._build_opt(err, log=log)
+            self.opt_ = opt
         _   = self._build_log(log=log, err=err, lab=lab, pos=pos)
 
         # cache tensors
@@ -36,12 +57,9 @@ class VONet(object):
         self.pos_ = pos
         self.lab_ = lab
         self.err_ = err
-        self.opt_ = opt
         self.rnn_s1_ = rnn_s1
         self.rnn_s0_ = rnn_s0
-
-        # also return them
-        return [img,pos,lab,err,opt]
+        return
 
     def _build_cnn(self, x, log=no_op):
         log('- build-cnn -')
@@ -84,7 +102,7 @@ class VONet(object):
                 #print('c0',cell.zero_state(cfg.BATCH_SIZE, tf.float32))
                 state0 = nest.map_structure(
                         lambda x : tf.placeholder_with_default(x, [None] + list(x.shape)[1:], x.op.name),
-                        cell.zero_state(cfg.BATCH_SIZE, tf.float32))
+                        cell.zero_state(self.batch_size_, tf.float32))
                 #with tf.variable_scope('rnn_state'):
                 #    state_variables = []
                 #    for state_c, state_h in cell.zero_state(bs, tf.float32):
@@ -92,14 +110,14 @@ class VONet(object):
                 #            tf.Variable(state_c, trainable=False, validate_shape=False),
                 #            tf.Variable(state_h, trainable=False, validate_shape=False)))
                 #    state0 = tuple(state_variables)
-                output, state1 = tf.nn.dynamic_rnn(
-                        cell=cell,
-                        inputs=x,
-                        initial_state=state0,
-                        #initial_state=state0,
-                        time_major=False,
-                        scope='rnn',
-                        dtype=tf.float32)
+                with tf.variable_scope('rnn', reuse=self.reuse_):
+                    output, state1 = tf.nn.dynamic_rnn(
+                            cell=cell,
+                            inputs=x,
+                            initial_state=state0,
+                            #initial_state=state0,
+                            time_major=False,
+                            dtype=tf.float32)
                 #log('rnn-output', output.shape)
                 #with tf.name_scope('rnn_keep'):
                 #    # for stateful LSTM (during runtime)
@@ -158,9 +176,9 @@ class VONet(object):
 
     def _build_log(self, log=no_op, **tensors):
         log('- build-log -')
-        tf.summary.scalar('err', tensors['err'])
-        tf.summary.histogram('pos', tensors['pos'])
-        tf.summary.histogram('lab', tensors['lab'])
+        tf.summary.scalar('err', tensors['err'], collections=self.col_)
+        tf.summary.histogram('pos', tensors['pos'], collections=self.col_)
+        tf.summary.histogram('lab', tensors['lab'], collections=self.col_)
         log('-------------')
         return None
 
@@ -180,7 +198,8 @@ class VONet(object):
                 data_format='NHWC',
                 activation_fn=tf.nn.elu,
                 normalizer_fn=slim.batch_norm,
-                normalizer_params=bn_params
+                normalizer_params=bn_params,
+                reuse=self.reuse_
                 )
 
 def main():

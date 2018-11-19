@@ -83,7 +83,7 @@ class DataManager(object):
                             iaa.AverageBlur(k=(3, 5)), # blur image using local means with kernel sizes between 2 and 7
                             iaa.MedianBlur(k=(3, 7)), # blur image using local medians with kernel sizes between 2 and 7
                         ]),
-                        iaa.Sharpen(alpha=(0, 1.0), lightness=(0.75, 1.5)), # sharpen images
+                        #iaa.Sharpen(alpha=(0, 1.0), lightness=(0.75, 1.5)), # sharpen images
                         # search either for all edges or for directed edges,
                         # blend the result with the original image using a blobby mask
                         #iaa.SimplexNoiseAlpha(iaa.OneOf([
@@ -97,14 +97,14 @@ class DataManager(object):
                         # either change the brightness of the whole image (sometimes
                         # per channel) or change the brightness of subareas
                         iaa.OneOf([
-                            iaa.Multiply((0.5, 1.5), per_channel=0.5),
+                            iaa.Multiply((0.75, 1.25), per_channel=0.5),
                             #iaa.FrequencyNoiseAlpha(
                             #    exponent=(-4, 0),
                             #    first=iaa.Multiply((0.5, 1.5), per_channel=True),
                             #    second=iaa.ContrastNormalization((0.5, 2.0))
                             #)
                         ]),
-                        iaa.ContrastNormalization((0.5, 2.0), per_channel=0.5), # improve or worsen the contrast
+                        iaa.ContrastNormalization((0.75, 1.33), per_channel=0.5), # improve or worsen the contrast
                     ],
                     random_order=True
                 )
@@ -161,8 +161,9 @@ class DataManager(object):
     def get(self, batch_size, time_steps, aug=True):
         set_idx = np.random.choice(len(self.data_),
                 batch_size, replace=True, p=self.prob_)
-        if aug:
-            lr_flip = np.random.choice(2, batch_size, replace=True).astype(np.bool)
+        lr_flip = np.random.choice(2, batch_size, replace=True).astype(np.bool)
+        if not aug:
+            lr_flip = np.zeros_like(lr_flip)
         data = [self.get_1(self.data_[i], time_steps, f) for (i,f) in zip(set_idx, lr_flip)]
         img, lab = zip(*data)
         if aug:
@@ -171,10 +172,7 @@ class DataManager(object):
             #img = np.stack([np.stack([seqs[i].augment_image(img1) for img1 in img[i]],axis=0) for i in range(batch_size)], axis=0)
         else:
             img = np.stack(img, axis=0) # [NxTxHxWxC]
-        print('is',img.shape)
         lab = np.stack(lab, axis=0) # [Nx3]
-
-
         return img, lab 
 
     def get_null(self, batch_size, time_steps):
