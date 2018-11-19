@@ -37,6 +37,7 @@ class VONet(object):
             if self.img_ is None:
                 img = tf.placeholder(tf.float32, 
                         [None, None, cfg.IMG_HEIGHT, cfg.IMG_WIDTH, cfg.IMG_DEPTH], name='img')
+                # TODO : consider stacking img_{t-1} and img_{t}?
             else:
                 img = self.img_
             if self.lab_ is None:
@@ -225,14 +226,14 @@ class VONet(object):
                 padding='SAME',
                 data_format='NHWC',
                 activation_fn=tf.nn.elu,
-                weights_regularizer=(slim.l2_regularizer(5e-4) if self.train_ else None),
+                weights_regularizer=(slim.l2_regularizer(1e-4) if self.train_ else None),
                 normalizer_fn=slim.batch_norm,
                 normalizer_params=bn_params,
                 reuse=self.reuse_
                 ):
             with slim.arg_scope(
                     [slim.fully_connected],
-                    weights_regularizer=(slim.l2_regularizer(5e-4) if self.train_ else None),
+                    weights_regularizer=(slim.l2_regularizer(1e-4) if self.train_ else None),
                     reuse=self.reuse_
                     ) as sc:
                 return sc

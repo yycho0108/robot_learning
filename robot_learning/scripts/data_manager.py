@@ -196,8 +196,8 @@ class DataManager(object):
                 angles='xy',
                 color=color
                 )
-        ax0.set_xlim([-0.2,1.0])
-        ax0.set_ylim([-0.4,0.4])
+        #ax0.set_xlim([-0.2,1.0])
+        #ax0.set_ylim([-0.4,0.4])
         ax1.imshow(cat[...,::-1])
         ax0.legend()
         if draw:

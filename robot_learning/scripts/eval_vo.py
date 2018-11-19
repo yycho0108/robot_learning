@@ -19,15 +19,15 @@ def main():
     # restore/train flags
     # checkpoint file to restore from
     # restore_ckpt = '/tmp/vo/20/ckpt/model.ckpt-4'
-    restore_ckpt = '/tmp/vo/37/ckpt/model.ckpt-2000'
+    restore_ckpt = '/tmp/vo/38/ckpt/model.ckpt-4000'
     is_training = False
 
     # override cfg params
     cfg.BATCH_SIZE = 1
     cfg.TIME_STEPS = 1
 
-    n_test = 32
-    n_step = 16
+    n_test = 8
+    n_step = 64
 
     dm = DataManager(mode='valid', log=print)
     #dm = DataManager(mode='train', log=print)
