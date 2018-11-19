@@ -32,12 +32,12 @@ def add_p3d(a,b):
     return [x1,y1,h1]
 
 class DataManager(object):
-    def __init__(self, dirs=None, log=no_op):
+    def __init__(self, dirs=None, mode='train', log=no_op):
         if dirs is None:
             # automatically resolve directory
             rospack   = rospkg.RosPack() 
             pkg_root  = rospack.get_path('robot_learning') # Gets the package
-            data_root = os.path.join(pkg_root, 'data', 'train')
+            data_root = os.path.join(pkg_root, 'data', mode)
             subdir = os.listdir(data_root)
             dirs = [os.path.join(data_root, d) for d in subdir]
 
@@ -105,7 +105,37 @@ class DataManager(object):
         y = np.zeros([cfg.BATCH_SIZE,cfg.TIME_STEPS,3])
         return x, y
 
-    def inspect(self,n=100):
+    @staticmethod
+    def show(t_imgs, t_labs, fig, ax0, ax1, clear=True, draw=True, label='path'):
+        cat = np.concatenate(t_imgs, axis=1)
+        next = False
+
+        # construct path
+        p0 = np.zeros_like(t_labs[0])
+        ps = [p0]
+        for dp in t_labs[1:]:
+            p = add_p3d(ps[-1], dp)
+            ps.append(p)
+        ps = np.float32(ps)
+
+        # show path
+        if clear:
+            ax0.cla()
+            ax1.cla()
+
+        ax0.plot(ps[:,0], ps[:,1], '--', label=label) # starting point
+        ax0.quiver(
+                ps[:,0], ps[:,1],
+                np.cos(ps[:,2]), np.sin(ps[:,2]),
+                scale_units='xy',
+                angles='xy'
+                )
+        ax1.imshow(cat[...,::-1])
+        ax0.legend()
+        if draw:
+            fig.canvas.draw()
+
+    def inspect(self, n=100):
         global index
         fig, (ax0, ax1) = plt.subplots(2,1)
         bt_imgs, bt_labs = self.get(batch_size=n, time_steps=4) # batch-time
@@ -114,35 +144,6 @@ class DataManager(object):
         print('q to quit; any other key to inspect next sample')
         print('----------------')
 
-        def show(i):
-            t_imgs = bt_imgs[i]
-            t_labs = bt_labs[i]
-
-            cat = np.concatenate(t_imgs, axis=1)
-            next = False
-
-            # construct path
-            p0 = np.zeros_like(t_labs[0])
-            ps = [p0]
-            for dp in t_labs[1:]:
-                p = add_p3d(ps[-1], dp)
-                ps.append(p)
-            ps = np.float32(ps)
-
-            # show path
-            ax0.cla()
-            ax1.cla()
-
-            ax0.set_title('Data {}/{}'.format(i+1,n))
-            ax0.plot(ps[:,0], ps[:,1], '--') # starting point
-            ax0.quiver(
-                    ps[:,0], ps[:,1],
-                    np.cos(ps[:,2]), np.sin(ps[:,2]),
-                    scale_units='xy',
-                    angles='xy'
-                    )
-            ax1.imshow(cat[...,::-1])
-            fig.canvas.draw()
 
         def handle_key(event):
             global index
@@ -151,15 +152,18 @@ class DataManager(object):
                 sys.exit()
             else:
                 index += 1
+                print('{}/{}'.format(index,n))
                 if (index >= n): sys.exit(0)
-                show(index)
+                t_imgs = bt_imgs[index]
+                t_labs = bt_labs[index]
+                DataManager.show(t_imgs, t_labs, fig, ax0, ax1)
 
         # register event handlers
         fig.canvas.mpl_connect('close_event', sys.exit)
         fig.canvas.mpl_connect('key_press_event', handle_key)
 
         # show
-        show(0)
+        DataManager.show(bt_imgs[0], bt_labs[0], fig, ax0, ax1)
         plt.show()
 
 def main():
