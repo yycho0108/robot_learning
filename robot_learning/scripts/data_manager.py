@@ -157,8 +157,9 @@ class DataManager(object):
         data = [self.get_1(self.data_[i], time_steps, f) for (i,f) in zip(set_idx, lr_flip)]
         img, lab = zip(*data)
         if aug:
-            #img = np.stack([batch_augment(self.seq_, timg) for timg in img], axis=0)
-            img  = np.stack(img, axis=0)
+            # TODO : restore augmentation
+            img = np.stack([batch_augment(self.seq_, timg) for timg in img], axis=0)
+            #img  = np.stack(img, axis=0)
         else:
             img = np.stack(img, axis=0) # [NxTxHxWxC]
         lab = np.stack(lab, axis=0) # [Nx3]
