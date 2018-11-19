@@ -61,6 +61,15 @@ class VONet(object):
         self.err_ = err
         self.rnn_s1_ = rnn_s1
         self.rnn_s0_ = rnn_s0
+
+        ws = slim.get_model_variables()
+        ss = [reduce(lambda a,b:a*b, w.get_shape().as_list()) for w in ws]
+        log('- net size - ')
+        for (w,s) in zip(ws,ss):
+            log(w.name, s)
+        log('total : {}'.format(sum(ss)))
+        log('-------------')
+
         return
 
     def _build_cnn(self, x, log=no_op):
@@ -78,12 +87,12 @@ class VONet(object):
                 with self._arg_scope():
                     x = slim.stack(x,
                             slim.conv2d,
-                            [(64,7,2),(128,5,2), (256,5,2)],
+                            [(64,7,2),(128,3,2),(128,3,2),(256,3,2)],
                             scope='conv')
                     log('post-conv', x.shape) #NTx30x40
                     x = slim.stack(x,
                             slim.separable_conv2d,
-                            [(256,3,1,2), (512,3,1,2), (1024,3,1,2)], scope='sconv')
+                            [(256,3,1,2), (256,3,1,2), (256,3,1,2), (512,3,1,2)], scope='sconv')
                     log('post-sconv', x.shape) #NTx4x5
                     x = tf.reduce_mean(x, axis=[1,2]) # avg pooling
                     log('post-cnn', x.shape)

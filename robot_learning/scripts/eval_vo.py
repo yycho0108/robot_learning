@@ -19,7 +19,7 @@ def main():
     # restore/train flags
     # checkpoint file to restore from
     # restore_ckpt = '/tmp/vo/20/ckpt/model.ckpt-4'
-    restore_ckpt = '/tmp/vo/17/ckpt/model.ckpt-1215'
+    restore_ckpt = '/tmp/vo/18/ckpt/model.ckpt-1308'
     is_training = False
 
     # override cfg params
@@ -29,8 +29,8 @@ def main():
     n_test = 32
     n_step = 16
 
-    #dm = DataManager(mode='valid', log=print)
-    dm = DataManager(mode='train', log=print)
+    dm = DataManager(mode='valid', log=print)
+    #dm = DataManager(mode='train', log=print)
 
     graph = tf.get_default_graph()
     with graph.as_default():
