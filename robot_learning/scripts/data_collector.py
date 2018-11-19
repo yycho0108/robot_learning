@@ -248,7 +248,7 @@ def main():
 
     rospack   = rospkg.RosPack() 
     pkg_root  = rospack.get_path('robot_learning') # Gets the package
-    data_root = os.path.join(pkg_root, 'data')
+    data_root = os.path.join(pkg_root, 'data', 'train')
 
     try:
         run_id = rospy.get_param('~run_id', len(os.listdir(data_root)))

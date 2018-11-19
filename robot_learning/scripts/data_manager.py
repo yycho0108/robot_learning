@@ -37,7 +37,7 @@ class DataManager(object):
             # automatically resolve directory
             rospack   = rospkg.RosPack() 
             pkg_root  = rospack.get_path('robot_learning') # Gets the package
-            data_root = os.path.join(pkg_root, 'data')
+            data_root = os.path.join(pkg_root, 'data', 'train')
             subdir = os.listdir(data_root)
             dirs = [os.path.join(data_root, d) for d in subdir]
 
@@ -109,8 +109,10 @@ class DataManager(object):
         global index
         fig, (ax0, ax1) = plt.subplots(2,1)
         bt_imgs, bt_labs = self.get(batch_size=n, time_steps=4) # batch-time
-        print(np.max(np.abs(bt_labs), axis=(0,1)))
         index = 0
+        print('- instructions -')
+        print('q to quit; any other key to inspect next sample')
+        print('----------------')
 
         def show(i):
             t_imgs = bt_imgs[i]
@@ -163,11 +165,14 @@ class DataManager(object):
 def main():
     rospack   = rospkg.RosPack() 
     pkg_root  = rospack.get_path('robot_learning') # Gets the package
-    data_root = os.path.join(pkg_root, 'data')
+    #data_root = os.path.join(pkg_root, 'data', 'valid')
+    data_root = os.path.join(pkg_root, 'data', 'train')
     subdir = os.listdir(data_root)
     #subdir = ['7']
-    dirs = [os.path.join(data_root, d) for d in subdir]
-    dm = DataManager(dirs=dirs)
+    #dirs = [os.path.join(data_root, d) for d in subdir]
+    dirs = None
+
+    dm = DataManager(dirs=dirs, log=print)
     dm.inspect()
 
 if __name__ == "__main__":
