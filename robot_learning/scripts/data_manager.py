@@ -146,18 +146,7 @@ class DataManager(object):
             lab = np.copy(lab)
             lab[:,1:] = lab[:,1:] * -1.0
 
-        #if aug:
-        #    aimg = iaa.Sequential(
-        #            iaa.GaussianBlur(0.0, 1.0),
-        #            iaa.Add((-8,8), per_channel=False),
-        #            iaa.AddToHueAndSaturation((-16,16), per_channel=False),
-        #            ).to_deterministic().augment_images(img)
-        #    if dbg:
-        #        mosaic = np.concatenate([img[0],aimg[0]], axis=1)
-        #        cv2.imshow('compare', mosaic)
-        #        cv2.waitKey(0)
-
-        return img, lab
+        return [img, lab]
 
     def get(self, batch_size, time_steps, aug=True):
         set_idx = np.random.choice(len(self.data_),
@@ -168,17 +157,17 @@ class DataManager(object):
         data = [self.get_1(self.data_[i], time_steps, f) for (i,f) in zip(set_idx, lr_flip)]
         img, lab = zip(*data)
         if aug:
-            img = np.stack([batch_augment(self.seq_, timg) for timg in img], axis=0)
-            #img  = np.stack(img, axis=0)
+            #img = np.stack([batch_augment(self.seq_, timg) for timg in img], axis=0)
+            img  = np.stack(img, axis=0)
         else:
             img = np.stack(img, axis=0) # [NxTxHxWxC]
         lab = np.stack(lab, axis=0) # [Nx3]
-        return img, lab 
+        return [img, lab]
 
     def get_null(self, batch_size, time_steps):
         x = np.zeros([cfg.BATCH_SIZE,cfg.TIME_STEPS,cfg.IMG_HEIGHT,cfg.IMG_WIDTH,cfg.IMG_DEPTH])
         y = np.zeros([cfg.BATCH_SIZE,cfg.TIME_STEPS,3])
-        return x, y
+        return [x, y]
 
     @staticmethod
     def show(t_imgs, t_labs, fig, ax0, ax1, clear=True, draw=True, label='path', color=None):

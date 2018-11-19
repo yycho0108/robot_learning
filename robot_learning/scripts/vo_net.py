@@ -178,7 +178,7 @@ class VONet(object):
             train_op = tf.contrib.layers.optimize_loss(c, self.step_,
                     learning_rate=self.learning_rate_,
                     optimizer='Adam',
-                    clip_gradients=1.0,
+                    clip_gradients=3.0,
                     summaries=['loss', 'learning_rate', 'global_gradient_norm', 'gradients'])
 
         log('-------------')

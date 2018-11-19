@@ -60,7 +60,6 @@ def main():
     mkdir(ckpt_root)
     ckpt_file = os.path.join(ckpt_root, 'model.ckpt')
 
-
     dm = DataManager(mode='train',log=print)
     dm_v = DataManager(mode='valid',log=no_op)
 
@@ -81,13 +80,13 @@ def main():
             img, lab = Q.dequeue_many(cfg.BATCH_SIZE)
 
         # initial ramp-up 1e-6 -> 1e-4
-        lr0 = tf.train.exponential_decay(1e-6,
-                global_step, 100, 1e2, staircase=False)
+        lr0 = tf.train.exponential_decay(cfg.LR_RAMP_0,
+                global_step, cfg.LR_RAMP_STEPS, cfg.LEARNING_RATE/cfg.LR_RAMP_0, staircase=False)
         
         # standard decay 1e-4 -> 1e-3
         lr1 = tf.train.exponential_decay(cfg.LEARNING_RATE,
                 global_step, cfg.STEPS_PER_DECAY, cfg.DECAY_FACTOR, staircase=True)
-        learning_rate = tf.where(global_step < 100, lr0, lr1) # employ slow initial learning rate
+        learning_rate = tf.where(global_step < cfg.LR_RAMP_STEPS, lr0, lr1) # employ slow initial learning rate
         
         # option 2 : standard
         #learning_rate = tf.train.exponential_decay(cfg.LEARNING_RATE,
@@ -122,7 +121,8 @@ def main():
         def enqueue():
             q_ts = [q_img, q_lab] # input tensors
             while not coord.should_stop():
-                q_vs = dm.get(batch_size=8, time_steps=cfg.TIME_STEPS, aug=True)
+                q_vs = list(dm.get(batch_size=8, time_steps=cfg.TIME_STEPS, aug=True))
+                q_vs[0] = proc_img(q_vs[0])
                 sess.run(enqueue_op, feed_dict={t:v for (t,v) in zip(q_ts, q_vs)})
 
         # initialization

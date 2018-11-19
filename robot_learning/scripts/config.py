@@ -1,11 +1,11 @@
 #network configuration
 BATCH_SIZE=32
-VAL_BATCH_SIZE=4
+VAL_BATCH_SIZE=8
 IMG_WIDTH=320
 IMG_HEIGHT=240
 IMG_DEPTH=3
 TIME_STEPS=6
-LSTM_SIZE=1024
+LSTM_SIZE=512
 NUM_LSTM=2
 W_COST=[1.,1.,100.]
 SAVE_STEPS=100
@@ -13,7 +13,12 @@ VAL_STEPS=10
 TRAIN_STEPS=2000
 
 # learning rate
-LEARNING_RATE = 1e-4 # initial learning rate
+
+# initial ramp
+LR_RAMP_0 = 1e-6
+LR_RAMP_STEPS=100
+
+LEARNING_RATE = 1e-3 # true initial learning rate
 FINAL_DECAY = 0.1
 NUM_DECAY   = 5
 STEPS_PER_DECAY = float(TRAIN_STEPS) / (2 + NUM_DECAY)
