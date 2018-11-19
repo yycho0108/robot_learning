@@ -86,7 +86,7 @@ class DataCollector(object):
     def start(self):
         """ register ROS handles and subscribe to all incoming topics """
         if self.sync_:
-            scan_sub = message_filters.Subscriber('/scan', LaserScan) # TODO: might work well?
+            scan_sub = message_filters.Subscriber('/stable_scan', LaserScan) # TODO: might work well?
             odom_sub = message_filters.Subscriber('/odom', Odometry) 
             img_sub  = message_filters.Subscriber('/camera/image_raw', Image) 
 
@@ -191,7 +191,7 @@ class DataCollector(object):
 
     def append(self, data):
         check = [(e is not None) for e in data]
-        #rospy.loginfo_throttle(1.0, 'check : {}'.format(check))
+        rospy.loginfo_throttle(1.0, 'check : {}'.format(check))
         if np.alltrue(check):
             self.dataset_.append(data)
 

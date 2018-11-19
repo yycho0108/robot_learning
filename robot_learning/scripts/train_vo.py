@@ -1,3 +1,5 @@
+#!/usr/bin/env python2
+
 import config as cfg
 import numpy as np
 import tensorflow as tf
