@@ -121,7 +121,7 @@ def main():
         def enqueue():
             q_ts = [q_img, q_lab] # input tensors
             while not coord.should_stop():
-                q_vs = list(dm.get(batch_size=8, time_steps=cfg.TIME_STEPS, aug=True))
+                q_vs = dm.get(batch_size=8, time_steps=cfg.TIME_STEPS, aug=True)
                 q_vs[0] = proc_img(q_vs[0])
                 sess.run(enqueue_op, feed_dict={t:v for (t,v) in zip(q_ts, q_vs)})
 
@@ -141,10 +141,9 @@ def main():
             if sig._stop:
                 break
             # usual training
-            img, lab = dm.get(batch_size=cfg.BATCH_SIZE, time_steps=cfg.TIME_STEPS, aug=True)
-            img = proc_img(img)
-            s, err, _ = sess.run([summary_t, net.err_, net.opt_],
-                    {net.img_ : img, net.lab_ : lab})
+            # img, lab = dm.get(batch_size=cfg.BATCH_SIZE, time_steps=cfg.TIME_STEPS, aug=True)
+            # img = proc_img(img)
+            s, err, _ = sess.run([summary_t, net.err_, net.opt_]) #{net.img_ : img, net.lab_ : lab})
             writer_t.add_summary(s, i)
 
             if (i>0) and (i%cfg.VAL_STEPS)==0:
