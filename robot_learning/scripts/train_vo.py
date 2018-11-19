@@ -37,7 +37,8 @@ def main():
     is_training = True
 
     # directory
-    save_root = '/tmp/vo'
+    save_root = os.path.expanduser('~/vo')
+    #save_root = '~/vo'
     mkdir(save_root)
 
     # resolve current run id + directory
