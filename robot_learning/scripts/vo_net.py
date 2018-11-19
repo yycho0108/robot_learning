@@ -44,21 +44,28 @@ class VONet(object):
             else:
                 lab = self.lab_
 
-        cnn = self._build_cnn(img, log)
-        rnn, rnn_s1, rnn_s0 = self._build_rnn(cnn, log)
-        pos = self._build_pos(rnn, log)
-        err = self._build_err(pos, lab, log=log)
+        with tf.variable_scope('vo', reuse=self.reuse_):
+            cnn = self._build_cnn(img, log)
+            rnn, rnn_s1, rnn_s0 = self._build_rnn(cnn, log)
+            pos = self._build_pos(rnn, log)
+
+        err_c = self._build_err(pos, lab, log=log)
 
         if self.train_:
-            opt       = self._build_opt(err, log=log)
+            reg_c = tf.add_n(tf.losses.get_regularization_losses())
+            tf.summary.scalar('err_loss', err_c)
+            tf.summary.scalar('reg_loss', reg_c)
+            cost = (err_c + reg_c)
+
+            opt       = self._build_opt(cost, log=log)
             self.opt_ = opt
-        _   = self._build_log(log=log, err=err, lab=lab, pos=pos)
+        _   = self._build_log(log=log, err=err_c, lab=lab, pos=pos)
 
         # cache tensors
         self.img_ = img
         self.pos_ = pos
         self.lab_ = lab
-        self.err_ = err
+        self.err_ = err_c
         self.rnn_s1_ = rnn_s1
         self.rnn_s0_ = rnn_s0
 
@@ -84,7 +91,7 @@ class VONet(object):
                 x = tf.reshape(x, [s_d[0]*s_d[1], s_s[2], s_s[3], s_s[4]])
                 log('cnn-format', x.shape)
             with tf.name_scope('cnn'):
-                with self._arg_scope():
+                with slim.arg_scope(self._arg_scope()):
                     x = slim.stack(x,
                             slim.conv2d,
                             [(64,7,2),(128,3,2),(128,3,2),(256,3,2)],
@@ -107,7 +114,7 @@ class VONet(object):
         with tf.name_scope('build_rnn', [x]):
             log('rnn-input', x)
             bs = tf.unstack(tf.shape(x))[0] # figure out dynamic batch size
-            with self._arg_scope():
+            with slim.arg_scope(self._arg_scope()):
                 lstms = [tf.nn.rnn_cell.LSTMCell(cfg.LSTM_SIZE) for _ in range(cfg.NUM_LSTM)]
                 cell = tf.nn.rnn_cell.MultiRNNCell(lstms)
                 #print('c0',cell.zero_state(cfg.BATCH_SIZE, tf.float32))
@@ -157,8 +164,8 @@ class VONet(object):
         log('- build-pos -')
         with tf.name_scope('build-pos'):
             with tf.name_scope('pos'):
-                x = slim.fully_connected(x, 128, activation_fn=tf.nn.elu)
-                x = slim.fully_connected(x, 3, activation_fn=None) # operate in 2d : (dx,dy,dh)
+                x = slim.fully_connected(x, 128, activation_fn=tf.nn.elu, scope='fc1')
+                x = slim.fully_connected(x, 3, activation_fn=None, scope='fc2') # operate in 2d : (dx,dy,dh)
                 # NOTE: don't bother composing motion here
         log('pos-output', x.shape)
         log('-------------')
@@ -213,7 +220,7 @@ class VONet(object):
                 'data_format' : 'NHWC',
                 'scope' : 'batch_norm',
                 }
-        return slim.arg_scope(
+        with slim.arg_scope(
                 [slim.conv2d, slim.separable_conv2d],
                 padding='SAME',
                 data_format='NHWC',
@@ -222,7 +229,13 @@ class VONet(object):
                 normalizer_fn=slim.batch_norm,
                 normalizer_params=bn_params,
                 reuse=self.reuse_
-                )
+                ):
+            with slim.arg_scope(
+                    [slim.fully_connected],
+                    weights_regularizer=(slim.l2_regularizer(5e-4) if self.train_ else None),
+                    reuse=self.reuse_
+                    ) as sc:
+                return sc
 
 def main():
     net = VONet(step=None)
