@@ -7,14 +7,14 @@ from utils import no_op
 from tensorflow.contrib.framework import nest
 
 class VONet(object):
-    def __init__(self, step, train=True, reuse=None, log=print):
+    def __init__(self, step, train=True, reuse=None, cfg=cfg, log=print):
         self.step_ = step
         self.train_ = train
         self.reuse_ = reuse
         self.log_ = log
-        self._build(log=log)
+        self._build(cfg=cfg, log=log)
 
-    def _build(self, log=no_op):
+    def _build(self, cfg=cfg, log=no_op):
         log('- configuration -')
         log(open(cfg.__file__.replace('.pyc','.py'), 'r').read())
         log('-----------------')
@@ -137,19 +137,24 @@ class VONet(object):
 
     def _build_err(self, x, y, k=cfg.W_COST, log=no_op):
         log('- build-err -')
-        err = tf.square(x-y)
-        log('raw-err', err.shape)
-        err = tf.reduce_mean(err * k) # scale orientation error!
-        log('fin-err', err.shape)
+        with tf.name_scope('build-err', [x,y]):
+            err = tf.square(x-y)
+            log('raw-err', err.shape)
+            err = tf.reduce_mean(err * k) # scale orientation error!
+            log('fin-err', err.shape)
         log('-------------')
         return err
 
     def _build_opt(self, c, log=no_op):
         log('- build-opt -')
         opt = tf.train.AdamOptimizer(learning_rate=cfg.LEARNING_RATE)
-        op = opt.minimize(c, global_step=self.step_)
+
+        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        with tf.control_dependencies(update_ops):
+            train_op = opt.minimize(c, global_step=self.step_)
+
         log('-------------')
-        return op
+        return train_op
 
     def _build_log(self, log=no_op, **tensors):
         log('- build-log -')
@@ -162,7 +167,7 @@ class VONet(object):
     def _arg_scope(self):
         bn_params = {
                 'is_training' : self.train_,
-                'decay' : 0.995,
+                'decay' : 0.92,
                 'fused' : True,
                 'scale' : True,
                 'reuse' : self.reuse_,

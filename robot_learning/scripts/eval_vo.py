@@ -19,14 +19,22 @@ def main():
     # restore/train flags
     # checkpoint file to restore from
     # restore_ckpt = '/tmp/vo/20/ckpt/model.ckpt-4'
-    restore_ckpt = '/tmp/vo/1/ckpt/model.ckpt-1000'
+    restore_ckpt = '/tmp/vo/5/ckpt/model.ckpt-1000'
     is_training = False
 
+    # override cfg params
+    cfg.BATCH_SIZE = 1
+    cfg.TIME_STEPS = 1
+
+    n_test = 16
+    n_step = 16
+
     dm = DataManager(mode='valid', log=print)
+    #dm = DataManager(mode='train', log=print)
 
     graph = tf.get_default_graph()
     with graph.as_default():
-        net = VONet(step=None, train=is_training, log=print)
+        net = VONet(step=None, train=is_training, cfg=cfg, log=print)
         saver = tf.train.Saver()
 
     config = None
@@ -34,12 +42,26 @@ def main():
         sess.run(tf.global_variables_initializer())
         saver.restore(sess, restore_ckpt)
 
-        img, lab = dm.get(batch_size=cfg.BATCH_SIZE, time_steps=cfg.TIME_STEPS)
+        img, lab = dm.get(batch_size=n_test, time_steps=n_step)
         pimg = proc_img(img)
+        nax = np.newaxis
 
         # TODO : try to also feed rnn_s0_ and stuff
-        pos, rnn_s1 = sess.run([net.pos_, net.rnn_s1_], 
-                {net.img_ : pimg})
+        pos = []
+        for t_img, t_lab in zip(pimg, lab):
+            t_pos = []
+            rnn_s = None
+            for img1, lab1 in zip(t_img, t_lab):
+                if rnn_s is None:
+                    pos1, rnn_s = sess.run([net.pos_, net.rnn_s1_], 
+                            {net.img_ : img1[nax,nax,...]})
+                else:
+                    pos1, rnn_s = sess.run([net.pos_, net.rnn_s1_], 
+                            {net.img_ : img1[nax,nax,...], net.rnn_s0_ : rnn_s})
+                t_pos.append(pos1[0,0])
+            pos.append(t_pos)
+        pos = np.float32(pos)
+        print(np.shape(pos), np.shape(lab))
 
     # plotting results
     index = 0
@@ -47,21 +69,31 @@ def main():
     def handle_key(event):
         global index
         sys.stdout.flush()
-        if event.key == 'q':
+        if event.key in ['q', 'escape']:
             sys.exit()
         else:
-            if (index >= cfg.BATCH_SIZE): sys.exit(0)
-            print('{}/{}'.format(index, cfg.BATCH_SIZE))
+            if event.key in ['p',  'left']:
+                index -= 1
+            if event.key in ['n', 'right']:
+                index += 1
+            index = np.clip(index, 0, n_test-1)
+            print('{}/{}'.format(index, n_test))
             img1 = img[index]
             lab1 = lab[index]
             pos1 = pos[index]
-            dm.show(img1, lab1, fig, ax0, ax1, draw=False, label='true')
-            dm.show(img1, pos1, fig, ax0, ax1, clear=False, label='pred')
-            index += 1
+            dm.show(img1, lab1, fig, ax0, ax1, draw=False, label='true', color='k')
+            dm.show(img1, pos1, fig, ax0, ax1, clear=False, label='pred', color='r')
 
     #print('pos, lab', pos, lab)
     fig.canvas.mpl_connect('close_event', sys.exit)
     fig.canvas.mpl_connect('key_press_event', handle_key)
+
+    img1 = img[index]
+    lab1 = lab[index]
+    pos1 = pos[index]
+    dm.show(img1, lab1, fig, ax0, ax1, draw=False, label='true', color='k')
+    dm.show(img1, pos1, fig, ax0, ax1, clear=False, label='pred', color='r')
+
     plt.show()
 
 if __name__ == "__main__":

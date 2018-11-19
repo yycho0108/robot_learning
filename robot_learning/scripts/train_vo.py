@@ -28,25 +28,27 @@ def main():
     except Exception as e:
         run_id = 0
     run_id = str(run_id)
-    run_root = os.path.join(save_root, run_id)
-    mkdir(run_root)
+    #run_root = os.path.join(save_root, run_id)
+    #mkdir(run_root)
 
     # resolve log + ckpt sub-directories
-    log_root  = os.path.join(run_root, 'log')
+    log_root  = os.path.join(save_root, run_id)
     mkdir(log_root)
-    ckpt_root = os.path.join(run_root, 'ckpt')
+    ckpt_root = os.path.join(log_root, 'ckpt')
     mkdir(ckpt_root)
     ckpt_file = os.path.join(ckpt_root, 'model.ckpt')
 
 
-    dm = DataManager(log=print)
+    dm = DataManager(mode='train',log=print)
 
     graph = tf.get_default_graph()
     with graph.as_default():
         global_step = slim.get_or_create_global_step()
         net = VONet(global_step, train=is_training, log=print)
+
         learning_rate = tf.train.exponential_decay(cfg.LEARNING_RATE,
                 global_step, cfg.STEPS_PER_DECAY, cfg.DECAY_FACTOR, staircase=True)
+        learning_rate = tf.where(global_step < 50, 1e-6, learning_rate) # employ slow initial learning rate
         tf.summary.scalar('learning_rate',learning_rate)
 
         summary = tf.summary.merge_all()
@@ -72,8 +74,8 @@ def main():
             #err, _ = sess.run([net.err_, net.opt_], 
             #        {net.img_ : img, net.lab_ : lab, net.rnn_s0_ : rnn_s1})
             #print('err', err)
-            ##    if (i>0) and (i%cfg.SAVE_STEPS)==0:
-            ##        saver.save(sess, '/tmp/model.ckpt', global_step=i)
+            if (i>0) and (i%cfg.SAVE_STEPS)==0:
+                saver.save(sess, ckpt_file, global_step=i)
 
         saver.save(sess, ckpt_file, global_step=global_step)
         #tf.saved_model.simple_save(session,

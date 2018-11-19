@@ -11,6 +11,9 @@ from functools import partial
 import sys
 from utils import anorm, no_op
 
+import imgaug as ia
+from imgaug import augmenters as iaa
+
 def sub_p3d(b,a):
     x0,y0,h0 = a
     x1,y1,h1 = b
@@ -30,6 +33,11 @@ def add_p3d(a,b):
     y1 = y0 + dp[1]
     h1 = anorm(h0 + dh)
     return [x1,y1,h1]
+
+def batch_augment(aug, imgs):
+    # N-H-W-C
+    n,h,w,c = imgs.shape
+    return aug.augment_image(imgs.reshape(n*h,w,c)).reshape(n,h,w,c)
 
 class DataManager(object):
     def __init__(self, dirs=None, mode='train', log=no_op):
@@ -63,6 +71,47 @@ class DataManager(object):
         self.prob_ = np.float32(dlen)
         self.prob_ /= self.prob_.sum()
 
+        # augmentation functor
+        self.seq_ = iaa.Sequential(
+            [
+                # execute 0 to 5 of the following (less important) augmenters per image
+                # don't execute all of them, as that would often be way too strong
+                iaa.SomeOf((0, 5),
+                    [
+                        iaa.OneOf([
+                            iaa.GaussianBlur((0, 2.0)), # blur images with a sigma between 0 and 3.0
+                            iaa.AverageBlur(k=(3, 5)), # blur image using local means with kernel sizes between 2 and 7
+                            iaa.MedianBlur(k=(3, 7)), # blur image using local medians with kernel sizes between 2 and 7
+                        ]),
+                        iaa.Sharpen(alpha=(0, 1.0), lightness=(0.75, 1.5)), # sharpen images
+                        # search either for all edges or for directed edges,
+                        # blend the result with the original image using a blobby mask
+                        #iaa.SimplexNoiseAlpha(iaa.OneOf([
+                        #    iaa.EdgeDetect(alpha=(0.5, 1.0)),
+                        #    iaa.DirectedEdgeDetect(alpha=(0.5, 1.0), direction=(0.0, 1.0)),
+                        #])),
+                        iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.05*255), per_channel=0.5), # add gaussian noise to images
+
+                        iaa.Add((-10, 10), per_channel=0.5), # change brightness of images (by -10 to 10 of original value)
+                        iaa.AddToHueAndSaturation((-10, 10)), # change hue and saturation
+                        # either change the brightness of the whole image (sometimes
+                        # per channel) or change the brightness of subareas
+                        iaa.OneOf([
+                            iaa.Multiply((0.5, 1.5), per_channel=0.5),
+                            #iaa.FrequencyNoiseAlpha(
+                            #    exponent=(-4, 0),
+                            #    first=iaa.Multiply((0.5, 1.5), per_channel=True),
+                            #    second=iaa.ContrastNormalization((0.5, 2.0))
+                            #)
+                        ]),
+                        iaa.ContrastNormalization((0.5, 2.0), per_channel=0.5), # improve or worsen the contrast
+                    ],
+                    random_order=True
+                )
+            ],
+            random_order=True
+        )
+
     def load(self, path):
         img   = np.load(os.path.join(path, 'img.npy'))
         odom  = np.load(os.path.join(path, 'odom.npy'))
@@ -85,19 +134,47 @@ class DataManager(object):
         delta = np.concatenate([np.zeros_like(delta[0:1]), delta], axis=0)
         return img, delta
 
-    def get_1(self, data, time_steps):
+    def get_1(self, data, time_steps, flip=False):
         img, lab = data
         i0 = np.random.randint(0, high=len(img)-time_steps)
-        return img[i0:i0+time_steps], lab[i0:i0+time_steps]
+        img, lab = img[i0:i0+time_steps], lab[i0:i0+time_steps]
 
-    def get(self, batch_size, time_steps):
+        if flip:
+            # flip left-right
+            img = img[:,:,::-1]
+            # flip sign for dy-dh
+            lab[:,1:] = lab[:,1:] * -1.0
+
+        #if aug:
+        #    aimg = iaa.Sequential(
+        #            iaa.GaussianBlur(0.0, 1.0),
+        #            iaa.Add((-8,8), per_channel=False),
+        #            iaa.AddToHueAndSaturation((-16,16), per_channel=False),
+        #            ).to_deterministic().augment_images(img)
+        #    if dbg:
+        #        mosaic = np.concatenate([img[0],aimg[0]], axis=1)
+        #        cv2.imshow('compare', mosaic)
+        #        cv2.waitKey(0)
+
+        return img, lab
+
+    def get(self, batch_size, time_steps, aug=True):
         set_idx = np.random.choice(len(self.data_),
                 batch_size, replace=True, p=self.prob_)
-        data = [self.get_1(self.data_[i], time_steps) for i in set_idx]
+        if aug:
+            lr_flip = np.random.choice(2, batch_size, replace=True).astype(np.bool)
+        data = [self.get_1(self.data_[i], time_steps, f) for (i,f) in zip(set_idx, lr_flip)]
         img, lab = zip(*data)
-
-        img = np.stack(img, axis=0) # [NxHxWxC]
+        if aug:
+            img = np.stack([batch_augment(self.seq_, timg) for timg in img], axis=0)
+            #seqs = [self.seq_.to_deterministic() for _ in range(batch_size)]
+            #img = np.stack([np.stack([seqs[i].augment_image(img1) for img1 in img[i]],axis=0) for i in range(batch_size)], axis=0)
+        else:
+            img = np.stack(img, axis=0) # [NxTxHxWxC]
+        print('is',img.shape)
         lab = np.stack(lab, axis=0) # [Nx3]
+
+
         return img, lab 
 
     def get_null(self, batch_size, time_steps):
@@ -106,7 +183,7 @@ class DataManager(object):
         return x, y
 
     @staticmethod
-    def show(t_imgs, t_labs, fig, ax0, ax1, clear=True, draw=True, label='path'):
+    def show(t_imgs, t_labs, fig, ax0, ax1, clear=True, draw=True, label='path', color=None):
         cat = np.concatenate(t_imgs, axis=1)
         next = False
 
@@ -123,13 +200,16 @@ class DataManager(object):
             ax0.cla()
             ax1.cla()
 
-        ax0.plot(ps[:,0], ps[:,1], '--', label=label) # starting point
+        ax0.plot(ps[:,0], ps[:,1], '--', label=label,color=color) # starting point
         ax0.quiver(
                 ps[:,0], ps[:,1],
                 np.cos(ps[:,2]), np.sin(ps[:,2]),
                 scale_units='xy',
-                angles='xy'
+                angles='xy',
+                color=color
                 )
+        ax0.set_xlim([-0.2,1.0])
+        ax0.set_ylim([-0.4,0.4])
         ax1.imshow(cat[...,::-1])
         ax0.legend()
         if draw:
