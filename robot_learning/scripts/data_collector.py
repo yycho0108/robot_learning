@@ -15,17 +15,12 @@ from geometry_msgs.msg import Pose, PoseStamped, PoseArray, Vector3
 from visualization_msgs.msg import Marker, MarkerArray
 import message_filters
 from functools import partial
+from utils import anorm
 
 try:
   from pathlib import Path
 except ImportError:
   from pathlib2 import Path  # python 2 backport
-
-# TODO : finish implementation
-
-def anorm(x):
-    # TODO : replace with U.anorm when utils.py becomes available through PR
-    return (x+np.pi) % (2*np.pi) - np.pi
 
 class DataCollector(object):
     """Handles ROS I/O communications and conversions.

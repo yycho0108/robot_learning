@@ -3,8 +3,7 @@ from __future__ import print_function
 import config as cfg
 import tensorflow as tf
 from tensorflow.contrib import slim
-
-no_op = (lambda *a, **k: None)
+from utils import no_op
 
 class VONet(object):
     def __init__(self, log=print):

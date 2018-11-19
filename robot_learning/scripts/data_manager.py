@@ -1,4 +1,5 @@
 #!/usr/bin/env python2
+from __future__ import print_function
 
 import config as cfg
 import rospkg
@@ -8,9 +9,7 @@ import cv2
 from matplotlib import pyplot as plt
 from functools import partial
 import sys
-
-def anorm(x):
-    return (x + np.pi) % (2*np.pi) - np.pi
+from utils import anorm, no_op
 
 def sub_p3d(b,a):
     x0,y0,h0 = a
@@ -33,13 +32,35 @@ def add_p3d(a,b):
     return [x1,y1,h1]
 
 class DataManager(object):
-    def __init__(self, dirs):
+    def __init__(self, dirs=None, log=no_op):
+        if dirs is None:
+            # automatically resolve directory
+            rospack   = rospkg.RosPack() 
+            pkg_root  = rospack.get_path('robot_learning') # Gets the package
+            data_root = os.path.join(pkg_root, 'data')
+            subdir = os.listdir(data_root)
+            dirs = [os.path.join(data_root, d) for d in subdir]
+
+        dirs = np.sort(dirs)
+
         self.data_ = [self.load(d) for d in dirs]
         self.data_ = [self.format(*d) for d in self.data_]
 
+        deltas = [d[1] for d in self.data_]
+        log('- dataset stats -')
+        log('max : {}'.format(np.concatenate(deltas, axis=0).max(axis=0)))
+        log('min : {}'.format(np.concatenate(deltas, axis=0).min(axis=0)))
+
+        # get dataset statistics
+        dlen = [len(d[0])-cfg.TIME_STEPS for d in self.data_]
+        basename = [os.path.basename(os.path.normpath(d)) for d in dirs]
+        log('Dataset Source : {}'.format(basename))
+        log('Dataset Length : {}'.format(dlen))
+        log('Total : {}'.format(sum(dlen)))
+        log('-----------------')
+
         # dataset selection probability
-        self.prob_ = np.float32([len(d[0])-cfg.TIME_STEPS for d in self.data_])
-        print('Dataset Stats (Length) : {}'.format(self.prob_))
+        self.prob_ = np.float32(dlen)
         self.prob_ /= self.prob_.sum()
 
     def load(self, path):
@@ -88,6 +109,7 @@ class DataManager(object):
         global index
         fig, (ax0, ax1) = plt.subplots(2,1)
         bt_imgs, bt_labs = self.get(batch_size=n, time_steps=4) # batch-time
+        print(np.max(np.abs(bt_labs), axis=(0,1)))
         index = 0
 
         def show(i):
@@ -98,7 +120,7 @@ class DataManager(object):
             next = False
 
             # construct path
-            p0 = t_labs[0] #np.zeros_like(t_labs[0])
+            p0 = np.zeros_like(t_labs[0])
             ps = [p0]
             for dp in t_labs[1:]:
                 p = add_p3d(ps[-1], dp)
@@ -143,6 +165,7 @@ def main():
     pkg_root  = rospack.get_path('robot_learning') # Gets the package
     data_root = os.path.join(pkg_root, 'data')
     subdir = os.listdir(data_root)
+    #subdir = ['7']
     dirs = [os.path.join(data_root, d) for d in subdir]
     dm = DataManager(dirs=dirs)
     dm.inspect()
