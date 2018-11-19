@@ -97,7 +97,7 @@ class VONet(object):
                     x = tf.reduce_mean(x, axis=[1,2]) # avg pooling
                     log('post-cnn', x.shape)
             with tf.name_scope('format_out'):
-                x = tf.reshape(x, [s_d[0], s_d[1], 1024])
+                x = tf.reshape(x, [s_d[0], s_d[1], 512])
                 log('cnn-output', x.shape)
         log('-------------')
         return x
@@ -218,6 +218,7 @@ class VONet(object):
                 padding='SAME',
                 data_format='NHWC',
                 activation_fn=tf.nn.elu,
+                weights_regularizer=(slim.l2_regularizer(5e-4) if self.train_ else None),
                 normalizer_fn=slim.batch_norm,
                 normalizer_params=bn_params,
                 reuse=self.reuse_
