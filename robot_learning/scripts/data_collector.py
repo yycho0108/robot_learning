@@ -261,7 +261,7 @@ def main():
         # TODO : lazy
         run_id = 0
 
-    path   = os.path.join(pkgroot, 'data', str(run_id))
+    path   = os.path.join(data_root, str(run_id))
 
     rospy.loginfo('== Parameters ==')
     rospy.loginfo('use_tf : {}'.format(use_tf))
