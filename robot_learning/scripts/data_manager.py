@@ -142,8 +142,9 @@ def main():
     rospack   = rospkg.RosPack() 
     pkg_root  = rospack.get_path('robot_learning') # Gets the package
     data_root = os.path.join(pkg_root, 'data')
-    dataset_path = os.path.join(data_root, '1')
-    dm = DataManager(dirs=[dataset_path])
+    subdir = os.listdir(data_root)
+    dirs = [os.path.join(data_root, d) for d in subdir]
+    dm = DataManager(dirs=dirs)
     dm.inspect()
 
 if __name__ == "__main__":

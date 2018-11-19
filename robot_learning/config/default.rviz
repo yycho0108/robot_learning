@@ -82,26 +82,10 @@ Visualization Manager:
       Name: TF
       Show Arrows: true
       Show Axes: true
-      Show Names: true
+      Show Names: false
       Tree:
         odom:
-          base_link:
-            back_caster:
-              {}
-            base_footprint:
-              {}
-            base_laser_link:
-              {}
-            chassis:
-              camera:
-                camera_optical:
-                  {}
-            front_caster:
-              {}
-            left_wheel_link:
-              {}
-            right_wheel_link:
-              {}
+          {}
       Update Interval: 0
       Value: true
     - Alpha: 0.5
