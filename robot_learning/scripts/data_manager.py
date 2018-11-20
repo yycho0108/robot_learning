@@ -11,6 +11,9 @@ from functools import partial
 import sys
 from utils import anorm, no_op
 
+import imgaug as ia
+from imgaug import augmenters as iaa
+
 def sub_p3d(b,a):
     x0,y0,h0 = a
     x1,y1,h1 = b
@@ -31,13 +34,18 @@ def add_p3d(a,b):
     h1 = anorm(h0 + dh)
     return [x1,y1,h1]
 
+def batch_augment(aug, imgs):
+    # N-H-W-C
+    n,h,w,c = imgs.shape
+    return aug.augment_image(imgs.reshape(n*h,w,c)).reshape(n,h,w,c)
+
 class DataManager(object):
-    def __init__(self, dirs=None, log=no_op):
+    def __init__(self, dirs=None, mode='train', log=no_op):
         if dirs is None:
             # automatically resolve directory
             rospack   = rospkg.RosPack() 
             pkg_root  = rospack.get_path('robot_learning') # Gets the package
-            data_root = os.path.join(pkg_root, 'data', 'train')
+            data_root = os.path.join(pkg_root, 'data', mode)
             subdir = os.listdir(data_root)
             dirs = [os.path.join(data_root, d) for d in subdir]
 
@@ -63,6 +71,47 @@ class DataManager(object):
         self.prob_ = np.float32(dlen)
         self.prob_ /= self.prob_.sum()
 
+        # augmentation functor
+        self.seq_ = iaa.Sequential(
+            [
+                # execute 0 to 5 of the following (less important) augmenters per image
+                # don't execute all of them, as that would often be way too strong
+                iaa.SomeOf((0, 5),
+                    [
+                        iaa.OneOf([
+                            iaa.GaussianBlur((0, 2.0)), # blur images with a sigma between 0 and 3.0
+                            iaa.AverageBlur(k=(3, 5)), # blur image using local means with kernel sizes between 2 and 7
+                            iaa.MedianBlur(k=(3, 7)), # blur image using local medians with kernel sizes between 2 and 7
+                        ]),
+                        #iaa.Sharpen(alpha=(0, 1.0), lightness=(0.75, 1.5)), # sharpen images
+                        # search either for all edges or for directed edges,
+                        # blend the result with the original image using a blobby mask
+                        #iaa.SimplexNoiseAlpha(iaa.OneOf([
+                        #    iaa.EdgeDetect(alpha=(0.5, 1.0)),
+                        #    iaa.DirectedEdgeDetect(alpha=(0.5, 1.0), direction=(0.0, 1.0)),
+                        #])),
+                        iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.05*255), per_channel=0.5), # add gaussian noise to images
+
+                        iaa.Add((-10, 10), per_channel=0.5), # change brightness of images (by -10 to 10 of original value)
+                        iaa.AddToHueAndSaturation((-10, 10)), # change hue and saturation
+                        # either change the brightness of the whole image (sometimes
+                        # per channel) or change the brightness of subareas
+                        iaa.OneOf([
+                            iaa.Multiply((0.75, 1.25), per_channel=0.5),
+                            #iaa.FrequencyNoiseAlpha(
+                            #    exponent=(-4, 0),
+                            #    first=iaa.Multiply((0.5, 1.5), per_channel=True),
+                            #    second=iaa.ContrastNormalization((0.5, 2.0))
+                            #)
+                        ]),
+                        iaa.ContrastNormalization((0.75, 1.33), per_channel=0.5), # improve or worsen the contrast
+                    ],
+                    random_order=True
+                )
+            ],
+            random_order=True
+        )
+
     def load(self, path):
         img   = np.load(os.path.join(path, 'img.npy'))
         odom  = np.load(os.path.join(path, 'odom.npy'))
@@ -85,27 +134,76 @@ class DataManager(object):
         delta = np.concatenate([np.zeros_like(delta[0:1]), delta], axis=0)
         return img, delta
 
-    def get_1(self, data, time_steps):
+    def get_1(self, data, time_steps, flip=False):
         img, lab = data
         i0 = np.random.randint(0, high=len(img)-time_steps)
-        return img[i0:i0+time_steps], lab[i0:i0+time_steps]
+        img, lab = img[i0:i0+time_steps], lab[i0:i0+time_steps]
 
-    def get(self, batch_size, time_steps):
+        if flip:
+            # flip left-right
+            img = np.copy(img[:,:,::-1])
+            # flip sign for dy-dh
+            lab = np.copy(lab)
+            lab[:,1:] = lab[:,1:] * -1.0
+
+        return [img, lab]
+
+    def get(self, batch_size, time_steps, aug=True):
         set_idx = np.random.choice(len(self.data_),
                 batch_size, replace=True, p=self.prob_)
-        data = [self.get_1(self.data_[i], time_steps) for i in set_idx]
+        lr_flip = np.random.choice(2, batch_size, replace=True).astype(np.bool)
+        if not aug:
+            lr_flip = np.zeros_like(lr_flip)
+        data = [self.get_1(self.data_[i], time_steps, f) for (i,f) in zip(set_idx, lr_flip)]
         img, lab = zip(*data)
-
-        img = np.stack(img, axis=0) # [NxHxWxC]
+        if aug:
+            # TODO : restore augmentation
+            img = np.stack([batch_augment(self.seq_, timg) for timg in img], axis=0)
+            #img  = np.stack(img, axis=0)
+        else:
+            img = np.stack(img, axis=0) # [NxTxHxWxC]
         lab = np.stack(lab, axis=0) # [Nx3]
-        return img, lab 
+        return [img, lab]
 
     def get_null(self, batch_size, time_steps):
         x = np.zeros([cfg.BATCH_SIZE,cfg.TIME_STEPS,cfg.IMG_HEIGHT,cfg.IMG_WIDTH,cfg.IMG_DEPTH])
         y = np.zeros([cfg.BATCH_SIZE,cfg.TIME_STEPS,3])
-        return x, y
+        return [x, y]
 
-    def inspect(self,n=100):
+    @staticmethod
+    def show(t_imgs, t_labs, fig, ax0, ax1, clear=True, draw=True, label='path', color=None):
+        cat = np.concatenate(t_imgs, axis=1)
+        next = False
+
+        # construct path
+        p0 = np.zeros_like(t_labs[0])
+        ps = [p0]
+        for dp in t_labs[1:]:
+            p = add_p3d(ps[-1], dp)
+            ps.append(p)
+        ps = np.float32(ps)
+
+        # show path
+        if clear:
+            ax0.cla()
+            ax1.cla()
+
+        ax0.plot(ps[:,0], ps[:,1], '--', label=label,color=color) # starting point
+        ax0.quiver(
+                ps[:,0], ps[:,1],
+                np.cos(ps[:,2]), np.sin(ps[:,2]),
+                scale_units='xy',
+                angles='xy',
+                color=color
+                )
+        #ax0.set_xlim([-0.2,1.0])
+        #ax0.set_ylim([-0.4,0.4])
+        ax1.imshow(cat[...,::-1])
+        ax0.legend()
+        if draw:
+            fig.canvas.draw()
+
+    def inspect(self, n=100):
         global index
         fig, (ax0, ax1) = plt.subplots(2,1)
         bt_imgs, bt_labs = self.get(batch_size=n, time_steps=4) # batch-time
@@ -114,35 +212,6 @@ class DataManager(object):
         print('q to quit; any other key to inspect next sample')
         print('----------------')
 
-        def show(i):
-            t_imgs = bt_imgs[i]
-            t_labs = bt_labs[i]
-
-            cat = np.concatenate(t_imgs, axis=1)
-            next = False
-
-            # construct path
-            p0 = np.zeros_like(t_labs[0])
-            ps = [p0]
-            for dp in t_labs[1:]:
-                p = add_p3d(ps[-1], dp)
-                ps.append(p)
-            ps = np.float32(ps)
-
-            # show path
-            ax0.cla()
-            ax1.cla()
-
-            ax0.set_title('Data {}/{}'.format(i+1,n))
-            ax0.plot(ps[:,0], ps[:,1], '--') # starting point
-            ax0.quiver(
-                    ps[:,0], ps[:,1],
-                    np.cos(ps[:,2]), np.sin(ps[:,2]),
-                    scale_units='xy',
-                    angles='xy'
-                    )
-            ax1.imshow(cat[...,::-1])
-            fig.canvas.draw()
 
         def handle_key(event):
             global index
@@ -151,15 +220,18 @@ class DataManager(object):
                 sys.exit()
             else:
                 index += 1
+                print('{}/{}'.format(index,n))
                 if (index >= n): sys.exit(0)
-                show(index)
+                t_imgs = bt_imgs[index]
+                t_labs = bt_labs[index]
+                DataManager.show(t_imgs, t_labs, fig, ax0, ax1)
 
         # register event handlers
         fig.canvas.mpl_connect('close_event', sys.exit)
         fig.canvas.mpl_connect('key_press_event', handle_key)
 
         # show
-        show(0)
+        DataManager.show(bt_imgs[0], bt_labs[0], fig, ax0, ax1)
         plt.show()
 
 def main():
@@ -175,7 +247,18 @@ def main():
     # dirs = [os.path.join(data_root, d) for d in subdir]
 
     dm = DataManager(dirs=dirs, log=print)
-    dm.inspect()
+
+    s = np.random.randint(65536)
+    np.random.seed(s)
+    img1, lab1 = dm.get_1(dm.data_[0],4,flip=False)
+    np.random.seed(s)
+    img2, lab2 = dm.get_1(dm.data_[0],4,flip=True)
+
+    fig, ((ax0, ax2), (ax1, ax3)) = plt.subplots(2,2)
+    dm.show(img1, lab1, fig, ax0, ax1, draw=False,  label='orig', color='k')
+    dm.show(img2, lab2, fig, ax2, ax3, clear=False, label='flip', color='k')
+    plt.show()
+    #dm.inspect()
 
 if __name__ == "__main__":
     main()
