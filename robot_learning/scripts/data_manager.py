@@ -235,10 +235,10 @@ class DataManager(object):
         plt.show()
 
 def main():
-    # opt 1 : all training data
+    # opt 1.0 : all training data
     dirs = None
 
-    # opt 2 : specify subdir/dirs/ ...
+    # opt 1.1 : specify subdir/dirs/ ...
     # rospack   = rospkg.RosPack() 
     # pkg_root  = rospack.get_path('robot_learning') # Gets the package
     # #data_root = os.path.join(pkg_root, 'data', 'valid')
@@ -248,17 +248,20 @@ def main():
 
     dm = DataManager(dirs=dirs, log=print)
 
-    s = np.random.randint(65536)
-    np.random.seed(s)
-    img1, lab1 = dm.get_1(dm.data_[0],4,flip=False)
-    np.random.seed(s)
-    img2, lab2 = dm.get_1(dm.data_[0],4,flip=True)
+    # opt 2.0 : data augmentation observation
+    #s = np.random.randint(65536)
+    #np.random.seed(s)
+    #img1, lab1 = dm.get_1(dm.data_[0],4,flip=False)
+    #np.random.seed(s)
+    #img2, lab2 = dm.get_1(dm.data_[0],4,flip=True)
 
-    fig, ((ax0, ax2), (ax1, ax3)) = plt.subplots(2,2)
-    dm.show(img1, lab1, fig, ax0, ax1, draw=False,  label='orig', color='k')
-    dm.show(img2, lab2, fig, ax2, ax3, clear=False, label='flip', color='k')
-    plt.show()
-    #dm.inspect()
+    #fig, ((ax0, ax2), (ax1, ax3)) = plt.subplots(2,2)
+    #dm.show(img1, lab1, fig, ax0, ax1, draw=False,  label='orig', color='k')
+    #dm.show(img2, lab2, fig, ax2, ax3, clear=False, label='flip', color='k')
+    #plt.show()
+
+    # opt 2.1 : overall inspection
+    dm.inspect()
 
 if __name__ == "__main__":
     main()
