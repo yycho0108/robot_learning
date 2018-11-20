@@ -163,14 +163,16 @@ class DataManager(object):
         plt.show()
 
 def main():
-    rospack   = rospkg.RosPack() 
-    pkg_root  = rospack.get_path('robot_learning') # Gets the package
-    #data_root = os.path.join(pkg_root, 'data', 'valid')
-    data_root = os.path.join(pkg_root, 'data', 'train')
-    subdir = os.listdir(data_root)
-    #subdir = ['7']
-    #dirs = [os.path.join(data_root, d) for d in subdir]
+    # opt 1 : all training data
     dirs = None
+
+    # opt 2 : specify subdir/dirs/ ...
+    # rospack   = rospkg.RosPack() 
+    # pkg_root  = rospack.get_path('robot_learning') # Gets the package
+    # #data_root = os.path.join(pkg_root, 'data', 'valid')
+    # data_root = os.path.join(pkg_root, 'data', 'train')
+    # subdir = os.listdir(data_root)
+    # dirs = [os.path.join(data_root, d) for d in subdir]
 
     dm = DataManager(dirs=dirs, log=print)
     dm.inspect()

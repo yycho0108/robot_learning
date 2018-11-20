@@ -83,23 +83,23 @@ class DataCollector(object):
         """ store odom msg """
         self.odom_ = msg
 
-    def data_cb(self, img_msg, scan_msg, odom_msg):
+    def data_cb(self, img_msg, odom_msg):
         """ store synced scan/odom msg """
-        self.time_ = scan_msg.header.stamp.to_sec()
+        self.time_ = odom_msg.header.stamp.to_sec()
         self.img_cb(img_msg)
-        self.scan_cb(scan_msg)
+        #self.scan_cb(scan_msg)
         self.odom_cb(odom_msg)
         self.new_data_ = True
 
     def start(self):
         """ register ROS handles and subscribe to all incoming topics """
         if self.sync_:
-            scan_sub = message_filters.Subscriber('/stable_scan', LaserScan) # TODO: might work well?
+            #scan_sub = message_filters.Subscriber('/stable_scan', LaserScan) # TODO: might work well?
             odom_sub = message_filters.Subscriber('/odom', Odometry) 
             img_sub  = message_filters.Subscriber('/camera/image_raw', Image) 
 
             self.sync_sub_ = message_filters.ApproximateTimeSynchronizer(
-                    [img_sub, scan_sub, odom_sub], 10, self.slop_, allow_headerless=False)
+                    [img_sub, odom_sub], 10, self.slop_, allow_headerless=False)
             self.sync_sub_.registerCallback(self.data_cb)
         else:
             self.scan_sub_ = rospy.Subscriber('scan', LaserScan, self.scan_cb)
@@ -198,7 +198,7 @@ class DataCollector(object):
         Returns:
             odom,scan : refer to DataCollector.odom() and DataCollector.scan().
         """
-        return (self.time_, self.img, self.odom, self.scan)
+        return (self.time_, self.img, self.odom)#, self.scan)
 
     def append(self, data):
         check = [(e is not None) for e in data]
@@ -226,13 +226,13 @@ class DataCollector(object):
         data = zip(*self.dataset_) # reformat to [time, img, odom, scan]
         dtypes = [np.float32, np.uint8, np.float32, np.float32]
         data = [np.asarray(d, dtype=t) for (d,t) in zip(data, dtypes)]
-        stamp, img, odom, scan = data
+        stamp, img, odom = data
 
         # cannot call .savez due to bug (https://stackoverflow.com/questions/25552741/python-numpy-not-saving-array)
         np.save(os.path.join(path,'stamp.npy'), stamp)
         np.save(os.path.join(path,'img.npy'), img)
         np.save(os.path.join(path,'odom.npy'), odom)
-        np.save(os.path.join(path,'scan.npy'), scan)
+        #np.save(os.path.join(path,'scan.npy'), scan)
 
 def main():
     rospy.init_node('data_collector')
