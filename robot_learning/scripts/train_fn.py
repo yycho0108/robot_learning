@@ -39,9 +39,9 @@ def load_data(
     for i in range(1,31):
         print('loading {}/{}'.format(i, 30))
         data_subdir = os.path.join(data_root, str(i))
-        img1 = (np.load(os.path.join(data_subdir, 'img1.npy')) * 255).astype(np.uint8)
-        img2 = (np.load(os.path.join(data_subdir, 'img2.npy')) * 255).astype(np.uint8)
-        pred = (np.load(os.path.join(data_subdir, 'pred.npy'))).astype(np.float32)
+        img1 = (np.load(os.path.join(data_subdir, 'img1.npy')))
+        img2 = (np.load(os.path.join(data_subdir, 'img2.npy')))
+        pred = (np.load(os.path.join(data_subdir, 'pred.npy')))
 
         n = len(img1)
         idx = np.random.choice(n, int(n * sample_ratio), replace=False)
@@ -65,8 +65,8 @@ def main():
     # restore/train flags
     # checkpoint file to restore from
     # restore_ckpt = '/tmp/vo/20/ckpt/model.ckpt-4'
-    #restore_ckpt = None
-    restore_ckpt = os.path.expanduser('~/fn/68/ckpt/model.ckpt-10000')
+    restore_ckpt = None
+    #restore_ckpt = os.path.expanduser('~/fn/68/ckpt/model.ckpt-10000')
     is_training = True
 
     # directory
@@ -94,13 +94,13 @@ def main():
     ckpt_file = os.path.join(ckpt_root, 'model.ckpt')
 
     #loaders = [ILSVRCLoader(os.getenv('ILSVRC_ROOT'), data_type=('train_%d' % i)) for i in range(1,31)]
-    sample_ratio = 0.35
+    sample_ratio = 0.5
     data_root = os.path.expanduser('~/dispset/')
     #sel = np.random.choice(np.arange(1,31), size=10, replace=False)
     #print('selected : {}'.format(sel))
 
     data_img1, data_img2, data_pred, dlen = load_data(
-            data_root, sample_ratio=0.35)
+            data_root, sample_ratio=sample_ratio)
     #train_cnt = 0
 
     graph = tf.get_default_graph()
@@ -160,7 +160,7 @@ def main():
                 flow = data_pred[idx]
                 if msk is None:
                     msk = np.ones_like(flow[...,:1])
-                lab = np.concatenate([flow,msk], axis=-1) # PRED = [x,y,mask]
+                lab = np.concatenate([flow, msk], axis=-1) # PRED = [x,y,mask]
                 sess.run(enqueue_op, feed_dict={q_img:pimg, q_lab:lab})
 
         # initialization

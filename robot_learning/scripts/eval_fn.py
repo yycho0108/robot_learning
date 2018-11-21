@@ -6,6 +6,7 @@ import os
 import sys
 import time
 from utils.ilsvrc_utils import ILSVRCLoader
+from utils.opt_utils import apply_opt
 from utils import mkdir, proc_img
 
 from flow_net_bb import FlowNetBB
