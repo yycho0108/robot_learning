@@ -37,7 +37,7 @@ def main():
     #restore_ckpt = '/home/jamiecho/fn/15/ckpt/model.ckpt-1000'
 
     #fn_ckpt = None
-    fn_ckpt = os.path.expanduser('~/fn/56/ckpt/model.ckpt-20000')
+    fn_ckpt = os.path.expanduser('~/fn/57/ckpt/model.ckpt-40000')
 
     is_training = True
 
@@ -135,6 +135,7 @@ def main():
         sess.run(tf.global_variables_initializer())
         if fn_ckpt is not None:
             fn_vars = [v for v in slim.get_model_variables() if ('vo/sconv' in v.name) or ('vo/conv' in v.name)]
+            print('flownet vars', fn_vars)
             fn_saver = tf.train.Saver(var_list=fn_vars)
             fn_saver.restore(sess, fn_ckpt)
 

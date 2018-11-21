@@ -5,10 +5,18 @@ import tensorflow as tf
 from utils import no_op
 slim = tf.contrib.slim
 
+def normalizer_no_op(x, *a, **k):
+    return x
+
+def upsample(x):
+    h, w = x.get_shape().as_list()[1:3]
+    return tf.image.resize_images(x, (2*h,2*w))
+
 class FlowNetBB(object):
     def __init__(self, step, learning_rate=None,
             img=None, lab=None,
-            train=True, reuse=None, log=print):
+            train=True, eval=True,
+            reuse=None, log=print):
         self.img_ = img
         self.lab_ = lab
 
@@ -16,6 +24,7 @@ class FlowNetBB(object):
         self.learning_rate_ = (cfg.LEARNING_RATE if (learning_rate is None) else learning_rate)
         self.step_ = step
         self.train_ = train
+        self.eval_  = eval
         self.reuse_ = reuse
         self.log_ = log
 
@@ -25,8 +34,11 @@ class FlowNetBB(object):
         with tf.name_scope('input'):
             img = tf.placeholder(tf.float32, 
                     [None, 2, cfg.IMG_HEIGHT, cfg.IMG_WIDTH, cfg.IMG_DEPTH], name='img')
-            lab = tf.placeholder(tf.float32,
-                    [None, cfg.IMG_HEIGHT, cfg.IMG_WIDTH, 3], name='lab') # flow label, (di,dj,mask)
+            if self.eval_:
+                lab = tf.placeholder(tf.float32,
+                        [None, cfg.IMG_HEIGHT, cfg.IMG_WIDTH, 3], name='lab') # flow label, (di,dj,mask)
+            else:
+                lab = None
         self.img_ = img
         self.lab_ = lab
 
@@ -110,26 +122,41 @@ class FlowNetBB(object):
             with slim.arg_scope(self._arg_scope()):
                 log('tcnn-input', x.shape)
                 # objective : (15x20), (30x40), (60x80), (120x160), (240x320)
-                x = slim.separable_conv2d(x, 256, 1, stride=1, padding='SAME') # feat reduction
+                # x = slim.separable_conv2d(x, 256, 1, stride=1, padding='SAME') # feat reduction
                 #log('tcnn-rdc', x.shape)
-                x = slim.conv2d_transpose(x, 128, 3, stride=1, padding='VALID')
+                x = slim.conv2d_transpose(x, 256, 3, stride=1, padding='VALID')
                 feats2_rdc = slim.separable_conv2d(feats[2], 128, 1, stride=1, padding='SAME')
                 x = tf.concat([x, feats2_rdc],axis=-1)
                 log('cat-1', x.shape)
-                x = slim.conv2d_transpose(x, 128, 5, stride=1, padding='VALID')
+                x = slim.conv2d_transpose(x, 256, 5, stride=1, padding='VALID')
                 x = slim.conv2d_transpose(x, 128, 3, stride=1, padding='VALID')
                 x = tf.concat([x, feats[1]],axis=-1)
                 log('cat-2', x.shape)
                 x = slim.conv2d_transpose(x, 128, 3, stride=1, padding='VALID')
-                x = slim.conv2d_transpose(x, 128, 3, stride=2, padding='SAME') #14x18
+
+                # resize-conv
+                x = upsample(x)
+                x = slim.separable_conv2d(x, 128, 3, stride=1, padding='SAME')
                 x = tf.concat([x, feats[0]],axis=-1)
                 log('cat-3', x.shape)
-                x = slim.conv2d_transpose(x, 64, 3, stride=2, padding='SAME') #15x20
-                x = slim.conv2d_transpose(x, 64, 3, stride=2, padding='SAME')
-                x = slim.conv2d_transpose(x, 32, 3, stride=2, padding='SAME')
-                x = slim.conv2d(x, 2, 1, 1, padding='SAME',
-                        activation_fn=None, normalizer_fn=None
-                        )
+                x = upsample(x)
+                x = slim.separable_conv2d(x, 128, 3, stride=1, padding='SAME')
+                x = upsample(x)
+                x = slim.separable_conv2d(x, 64, 3, stride=1, padding='SAME')
+                x = upsample(x)
+                with slim.arg_scope([slim.separable_conv2d, slim.conv2d],
+                        normalizer_fn=normalizer_no_op):
+                    x = slim.conv2d(x, 2, 3, stride=1, padding='SAME')
+
+                #x = slim.conv2d_transpose(x, 128, 3, stride=2, padding='SAME') #14x18
+                #x = tf.concat([x, feats[0]],axis=-1)
+                #log('cat-3', x.shape)
+                #x = slim.conv2d_transpose(x, 64, 3, stride=2, padding='SAME') #15x20
+                #x = slim.conv2d_transpose(x, 64, 3, stride=2, padding='SAME')
+                #x = slim.conv2d_transpose(x, 32, 3, stride=2, padding='SAME')
+                #x = slim.conv2d(x, 2, 1, 1, padding='SAME',
+                #        activation_fn=None, normalizer_fn=None
+                #        )
                 log('post-tcnn', x.shape)
         return x
 
@@ -184,7 +211,9 @@ class FlowNetBB(object):
         with tf.variable_scope('vo', reuse=self.reuse_):
             cnn, feats = self._build_cnn(img, log=log)
             tcnn = self._build_tcnn(cnn, feats, log=log)
-        err_c = self._build_err(tcnn, lab, log=log)
+
+        if self.eval_:
+            err_c = self._build_err(tcnn, lab, log=log)
 
         if self.train_:
             reg_c = tf.add_n(tf.losses.get_regularization_losses())
@@ -193,11 +222,18 @@ class FlowNetBB(object):
             cost = (err_c + reg_c)
             opt  = self._build_opt(cost, log=log)
             self.opt_ = opt
-        _   = self._build_log(log=log, err=err_c)
+
+        if self.eval_:
+            _   = self._build_log(log=log, err=err_c)
 
         self.img_ = img
+        self.pred_ = tcnn
         self.lab_ = lab
-        self.err_ = err_c
+
+        if self.eval_:
+            self.err_ = err_c
+        else:
+            self.err_ = None
 
         ws = slim.get_model_variables()
         ss = [reduce(lambda a,b:a*b, w.get_shape().as_list()) for w in ws]

@@ -195,16 +195,18 @@ class ILSVRCLoader(VIDLoaderBase):
             ):
         imgs = []
 
-        if batch_size == -1:
+        all_flag = (batch_size == -1)
+        
+        if all_flag:
             batch_size = len(self.keys) * per_seq
 
         cnt = 0
 
         while cnt < batch_size:
-            if batch_size == -1:
-                seq = np.random.choice(self.keys)
-            else:
+            if all_flag:
                 seq = self.keys[cnt % len(self.keys)]
+            else:
+                seq = np.random.choice(self.keys)
             data = self.index[seq]
             seq_dir = '_'.join(seq.split('_')[:-1])
             n = len(data['boxs'])

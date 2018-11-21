@@ -65,8 +65,8 @@ def main():
     # restore/train flags
     # checkpoint file to restore from
     # restore_ckpt = '/tmp/vo/20/ckpt/model.ckpt-4'
-    # restore_ckpt = os.path.expanduser('~/fn/27/ckpt/model.ckpt-8700')
     restore_ckpt = None
+    #restore_ckpt = os.path.expanduser('~/fn/56/ckpt/model.ckpt-20000')
     is_training = True
 
     # directory
@@ -120,14 +120,14 @@ def main():
 
         # initial ramp-up 1e-6 -> 1e-4
         lr0 = tf.train.exponential_decay(cfg.LR_RAMP_0,
-                global_step, cfg.LR_RAMP_STEPS, cfg.LEARNING_RATE/cfg.LR_RAMP_0, staircase=False)
+                global_step, cfg.FN_RAMP_STEPS, cfg.FN_LEARNING_RATE/cfg.FN_RAMP_0, staircase=False)
         
         # standard decay 1e-4 -> 1e-3
         lr1 = tf.train.exponential_decay(cfg.FN_LEARNING_RATE,
                 global_step, cfg.FN_STEPS_PER_DECAY, cfg.FN_DECAY_FACTOR, staircase=True)
 
-        #learning_rate = tf.where(global_step < cfg.LR_RAMP_STEPS, lr0, lr1) # employ slow initial learning rate
-        learning_rate = lr1
+        learning_rate = tf.where(global_step < cfg.FN_RAMP_STEPS, lr0, lr1) # employ slow initial learning rate
+        #learning_rate = lr1
         
         net = FlowNetBB(global_step,
                 learning_rate=learning_rate, img=img, lab=lab,
