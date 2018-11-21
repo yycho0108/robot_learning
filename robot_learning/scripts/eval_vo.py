@@ -19,7 +19,9 @@ def main():
     # restore/train flags
     # checkpoint file to restore from
     # restore_ckpt = '/tmp/vo/20/ckpt/model.ckpt-4'
-    restore_ckpt = os.path.expanduser('~/vo/0/ckpt/model.ckpt-1000')
+    #restore_ckpt = os.path.expanduser('~/vo/0/ckpt/model.ckpt-1000')
+    #restore_ckpt = os.path.expanduser('~/vo/8/ckpt/model.ckpt-2000')
+    restore_ckpt = os.path.expanduser('~/vo/15/ckpt/model.ckpt-1100')
     is_training = False
 
     # override cfg params

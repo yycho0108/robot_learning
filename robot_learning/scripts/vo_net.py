@@ -11,7 +11,8 @@ class VONet(object):
             img=None, lab=None,
             batch_size=None, 
             train=True, reuse=tf.AUTO_REUSE,
-            cfg=cfg, log=print):
+            cfg=cfg, log=print,
+            ):
 
         self.img_ = img
         self.lab_ = lab
@@ -93,17 +94,37 @@ class VONet(object):
                 log('cnn-format', x.shape)
             with tf.name_scope('cnn'):
                 with slim.arg_scope(self._arg_scope()):
-                    x = slim.stack(x,
-                            slim.conv2d,
-                            [(64,7,2),(128,3,2),(128,3,2),(256,3,2)],
-                            scope='conv')
-                    log('post-conv', x.shape) #NTx30x40
+                    x = slim.conv2d(x, 64, 7, 2, scope='conv', padding='SAME')
+
                     x = slim.stack(x,
                             slim.separable_conv2d,
-                            [(256,3,1,2), (256,3,1,2), (256,3,1,2), (512,3,1,2)], scope='sconv')
+                            [(128,3,1,2),(128,3,1,2),(256,3,1,2)],
+                            scope='sconv_pre',
+                            padding='SAME',
+                            )
+                    log('post-conv', x.shape) #NTx30x40
+
+                    x = slim.stack(x,
+                            slim.separable_conv2d,
+                            [(256,3,1,1), (256,3,1,1), (256,3,1,1), (512,3,1,1), (512,3,1,1)],
+                            scope='sconv_post',
+                            padding='VALID'
+                            )
                     log('post-sconv', x.shape) #NTx4x5
                     x = tf.reduce_mean(x, axis=[1,2]) # avg pooling
+                    x = slim.dropout(x, keep_prob=0.2, is_training=self.train_, scope='dropout')
                     log('post-cnn', x.shape)
+                    #x = slim.stack(x,
+                    #        slim.conv2d,
+                    #        [(64,7,2),(128,3,2),(128,3,2),(256,3,2)],
+                    #        scope='conv')
+                    #log('post-conv', x.shape) #NTx30x40
+                    #x = slim.stack(x,
+                    #        slim.separable_conv2d,
+                    #        [(256,3,1,2), (256,3,1,2), (256,3,1,2), (512,3,1,2)], scope='sconv')
+                    #log('post-sconv', x.shape) #NTx4x5
+                    #x = tf.reduce_mean(x, axis=[1,2]) # avg pooling
+                    #log('post-cnn', x.shape)
             with tf.name_scope('format_out'):
                 x = tf.reshape(x, [s_d[0], s_d[1], 512])
                 log('cnn-output', x.shape)

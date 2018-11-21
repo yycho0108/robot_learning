@@ -52,6 +52,15 @@ class DataManager(object):
         dirs = np.sort(dirs)
 
         self.data_ = [self.load(d) for d in dirs]
+
+        # hack to split data
+        #img, odom =  self.data_[0]
+        #n = len(img)
+        #np.save('/tmp/img0.npy', img[:n/2])
+        #np.save('/tmp/odom0.npy', odom[:n/2])
+        #np.save('/tmp/img1.npy', img[n/2:])
+        #np.save('/tmp/odom1.npy', odom[n/2:])
+
         self.data_ = [self.format(*d) for d in self.data_]
 
         deltas = [d[1] for d in self.data_]
@@ -236,15 +245,16 @@ class DataManager(object):
 
 def main():
     # opt 1.0 : all training data
-    dirs = None
+    # dirs = None
 
     # opt 1.1 : specify subdir/dirs/ ...
-    # rospack   = rospkg.RosPack() 
-    # pkg_root  = rospack.get_path('robot_learning') # Gets the package
-    # #data_root = os.path.join(pkg_root, 'data', 'valid')
-    # data_root = os.path.join(pkg_root, 'data', 'train')
-    # subdir = os.listdir(data_root)
-    # dirs = [os.path.join(data_root, d) for d in subdir]
+    rospack   = rospkg.RosPack() 
+    pkg_root  = rospack.get_path('robot_learning') # Gets the package
+    #data_root = os.path.join(pkg_root, 'data', 'valid')
+    data_root = os.path.join(pkg_root, 'data', 'valid')
+    #subdir = os.listdir(data_root)
+    subdir = ['0']
+    dirs = [os.path.join(data_root, d) for d in subdir]
 
     dm = DataManager(dirs=dirs, log=print)
 
