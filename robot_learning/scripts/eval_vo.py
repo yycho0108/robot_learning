@@ -21,15 +21,15 @@ def main():
     # restore_ckpt = '/tmp/vo/20/ckpt/model.ckpt-4'
     #restore_ckpt = os.path.expanduser('~/vo/0/ckpt/model.ckpt-1000')
     #restore_ckpt = os.path.expanduser('~/vo/8/ckpt/model.ckpt-2000')
-    restore_ckpt = os.path.expanduser('~/vo/15/ckpt/model.ckpt-1100')
+    restore_ckpt = os.path.expanduser('~/vo/19/ckpt/model.ckpt-2000')
     is_training = False
 
     # override cfg params
     cfg.BATCH_SIZE = 1
     cfg.TIME_STEPS = 1
 
-    n_test = 8
-    n_step = 64
+    n_test = 32
+    n_step = 16
 
     dm = DataManager(mode='valid', log=print)
     #dm = DataManager(mode='train', log=print)

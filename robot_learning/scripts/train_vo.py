@@ -37,7 +37,7 @@ def main():
     #restore_ckpt = '/home/jamiecho/fn/15/ckpt/model.ckpt-1000'
 
     #fn_ckpt = None
-    fn_ckpt = os.path.expanduser('~/fn/57/ckpt/model.ckpt-40000')
+    fn_ckpt = os.path.expanduser('~/fn/69/ckpt/model.ckpt-20000')
 
     is_training = True
 

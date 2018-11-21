@@ -73,7 +73,7 @@ class FlowNetBB(object):
 
                         x = slim.stack(x,
                                 slim.separable_conv2d,
-                                [(128,3,1,2),(128,3,1,2),(256,3,1,2)],
+                                [(128,3,1,2),(256,3,1,2),(512,3,1,2)],
                                 scope='sconv_pre',
                                 padding='SAME',
                                 )
@@ -122,7 +122,7 @@ class FlowNetBB(object):
             with slim.arg_scope(self._arg_scope()):
                 log('tcnn-input', x.shape)
                 # objective : (15x20), (30x40), (60x80), (120x160), (240x320)
-                # x = slim.separable_conv2d(x, 256, 1, stride=1, padding='SAME') # feat reduction
+                x = slim.separable_conv2d(x, 256, 1, stride=1, padding='SAME') # feat reduction
                 #log('tcnn-rdc', x.shape)
                 x = slim.conv2d_transpose(x, 256, 3, stride=1, padding='VALID')
                 feats2_rdc = slim.separable_conv2d(feats[2], 128, 1, stride=1, padding='SAME')
@@ -144,9 +144,10 @@ class FlowNetBB(object):
                 x = upsample(x)
                 x = slim.separable_conv2d(x, 64, 3, stride=1, padding='SAME')
                 x = upsample(x)
-                with slim.arg_scope([slim.separable_conv2d, slim.conv2d],
-                        normalizer_fn=normalizer_no_op):
-                    x = slim.conv2d(x, 2, 3, stride=1, padding='SAME')
+
+                x = slim.conv2d(x, 2, 3, stride=1, padding='SAME',
+                        activation_fn=None, normalizer_fn=normalizer_no_op
+                        )
 
                 #x = slim.conv2d_transpose(x, 128, 3, stride=2, padding='SAME') #14x18
                 #x = tf.concat([x, feats[0]],axis=-1)

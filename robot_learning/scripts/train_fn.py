@@ -65,8 +65,8 @@ def main():
     # restore/train flags
     # checkpoint file to restore from
     # restore_ckpt = '/tmp/vo/20/ckpt/model.ckpt-4'
-    restore_ckpt = None
-    #restore_ckpt = os.path.expanduser('~/fn/56/ckpt/model.ckpt-20000')
+    #restore_ckpt = None
+    restore_ckpt = os.path.expanduser('~/fn/68/ckpt/model.ckpt-10000')
     is_training = True
 
     # directory
@@ -105,7 +105,7 @@ def main():
 
     graph = tf.get_default_graph()
     with graph.as_default():
-        global_step = slim.get_or_create_global_step()
+        global_step = tf.train.get_or_create_global_step()
         with tf.name_scope('queue'):
             q_img = tf.placeholder(tf.float32, 
                     [None, 2, cfg.IMG_HEIGHT, cfg.IMG_WIDTH, cfg.IMG_DEPTH], name='img')
@@ -175,8 +175,7 @@ def main():
             t.start()
 
         sig.start()
-        for i in range(i0, cfg.FN_TRAIN_STEPS):
-
+        for i in range(i0, cfg.FN_STOP):
             # dataset management
             #train_cnt += cfg.FN_BATCH_SIZE
             #if train_cnt > dlen * cnt_per_data:
@@ -190,6 +189,8 @@ def main():
             # img, lab = dm.get(batch_size=cfg.BATCH_SIZE, time_steps=cfg.TIME_STEPS, aug=True)
             # img = proc_img(img)
             s, err, _ = sess.run([summary_t, net.err_, net.opt_]) #{net.img_ : img, net.lab_ : lab})
+            if (i%cfg.LOG_STEPS) == 0:
+                print('{} : {}'.format(i, err))
             writer_t.add_summary(s, i)
 
             if (i>0) and (i%cfg.SAVE_STEPS)==0:

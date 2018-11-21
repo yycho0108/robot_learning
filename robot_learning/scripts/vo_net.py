@@ -98,7 +98,7 @@ class VONet(object):
 
                     x = slim.stack(x,
                             slim.separable_conv2d,
-                            [(128,3,1,2),(128,3,1,2),(256,3,1,2)],
+                            [(128,3,1,2),(256,3,1,2),(512,3,1,2)],
                             scope='sconv_pre',
                             padding='SAME',
                             )
