@@ -175,6 +175,7 @@ def main():
             t.start()
 
         sig.start()
+        errs = []
         for i in range(i0, cfg.FN_STOP):
             # dataset management
             #train_cnt += cfg.FN_BATCH_SIZE
@@ -189,8 +190,12 @@ def main():
             # img, lab = dm.get(batch_size=cfg.BATCH_SIZE, time_steps=cfg.TIME_STEPS, aug=True)
             # img = proc_img(img)
             s, err, _ = sess.run([summary_t, net.err_, net.opt_]) #{net.img_ : img, net.lab_ : lab})
-            if (i%cfg.LOG_STEPS) == 0:
-                print('{} : {}'.format(i, err))
+            errs.append(err)
+
+            if (i>0) and (i%cfg.LOG_STEPS)==0:
+                err_mean = np.mean(errs)
+                print('{} : {}'.format(i, err_mean))
+                errs = []
             writer_t.add_summary(s, i)
 
             if (i>0) and (i%cfg.SAVE_STEPS)==0:
