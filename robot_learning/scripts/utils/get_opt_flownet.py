@@ -73,19 +73,21 @@ def main():
     config=None
 
     target_size = (320,240)
-    target_dir  = os.path.expanduser('~/dispset')
+    target_dir  = os.path.expanduser('~/dispset/data')
 
     with tf.Session(graph=graph, config=config) as sess:
         #saver.restore(sess, ckpt_file)
         net.load(sess, ckpt_file)
 
-        for data_i in range(1,31):
-            out_dir = os.path.join(target_dir, str(data_i))
-            mkdir(out_dir)
+        cnt = 0
+        for data_i in range(1,32):
+            #out_dir = os.path.join(target_dir, str(data_i))
+            out_dir = target_dir # flattened!
+            #mkdir(out_dir)
 
             data_type = ('train_%d' % data_i) 
             loader = ILSVRCLoader(os.getenv('ILSVRC_ROOT'), data_type=('train_%d'%data_i), T=8,
-                    size=(512,384)
+                    size=(512,384) # expected network image size
                     )
 
             print('data length-0 : {}'.format(len(loader.keys)))
@@ -93,33 +95,29 @@ def main():
             print('data length-1 : {}'.format(len(imgs)))
             split_n = np.round(len(imgs)/8.).astype(np.int32) # end up with batch_size of about 8
             print('split into {} sections'.format(split_n))
+            simgs = np.array_split(imgs, split_n, axis=0)
+            for si, img in enumerate(simgs):
+                print('{}/{}'.format(si, len(simgs)))
+                im1, im2 = np.split(img, 2, axis=1)
+                im1 = np.squeeze(im1, axis=1)
+                im2 = np.squeeze(im2, axis=1) # u8-bgr
 
-            img1_out = []
-            img2_out = []
-            pred_out = []
-
-            for si, img in enumerate(np.array_split(imgs, split_n, axis=0)):
-                print('{}/{}'.format(si,split_n))
-                im1, im2 = np.split(img[...,::-1], 2, axis=1)
-                im1 = np.float32(np.squeeze(im1, axis=1)) / 255.
-                im2 = np.float32(np.squeeze(im2, axis=1)) / 255.
-                pred_flow_val = net(sess, im1, im2)
+                im1f_rgb = np.float32(im1[...,::-1]) / 255. # f32-rgb
+                im2f_rgb = np.float32(im2[...,::-1]) / 255.
+                flow_val = net(sess, im1f_rgb, im2f_rgb)
                 
                 img1_rsz = [cv2.resize(e, target_size) for e in im1]
                 img2_rsz = [cv2.resize(e, target_size) for e in im2]
-                pred_rsz = [cv2.resize(e, target_size) for e in pred_flow_val]
+                flow_rsz = [cv2.resize(e, target_size) for e in flow_val]
 
-                img1_out.append(np.stack(img1_rsz, axis=0))
-                img2_out.append(np.stack(img2_rsz, axis=0))
-                pred_out.append(np.stack(pred_rsz, axis=0))
+                #np.save(os.path.join(out_dir, '%05d_img1.npy' % cnt), img1_rsz)
+                #np.save(os.path.join(out_dir, '%05d_img2.npy' % cnt), img2_rsz)
 
-            img1_out = np.concatenate(img1_out, axis=0)
-            img2_out = np.concatenate(img2_out, axis=0)
-            pred_out = np.concatenate(pred_out, axis=0)
-
-            np.save(os.path.join(out_dir, 'img1.npy'), img1_out)
-            np.save(os.path.join(out_dir, 'img2.npy'), img2_out)
-            np.save(os.path.join(out_dir, 'pred.npy'), pred_out)
+                for i, (img1_1,img2_1,flow_1) in enumerate(zip(img1_rsz, img2_rsz, flow_rsz)):
+                    np.save(os.path.join(out_dir, '%05d_img1.npy') % (cnt+i), img1_1)
+                    np.save(os.path.join(out_dir, '%05d_img2.npy') % (cnt+i), img2_1)
+                    np.save(os.path.join(out_dir, '%05d_flow.npy') % (cnt+i), flow_1)
+                cnt += len(img1_rsz)
 
         #pred_flow_val = net(sess, im1, im2)
 
@@ -140,15 +138,15 @@ def main():
         #pred_flow_val = sess.run(pred_flow, feed_dict=feed_dict)
 
     # Visualization
-    import matplotlib.pyplot as plt
-    flow_im = flow_to_image(pred_flow_val[0])
-    overlay = cv2.addWeighted(im1[0], 0.5, im2[0], 0.5, 0.0)
-    fig, ((ax0, ax1), (ax2, ax3)) = plt.subplots(2,2)
-    ax0.imshow(overlay)
-    ax1.imshow(flow_im)
-    ax2.imshow(normalize(pred_flow_val[0,...,0]), cmap='gray') # u-channel
-    ax3.imshow(normalize(pred_flow_val[0,...,1]), cmap='gray') # v-channel
-    plt.show()
+    #import matplotlib.pyplot as plt
+    #flow_im = flow_to_image(flow_val[0])
+    #overlay = cv2.addWeighted(im1[0], 0.5, im2[0], 0.5, 0.0)
+    #fig, ((ax0, ax1), (ax2, ax3)) = plt.subplots(2,2)
+    #ax0.imshow(overlay)
+    #ax1.imshow(flow_im)
+    #ax2.imshow(normalize(flow_val[0,...,0]), cmap='gray') # u-channel
+    #ax3.imshow(normalize(flow_val[0,...,1]), cmap='gray') # v-channel
+    #plt.show()
 
 if __name__ == '__main__':
     main()

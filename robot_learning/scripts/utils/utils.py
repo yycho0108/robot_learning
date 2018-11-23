@@ -1,3 +1,4 @@
+from __future__ import print_function
 import numpy as np
 
 # path stuff
@@ -23,3 +24,29 @@ def normalize(x, mn=0.0, mx=1.0):
     xmx = np.max(x)
     return (x-xmn)*((mx-mn)/(xmx-xmn)) + mn
 
+class nest_log(object):
+    ilvl=0
+    def __init__(self, msg, log_fn=print, sw=2):
+        self.s_  = str(msg)
+        self.s0_ = ('- %s -' % self.s_)
+        self.s1_ = ('-' * len(self.s0_))
+        self.i_ = (' ' * (sw * nest_log.ilvl))
+        self.log_ = log_fn
+    def __enter__(self):
+        nest_log.ilvl += 1
+        self.log_(self.i_ + self.s0_)
+    def __exit__(self, type, value, traceback):
+        self.log_(self.i_ + self.s1_)
+        nest_log.ilvl -= 1
+    def __call__(self):
+        self.log_(self.i_ + self.s_)
+
+def main():
+    with nest_log('hello'):
+        with nest_log('x2'):
+            nest_log('y')()
+            with nest_log('hmm'):
+                nest_log('x')()
+
+if __name__ == "__main__":
+    main()

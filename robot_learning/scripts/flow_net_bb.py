@@ -2,7 +2,7 @@ from __future__ import print_function
 
 import config as cfg
 import tensorflow as tf
-from utils import no_op
+from utils import no_op, nest_log
 slim = tf.contrib.slim
 
 def normalizer_no_op(x, *a, **k):
@@ -160,6 +160,11 @@ class FlowNetBB(object):
                 #        )
                 log('post-tcnn', x.shape)
         return x
+
+
+    def _build_multi_err(self, xs, y, log=no_op):
+        log('- build-multi-err -')
+        log('-------------------')
 
     def _build_err(self, x, y, log=no_op):
         log('- build-err -')

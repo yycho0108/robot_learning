@@ -13,6 +13,7 @@ from flow_net_bb import FlowNetBB
 from data_manager import DataManager
 from utils import anorm, mkdir, proc_img, no_op
 from utils.ilsvrc_utils import ILSVRCLoader
+from utils.fchair_utils import load_chair
 
 import sys
 import signal
@@ -58,7 +59,6 @@ def load_data(
     print(np.shape(data_pred))
     return data_img1, data_img2, data_pred, dlen
 
-
 def main():
     sig = StopRequest()
 
@@ -68,6 +68,7 @@ def main():
     restore_ckpt = None
     #restore_ckpt = os.path.expanduser('~/fn/68/ckpt/model.ckpt-10000')
     is_training = True
+    data_type = 'fchair'
 
     # directory
     save_root = os.path.expanduser('~/fn')
@@ -96,6 +97,8 @@ def main():
     #loaders = [ILSVRCLoader(os.getenv('ILSVRC_ROOT'), data_type=('train_%d' % i)) for i in range(1,31)]
     sample_ratio = 0.5
     data_root = os.path.expanduser('~/dispset/')
+    chair_root = os.path.expanduser('~/Downloads/FlyingChairs/data')
+
     #sel = np.random.choice(np.arange(1,31), size=10, replace=False)
     #print('selected : {}'.format(sel))
 
@@ -151,15 +154,22 @@ def main():
             while not coord.should_stop():
                 #img, lab =  np.random.choice(loaders).grab_opt(8)
 
-                # get label
-                idx = np.random.choice(dlen, size=8)
+                # ilsvrc-mode
+                ## get label
+                #idx = np.random.choice(dlen, size=8)
+                ## stack + proc
+                #img = np.stack([data_img1[idx], data_img2[idx]], axis=1)[...,::-1] # RGB->BGR
+                #flow = data_pred[idx]
 
-                # stack + proc
-                img = np.stack([data_img1[idx], data_img2[idx]], axis=1)[...,::-1] # RGB->BGR
+                # fchair-mode
+                img1, img2, flow = load_chair(chair_root, 8)
+                img = np.stack([img1, img2], axis=1)[...,::-1] # RGB->BGR
+
+                # process + label
                 pimg = proc_img(img)
-                flow = data_pred[idx]
                 if msk is None:
                     msk = np.ones_like(flow[...,:1])
+
                 lab = np.concatenate([flow, msk], axis=-1) # PRED = [x,y,mask]
                 sess.run(enqueue_op, feed_dict={q_img:pimg, q_lab:lab})
 
