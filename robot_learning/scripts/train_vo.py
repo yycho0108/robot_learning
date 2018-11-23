@@ -122,7 +122,9 @@ def main():
         def enqueue():
             q_ts = [q_img, q_lab] # input tensors
             while not coord.should_stop():
-                q_vs = dm.get(batch_size=8, time_steps=cfg.TIME_STEPS, aug=True)
+                q_vs = dm.get(batch_size=8, time_steps=cfg.TIME_STEPS, aug=True,
+                        as_path=True
+                        )
                 q_vs[0] = proc_img(q_vs[0])
                 sess.run(enqueue_op, feed_dict={t:v for (t,v) in zip(q_ts, q_vs)})
 
@@ -149,7 +151,9 @@ def main():
 
             if (i>0) and (i%cfg.VAL_STEPS)==0:
                 # validation
-                img, lab = dm_v.get(batch_size=cfg.VAL_BATCH_SIZE, time_steps=cfg.TIME_STEPS, aug=False)
+                img, lab = dm_v.get(batch_size=cfg.VAL_BATCH_SIZE, time_steps=cfg.TIME_STEPS, aug=False,
+                        as_path=True
+                        )
                 img = proc_img(img)
                 s_v, err_v = sess.run([summary_v, net_v.err_],
                         {net_v.img_ : img, net_v.lab_ : lab})

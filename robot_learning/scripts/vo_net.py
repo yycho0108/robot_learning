@@ -5,6 +5,12 @@ import tensorflow as tf
 from tensorflow.contrib import slim
 from utils import no_op
 from tensorflow.contrib.framework import nest
+from se2 import SE2CompositeLayer
+
+def ang_err(h0, h1):
+    c0, s0 = tf.cos(h0), tf.sin(h0)
+    c1, s1 = tf.cos(h1), tf.sin(h1)
+    return tf.square(c1-c0) + tf.square(s1-s0)
 
 class VONet(object):
     def __init__(self, step, learning_rate=None,
@@ -48,9 +54,16 @@ class VONet(object):
         with tf.variable_scope('vo', reuse=self.reuse_):
             cnn = self._build_cnn(img, log)
             rnn, rnn_s1, rnn_s0 = self._build_rnn(cnn, log)
-            pos = self._build_pos(rnn, log)
+            dps = self._build_dps(rnn, log)
+            poss, pos = tf.nn.dynamic_rnn(
+                    cell=SE2CompositeLayer(),
+                    inputs=dps,
+                    dtype=tf.float32)
+            print('pos')
+            print(poss.shape)
+            print(pos.shape)
 
-        err_c = self._build_err(pos, lab, log=log)
+        err_c = self._build_err(poss, lab, log=log)
 
         if self.train_:
             reg_c = tf.add_n(tf.losses.get_regularization_losses())
@@ -161,23 +174,33 @@ class VONet(object):
         log('-------------')
         return output, state1, state0
 
-    def _build_pos(self, x, log=no_op):
-        log('- build-pos -')
-        with tf.name_scope('build-pos'):
-            with tf.name_scope('pos'):
+    def _build_dps(self, x, log=no_op):
+        log('- build-dps-')
+        with tf.name_scope('build-dps'):
+            with tf.name_scope('dps'):
                 x = slim.fully_connected(x, 128, activation_fn=tf.nn.elu, scope='fc1')
                 x = slim.fully_connected(x, 3, activation_fn=None, scope='fc2') # operate in 2d : (dx,dy,dh)
                 # NOTE: don't bother composing motion here
-        log('pos-output', x.shape)
+        log('dps-output', x.shape)
         log('-------------')
         return x
 
     def _build_err(self, x, y, k=cfg.W_COST, log=no_op):
         log('- build-err -')
         with tf.name_scope('build-err', [x,y]):
-            err = tf.square(x-y)
-            log('raw-err', err.shape)
-            err = tf.reduce_mean(err * k) # scale orientation error!
+            prd_x,prd_y,prd_h = tf.unstack(x, axis=-1)
+            lab_x,lab_y,lab_h = tf.unstack(y, axis=-1)
+
+            err_x = k[0]*tf.reduce_mean(tf.square(prd_x - lab_x))
+            err_y = k[1]*tf.reduce_mean(tf.square(prd_y - lab_y))
+            err_h = k[2]*tf.reduce_mean(ang_err(prd_h, lab_h))
+            err = (err_x + err_y + err_h)
+
+            #err = tf.square(x-y)
+            #log('raw-err', err.shape)
+            #scale orientation error!
+            #err = tf.reduce_mean(err * k)
+
             log('fin-err', err.shape)
         log('-------------')
         return err

@@ -34,6 +34,29 @@ def add_p3d(a,b):
     h1 = anorm(h0 + dh)
     return [x1,y1,h1]
 
+def add_p3d_batch(a, b):
+    x0,y0,h0 = a.T
+    dx,dy,dh = b.T
+    c, s = np.cos(h0), np.sin(h0)
+    dx_R = (c*dx - s*dy)
+    dy_R = (s*dx + c*dy)
+
+    x = x0+dx_R
+    y = y0+dy_R
+    h = anorm(h0+dh)
+    return np.stack([x,y,h], axis=-1)
+
+def dps2pos(dps):
+    # construct path
+    p0 = np.zeros_like(dps[0])
+    ps = [p0]
+    for dp in dps[1:]:
+        #p = add_p3d(ps[-1], dp)
+        p = add_p3d_batch(ps[-1], dp)
+        ps.append(p)
+    ps = np.float32(ps)
+    return ps
+
 def batch_augment(aug, imgs):
     # N-H-W-C
     n,h,w,c = imgs.shape
@@ -148,7 +171,9 @@ class DataManager(object):
 
         return [img, lab]
 
-    def get(self, batch_size, time_steps, aug=True):
+    def get(self, batch_size, time_steps, aug=True,
+            as_path=False
+            ):
         set_idx = np.random.choice(len(self.data_),
                 batch_size, replace=True, p=self.prob_)
         lr_flip = np.random.choice(2, batch_size, replace=True).astype(np.bool)
@@ -163,6 +188,8 @@ class DataManager(object):
         else:
             img = np.stack(img, axis=0) # [NxTxHxWxC]
         lab = np.stack(lab, axis=0) # [Nx3]
+        if as_path:
+            lab = dps2pos(lab)
         return [img, lab]
 
     def get_null(self, batch_size, time_steps):
