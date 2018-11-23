@@ -17,3 +17,9 @@ def mkdir(x):
 
 def proc_img(x):
     return np.float32(x) / 255. - 0.5
+
+def normalize(x, mn=0.0, mx=1.0):
+    xmn = np.min(x)
+    xmx = np.max(x)
+    return (x-xmn)*((mx-mn)/(xmx-xmn)) + mn
+

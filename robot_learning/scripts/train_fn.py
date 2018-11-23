@@ -9,10 +9,12 @@ slim = tf.contrib.slim
 import os
 import threading
 
-from vo_net import VONet
+from flow_net_bb import FlowNetBB
 from data_manager import DataManager
 from utils import anorm, mkdir, proc_img, no_op
+from utils.ilsvrc_utils import ILSVRCLoader
 
+import sys
 import signal
 
 class StopRequest(object):
@@ -27,6 +29,36 @@ class StopRequest(object):
         if not self._start:
             sys.exit(0)
 
+def load_data(
+        data_root,
+        sample_ratio=0.35):
+    data_img1 = []
+    data_img2 = []
+    data_pred = []
+    #for i in sel:
+    for i in range(1,31):
+        print('loading {}/{}'.format(i, 30))
+        data_subdir = os.path.join(data_root, str(i))
+        img1 = (np.load(os.path.join(data_subdir, 'img1.npy')))
+        img2 = (np.load(os.path.join(data_subdir, 'img2.npy')))
+        pred = (np.load(os.path.join(data_subdir, 'pred.npy')))
+
+        n = len(img1)
+        idx = np.random.choice(n, int(n * sample_ratio), replace=False)
+        data_img1.append(img1[idx])
+        data_img2.append(img2[idx])
+        data_pred.append(pred[idx])
+
+    data_img1 = np.concatenate(data_img1, axis=0)
+    data_img2 = np.concatenate(data_img2, axis=0)
+    data_pred = np.concatenate(data_pred, axis=0)
+    dlen = len(data_pred)
+    print(np.shape(data_img1))
+    print(np.shape(data_img2))
+    print(np.shape(data_pred))
+    return data_img1, data_img2, data_pred, dlen
+
+
 def main():
     sig = StopRequest()
 
@@ -34,15 +66,11 @@ def main():
     # checkpoint file to restore from
     # restore_ckpt = '/tmp/vo/20/ckpt/model.ckpt-4'
     restore_ckpt = None
-    #restore_ckpt = '/home/jamiecho/fn/15/ckpt/model.ckpt-1000'
-
-    fn_ckpt = None
-    #fn_ckpt = os.path.expanduser('~/fn/69/ckpt/model.ckpt-20000')
-
+    #restore_ckpt = os.path.expanduser('~/fn/68/ckpt/model.ckpt-10000')
     is_training = True
 
     # directory
-    save_root = os.path.expanduser('~/vo')
+    save_root = os.path.expanduser('~/fn')
     #save_root = '~/vo'
     mkdir(save_root)
 
@@ -58,64 +86,58 @@ def main():
     # resolve log + ckpt sub-directories
     log_root  = os.path.join(save_root, run_id)
     log_root_t  = os.path.join(log_root, 'train')
-    log_root_v  = os.path.join(log_root, 'valid')
+
     mkdir(log_root)
     mkdir(log_root_t)
-    mkdir(log_root_v)
     ckpt_root = os.path.join(log_root, 'ckpt')
     mkdir(ckpt_root)
     ckpt_file = os.path.join(ckpt_root, 'model.ckpt')
 
-    dm = DataManager(mode='train',log=print)
-    dm_v = DataManager(mode='valid',log=no_op)
+    #loaders = [ILSVRCLoader(os.getenv('ILSVRC_ROOT'), data_type=('train_%d' % i)) for i in range(1,31)]
+    sample_ratio = 0.5
+    data_root = os.path.expanduser('~/dispset/')
+    #sel = np.random.choice(np.arange(1,31), size=10, replace=False)
+    #print('selected : {}'.format(sel))
+
+    data_img1, data_img2, data_pred, dlen = load_data(
+            data_root, sample_ratio=sample_ratio)
+    #train_cnt = 0
 
     graph = tf.get_default_graph()
     with graph.as_default():
-        global_step = slim.get_or_create_global_step()
+        global_step = tf.train.get_or_create_global_step()
         with tf.name_scope('queue'):
             q_img = tf.placeholder(tf.float32, 
-                        [None, cfg.TIME_STEPS, cfg.IMG_HEIGHT, cfg.IMG_WIDTH, cfg.IMG_DEPTH], name='q_img')
-            q_lab = tf.placeholder(tf.float32, [None, cfg.TIME_STEPS, 3], name='q_lab') # label
-
+                    [None, 2, cfg.IMG_HEIGHT, cfg.IMG_WIDTH, cfg.IMG_DEPTH], name='img')
+            q_lab = tf.placeholder(tf.float32,
+                    [None, cfg.IMG_HEIGHT, cfg.IMG_WIDTH, 3], name='lab') # flow label, (di,dj,mask)
             q_i = [q_img, q_lab]
             q_t = [e.dtype for e in q_i]
             q_s = [e.shape[1:] for e in q_i]
             Q = tf.FIFOQueue(capacity=128, dtypes=q_t, shapes=q_s)
             enqueue_op = Q.enqueue_many(q_i)
-            
-            img, lab = Q.dequeue_many(cfg.BATCH_SIZE)
+            img, lab = Q.dequeue_many(cfg.FN_BATCH_SIZE)
 
         # initial ramp-up 1e-6 -> 1e-4
         lr0 = tf.train.exponential_decay(cfg.LR_RAMP_0,
-                global_step, cfg.LR_RAMP_STEPS, cfg.LEARNING_RATE/cfg.LR_RAMP_0, staircase=False)
+                global_step, cfg.FN_RAMP_STEPS, cfg.FN_LEARNING_RATE/cfg.FN_RAMP_0, staircase=False)
         
         # standard decay 1e-4 -> 1e-3
-        lr1 = tf.train.exponential_decay(cfg.LEARNING_RATE,
-                global_step, cfg.STEPS_PER_DECAY, cfg.DECAY_FACTOR, staircase=True)
-        learning_rate = tf.where(global_step < cfg.LR_RAMP_STEPS, lr0, lr1) # employ slow initial learning rate
-        
-        # option 2 : standard
-        #learning_rate = tf.train.exponential_decay(cfg.LEARNING_RATE,
-        #        global_step, cfg.STEPS_PER_DECAY, cfg.DECAY_FACTOR, staircase=True)
+        lr1 = tf.train.exponential_decay(cfg.FN_LEARNING_RATE,
+                global_step, cfg.FN_STEPS_PER_DECAY, cfg.FN_DECAY_FACTOR, staircase=True)
 
-        with tf.name_scope('net_t'):
-            net = VONet(global_step,
-                    learning_rate=learning_rate, img=img, lab=lab,
-                    batch_size=cfg.BATCH_SIZE,
-                    train=is_training, log=print)
-        with tf.name_scope('net_v'):
-            net_v = VONet(global_step,
-                    batch_size=cfg.VAL_BATCH_SIZE,
-                    train=False, log=no_op, reuse=True)
+        learning_rate = tf.where(global_step < cfg.FN_RAMP_STEPS, lr0, lr1) # employ slow initial learning rate
+        #learning_rate = lr1
+        
+        net = FlowNetBB(global_step,
+                learning_rate=learning_rate, img=img, lab=lab,
+                train=is_training, log=print)
 
         tf.summary.scalar('qsize', Q.size(), collections=['train'])
         tf.summary.scalar('learning_rate',learning_rate, collections=['train'])
 
         summary_t = tf.summary.merge([tf.summary.merge_all(), tf.summary.merge_all('train')])
-        summary_v = tf.summary.merge_all('valid')
-
         writer_t = tf.summary.FileWriter(log_root_t, graph)
-        writer_v = tf.summary.FileWriter(log_root_v, graph)
         saver = tf.train.Saver()
 
     #gpu_options = tf.GPUOptions(allow_growth=True, per_process_gpu_memory_fraction=0.95)
@@ -125,22 +147,24 @@ def main():
     with tf.Session(graph=graph, config=config) as sess:
         coord = tf.train.Coordinator()
         def enqueue():
-            q_ts = [q_img, q_lab] # input tensors
+            msk = None
             while not coord.should_stop():
-                q_vs = dm.get(batch_size=8, time_steps=cfg.TIME_STEPS, aug=True,
-                        as_path=True
-                        )
-                q_vs[0] = proc_img(q_vs[0])
-                sess.run(enqueue_op, feed_dict={t:v for (t,v) in zip(q_ts, q_vs)})
+                #img, lab =  np.random.choice(loaders).grab_opt(8)
+
+                # get label
+                idx = np.random.choice(dlen, size=8)
+
+                # stack + proc
+                img = np.stack([data_img1[idx], data_img2[idx]], axis=1)[...,::-1] # RGB->BGR
+                pimg = proc_img(img)
+                flow = data_pred[idx]
+                if msk is None:
+                    msk = np.ones_like(flow[...,:1])
+                lab = np.concatenate([flow, msk], axis=-1) # PRED = [x,y,mask]
+                sess.run(enqueue_op, feed_dict={q_img:pimg, q_lab:lab})
 
         # initialization
         sess.run(tf.global_variables_initializer())
-        if fn_ckpt is not None:
-            fn_vars = [v for v in slim.get_model_variables() if ('vo/sconv' in v.name) or ('vo/conv' in v.name)]
-            print('flownet vars', fn_vars)
-            fn_saver = tf.train.Saver(var_list=fn_vars)
-            fn_saver.restore(sess, fn_ckpt)
-
         if restore_ckpt is not None:
             saver.restore(sess, restore_ckpt)
         i = i0 = sess.run(global_step)
@@ -151,24 +175,28 @@ def main():
             t.start()
 
         sig.start()
-        for i in range(i0, cfg.TRAIN_STEPS):
+        errs = []
+        for i in range(i0, cfg.FN_STOP):
+            # dataset management
+            #train_cnt += cfg.FN_BATCH_SIZE
+            #if train_cnt > dlen * cnt_per_data:
+            #    data_img1, data_img2, data_pred, dlen = load_data(
+            #            data_root, sample_ratio=0.35)
+            #    train_cnt = 0
+
             if sig._stop:
                 break
             # usual training
             # img, lab = dm.get(batch_size=cfg.BATCH_SIZE, time_steps=cfg.TIME_STEPS, aug=True)
             # img = proc_img(img)
             s, err, _ = sess.run([summary_t, net.err_, net.opt_]) #{net.img_ : img, net.lab_ : lab})
-            writer_t.add_summary(s, i)
+            errs.append(err)
 
-            if (i>0) and (i%cfg.VAL_STEPS)==0:
-                # validation
-                img, lab = dm_v.get(batch_size=cfg.VAL_BATCH_SIZE, time_steps=cfg.TIME_STEPS, aug=True,
-                        as_path=True
-                        )
-                img = proc_img(img)
-                s_v, err_v = sess.run([summary_v, net_v.err_],
-                        {net_v.img_ : img, net_v.lab_ : lab})
-                writer_v.add_summary(s_v, i)
+            if (i>0) and (i%cfg.LOG_STEPS)==0:
+                err_mean = np.mean(errs)
+                print('{} : {}'.format(i, err_mean))
+                errs = []
+            writer_t.add_summary(s, i)
 
             if (i>0) and (i%cfg.SAVE_STEPS)==0:
                 # save
