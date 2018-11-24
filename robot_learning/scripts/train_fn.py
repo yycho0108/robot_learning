@@ -11,7 +11,7 @@ import threading
 
 from flow_net_bb import FlowNetBB
 from data_manager import DataManager
-from utils import anorm, mkdir, proc_img, no_op
+from utils import anorm, mkdir, proc_img, no_op, proc_img_tf
 from utils.ilsvrc_utils import ILSVRCLoader
 from utils.fchair_utils import load_chair, load_ilsvrc
 
@@ -59,48 +59,6 @@ def load_data(
     print(np.shape(data_pred))
     return data_img1, data_img2, data_pred, dlen
 
-def augment_image_affine(img, opt):
-    with tf.name_scope('augment_image_affine', [img, opt]):
-        b0, bs, _ = tf.image.sample_distorted_bounding_box(
-                tf.shape(img),
-                min_object_covered=0.5,
-                area_range=[0.5, 1],
-                use_image_if_no_bounding_boxes=True
-                )
-        # 1: affine transform
-        img1 = tf.image.tf.slice(img, b0, bs)
-        opt1 = tf.slice(opt, b0, bs)
-
-        # 2: rectify flow map scale based on box
-        dx = opt1[...,0] * (cfg.IMG_WIDTH / tf.float32(bbox_size[1]))
-        dy = opt1[...,1] * (cfg.IMG_HEIGHT/ tf.float32(bbox_size[0]))
-
-        img2 = tf.image.resize_images(img1,
-                [cfg.IMG_HEIGHT, cfg.IMD_WIDTH],
-                align_corners=True)
-        opt2 = tf.stack([dx,dy], axis=-1)
-    return (img2, opt2)
-
-#def augment_image_color(img,
-#        scale = 1.0 / 128
-#        ):
-#
-#    # color-space transforms
-#    hsv = tf.image.rgb_to_hsv(image)
-#    h,s,v = tf.unstack(hsv, axis=-1)
-#    dh = tf.truncated_normal(shape=shape, mean=0.0, stddev=0.2*max_delta, dtype=tf.float32)
-#    h = tf.mod(h+(dh + 1.0), 1.0)
-#    ds = tf.random_normal(shape=shape, mean=1.0, stddev=0.1, dtype=tf.float32)
-#    s *= ds
-#    dv = tf.random_normal(shape=shape, mean=0.0, stddev=0.5*max_delta, dtype=tf.float32)
-#    v += dv
-#    image = tf.image.hsv_to_rgb(hsv)
-#
-#
-#    tf.image.random_brightness(...)
-#    tf.image.random_contrast(...)
-#    tf.image.random_hue()
-#    #tf.image.noise(?)
 
 
 def main():
@@ -109,8 +67,9 @@ def main():
     # restore/train flags
     # checkpoint file to restore from
 
-    restore_ckpt = None
-    #restore_ckpt = os.path.expanduser('~/fn/2/ckpt/model.ckpt-20000')
+    #restore_ckpt = None
+    restore_ckpt = os.path.expanduser('~/fn/18/ckpt/model.ckpt-40000')
+
     is_training = True
 
     # directory
@@ -154,7 +113,7 @@ def main():
     with graph.as_default():
         global_step = tf.train.get_or_create_global_step()
         with tf.name_scope('queue'):
-            q_img = tf.placeholder(tf.float32, 
+            q_img = tf.placeholder(tf.uint8, 
                     [None, 2, cfg.IMG_HEIGHT, cfg.IMG_WIDTH, cfg.IMG_DEPTH], name='img')
             q_lab = tf.placeholder(tf.float32,
                     [None, cfg.IMG_HEIGHT, cfg.IMG_WIDTH, 3], name='lab') # flow label, (di,dj,mask)
@@ -164,6 +123,14 @@ def main():
             Q = tf.FIFOQueue(capacity=128, dtypes=q_t, shapes=q_s)
             enqueue_op = Q.enqueue_many(q_i)
             img, lab = Q.dequeue_many(cfg.FN_BATCH_SIZE)
+
+            # opt1 : augmentation
+            # aimg, plab = augment_image_affine(img, lab)
+            # pimg = augment_image_color(aimg) # NOTE: this augmentation ALSO scales image.
+
+            # opt2 : no augmentation
+            pimg = proc_img_tf(img)
+            plab = lab
 
         # initial ramp-up 1e-6 -> 1e-4
         lr0 = tf.train.exponential_decay(cfg.LR_RAMP_0,
@@ -177,7 +144,7 @@ def main():
         learning_rate = lr1
         
         net = FlowNetBB(global_step,
-                learning_rate=learning_rate, img=img, lab=lab,
+                learning_rate=learning_rate, img=pimg, lab=plab,
                 train=is_training, log=print)
 
         tf.summary.scalar('qsize', Q.size(), collections=['train'])
@@ -206,17 +173,18 @@ def main():
                 #flow = data_pred[idx]
 
                 # fchair-mode
-                img1, img2, flow = load_chair(chair_root, 8, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
-                #img1, img2, flow = load_ilsvrc(ilsvrc_root, 8)
-                img = np.stack([img1, img2], axis=1)[...,::-1] # RGB->BGR
+                #img1, img2, flow = load_chair(chair_root, 8, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
+                img1, img2, flow = load_ilsvrc(ilsvrc_root, 8, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
+                img = np.stack([img1, img2], axis=1)# rgbu8
 
                 # process + label
-                pimg = proc_img(img)
+                # pimg = proc_img(img)
+
                 if msk is None:
                     msk = np.ones_like(flow[...,:1])
 
                 lab = np.concatenate([flow, msk], axis=-1) # PRED = [x,y,mask]
-                sess.run(enqueue_op, feed_dict={q_img:pimg, q_lab:lab})
+                sess.run(enqueue_op, feed_dict={q_img:img, q_lab:lab})
 
         # initialization
         sess.run(tf.global_variables_initializer())
