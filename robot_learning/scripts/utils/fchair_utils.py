@@ -48,6 +48,11 @@ def load_ilsvrc1(data_root, index, size=None):
     flow = np.load(os.path.join(data_root, '%05d_flow.npy' % index))
     if size is not None:
         flow = cv2.resize(flow, size)
+        # rectify flow magnitude
+        w1, h1 = size
+        h0, w0 = flow.shape[:2]
+        flow[...,0] *= (w1 / w0)
+        flow[...,1] *= (h1 / h0)
     return (img1, img2, flow)
 
 def load_ilsvrc(data_root, n, size=(320,240)):

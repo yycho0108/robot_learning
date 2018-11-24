@@ -59,6 +59,50 @@ def load_data(
     print(np.shape(data_pred))
     return data_img1, data_img2, data_pred, dlen
 
+def augment_image_affine(img, opt):
+    with tf.name_scope('augment_image_affine', [img, opt]):
+        b0, bs, _ = tf.image.sample_distorted_bounding_box(
+                tf.shape(img),
+                min_object_covered=0.5,
+                area_range=[0.5, 1],
+                use_image_if_no_bounding_boxes=True
+                )
+        # 1: affine transform
+        img1 = tf.image.tf.slice(img, b0, bs)
+        opt1 = tf.slice(opt, b0, bs)
+
+        # 2: rectify flow map scale based on box
+        dx = opt1[...,0] * (cfg.IMG_WIDTH / tf.float32(bbox_size[1]))
+        dy = opt1[...,1] * (cfg.IMG_HEIGHT/ tf.float32(bbox_size[0]))
+
+        img2 = tf.image.resize_images(img1,
+                [cfg.IMG_HEIGHT, cfg.IMD_WIDTH],
+                align_corners=True)
+        opt2 = tf.stack([dx,dy], axis=-1)
+    return (img2, opt2)
+
+#def augment_image_color(img,
+#        scale = 1.0 / 128
+#        ):
+#
+#    # color-space transforms
+#    hsv = tf.image.rgb_to_hsv(image)
+#    h,s,v = tf.unstack(hsv, axis=-1)
+#    dh = tf.truncated_normal(shape=shape, mean=0.0, stddev=0.2*max_delta, dtype=tf.float32)
+#    h = tf.mod(h+(dh + 1.0), 1.0)
+#    ds = tf.random_normal(shape=shape, mean=1.0, stddev=0.1, dtype=tf.float32)
+#    s *= ds
+#    dv = tf.random_normal(shape=shape, mean=0.0, stddev=0.5*max_delta, dtype=tf.float32)
+#    v += dv
+#    image = tf.image.hsv_to_rgb(hsv)
+#
+#
+#    tf.image.random_brightness(...)
+#    tf.image.random_contrast(...)
+#    tf.image.random_hue()
+#    #tf.image.noise(?)
+
+
 def main():
     sig = StopRequest()
 
