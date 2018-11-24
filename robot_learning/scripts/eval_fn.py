@@ -9,7 +9,6 @@ import time
 from utils.fchair_utils import load_chair, load_ilsvrc
 from utils.opt_utils import apply_opt, flow_to_image
 from utils import mkdir, proc_img
-
 from flow_net_bb import FlowNetBB
 
 #root = '/home/jamiecho/Repos/tf_flownet2'
@@ -18,6 +17,8 @@ from flow_net_bb import FlowNetBB
 
 # Visualization
 from matplotlib import pyplot as plt
+
+import config as cfg
 
 class GetOptFlowNet(object):
     def __init__(self):
@@ -30,8 +31,8 @@ class GetOptFlowNet(object):
         #im1_in = tf.image.resize_images(im1_pl, (384,512))
         #im2_in = tf.image.resize_images(im2_pl, (384,512))
 
-        im1_in = im1_pl = tf.placeholder(tf.float32, [None, 240, 320, 3])
-        im2_in = im2_pl = tf.placeholder(tf.float32, [None, 240, 320, 3])
+        im1_in = im1_pl = tf.placeholder(tf.float32, [None, cfg.IMG_HEIGHT, cfg.IMG_WIDTH, cfg.IMG_DEPTH])
+        im2_in = im2_pl = tf.placeholder(tf.float32, [None, cfg.IMG_HEIGHT, cfg.IMG_WIDTH, cfg.IMG_DEPTH])
         net = FlowNetBB(step=None, img=tf.stack([im1_in, im2_in],axis=1),
                 lab=None, train=False, eval=False)
 
@@ -57,9 +58,7 @@ def main():
         net = GetOptFlowNet()
         net._build()
 
-    #ckpt_file = os.path.expanduser('~/fn/69/ckpt/model.ckpt-20000')
-    #ckpt_file = os.path.expanduser('~/fn/1/ckpt/model.ckpt-16100')
-    ckpt_file = os.path.expanduser('~/fn/13/ckpt/model.ckpt-11200')
+    ckpt_file = os.path.expanduser('~/fn/26/ckpt/model.ckpt-60000')
     #gpu_options = tf.GPUOptions(allow_growth=True, per_process_gpu_memory_fraction=0.95)
     #config = tf.ConfigProto(log_device_placement=False, gpu_options=gpu_options)
     config=None
@@ -82,7 +81,7 @@ def main():
                 #        size=(320,240)
                 #        )
                 #imgs = loader.grab_pair(batch_size=1)[...,::-1] # RGB->BGR
-                img1, img2, gt_flow = load_chair(chair_root, n=1)
+                img1, img2, gt_flow = load_chair(chair_root, n=1, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
                 imgs = np.stack([img1,img2], axis=1)
                 p_imgs = proc_img(imgs)
                 flow = net(sess, p_imgs[:,0], p_imgs[:,1])

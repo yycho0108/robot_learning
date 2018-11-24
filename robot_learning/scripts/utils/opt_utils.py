@@ -1,6 +1,7 @@
 import numpy as np
 import cv2
 import os
+import sys
 
 from utils import normalize
 
@@ -145,6 +146,33 @@ def flow_to_image(flow, display=False, thresh=1e7):
     img[idx] = 0
 
     return np.uint8(img)
+
+def show_flow(img1, img2, flow):
+    cache = {'index':0}
+    def show(index):
+        ax0.imshow(unproc(aimg[index,0]))
+        ax1.imshow(unproc(aimg[index,1]))
+        ax2.imshow(flow_to_image(aflo[index]))
+        ax3.imshow(apply_opt(unproc(aimg[index,1]), aflo[index,...,:2]))
+        fig.canvas.draw()
+
+    def press(event):
+        index = cache['index']
+        if event.key in ['x','q','escape']:
+            sys.exit()
+        if event.key in ['right', 'n']:
+            index += 1
+        if event.key in ['left', 'p']:
+            index -= 1
+        index = (index % n_test)
+        cache['index'] = index
+        show(index)
+
+    fig, ((ax0,ax1),(ax2,ax3)) = plt.subplots(2,2)
+    fig.canvas.mpl_connect('close_event', sys.exit)
+    fig.canvas.mpl_connect('key_press_event', press)
+    show(cache['index'])
+    plt.show()
 
 def main():
     root = os.path.expanduser('~/dispset')

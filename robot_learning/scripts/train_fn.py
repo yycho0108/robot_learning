@@ -14,6 +14,7 @@ from data_manager import DataManager
 from utils import anorm, mkdir, proc_img, no_op, proc_img_tf
 from utils.ilsvrc_utils import ILSVRCLoader
 from utils.fchair_utils import load_chair, load_ilsvrc
+from utils.img_utils import augment_image_color, augment_image_affine
 
 import sys
 import signal
@@ -67,10 +68,10 @@ def main():
     # restore/train flags
     # checkpoint file to restore from
 
-    #restore_ckpt = None
-    restore_ckpt = os.path.expanduser('~/fn/18/ckpt/model.ckpt-40000')
-
+    restore_ckpt = None
+    #restore_ckpt = os.path.expanduser('~/fn/18/ckpt/model.ckpt-40000')
     is_training = True
+    aug = True
 
     # directory
     save_root = os.path.expanduser('~/fn')
@@ -125,12 +126,13 @@ def main():
             img, lab = Q.dequeue_many(cfg.FN_BATCH_SIZE)
 
             # opt1 : augmentation
-            # aimg, plab = augment_image_affine(img, lab)
-            # pimg = augment_image_color(aimg) # NOTE: this augmentation ALSO scales image.
-
-            # opt2 : no augmentation
-            pimg = proc_img_tf(img)
-            plab = lab
+            if aug:
+                aimg, plab = augment_image_affine(img, lab, [cfg.IMG_HEIGHT, cfg.IMG_WIDTH, cfg.IMG_DEPTH])
+                pimg = augment_image_color(aimg) # NOTE: this augmentation ALSO scales image.
+            else:
+                # opt2 : no augmentation
+                pimg = proc_img_tf(img)
+                plab = lab
 
         # initial ramp-up 1e-6 -> 1e-4
         lr0 = tf.train.exponential_decay(cfg.LR_RAMP_0,
@@ -172,12 +174,16 @@ def main():
                 #img = np.stack([data_img1[idx], data_img2[idx]], axis=1)[...,::-1] # RGB->BGR
                 #flow = data_pred[idx]
 
-                # fchair-mode
-                #img1, img2, flow = load_chair(chair_root, 8, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
-                img1, img2, flow = load_ilsvrc(ilsvrc_root, 8, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
-                img = np.stack([img1, img2], axis=1)# rgbu8
+                if (np.random.random() < 0.5):
+                    # TODO : configure probability, etc
+                    # fchair-mode
+                    img1, img2, flow = load_chair(chair_root, 8, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
+                else:
+                    # ilsvrc-mode
+                    img1, img2, flow = load_ilsvrc(ilsvrc_root, 8, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
 
-                # process + label
+                img = np.stack([img1, img2], axis=1)# rgb-u8
+                # (cpu) process + label
                 # pimg = proc_img(img)
 
                 if msk is None:
