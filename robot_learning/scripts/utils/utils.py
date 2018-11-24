@@ -17,7 +17,8 @@ def mkdir(x):
     return Path(x).mkdir(parents=True, exist_ok=True)
 
 def proc_img(x):
-    return np.float32(x) / 255. - 0.5
+    #return np.float32(x) / 255. - 0.5
+    return (np.float32(x) - 128.) / 64.
 
 def normalize(x, mn=0.0, mx=1.0):
     xmn = np.min(x)

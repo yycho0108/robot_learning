@@ -3,6 +3,8 @@ from __future__ import print_function
 import config as cfg
 import tensorflow as tf
 from utils import no_op, nest_log
+from utils.tf_utils import axial_reshape, split_reshape
+
 slim = tf.contrib.slim
 
 def normalizer_no_op(x, *a, **k):
@@ -10,7 +12,20 @@ def normalizer_no_op(x, *a, **k):
 
 def upsample(x):
     h, w = x.get_shape().as_list()[1:3]
-    return tf.image.resize_images(x, (2*h,2*w))
+    return tf.image.resize_images(x, (2*h,2*w), align_corners=True)
+
+def upconvolution(x, *a, **k):
+    with tf.name_scope('upconv', [x]):
+        x = upsample(x)
+        x = slim.separable_conv2d(x, *a, **k)
+    return x
+
+def epe(x, y):
+    with tf.name_scope('epe', [x,y]):
+        e = tf.square(y-x)
+        e = tf.reduce_sum(e, axis=-1, keepdims=True)
+        e = tf.sqrt(e)
+    return e
 
 class FlowNetBB(object):
     def __init__(self, step, learning_rate=None,
@@ -47,12 +62,8 @@ class FlowNetBB(object):
         # see vo_net.VONet for reference here
 
         def reshape_feat(f):
-            l = f.get_shape().as_list()
-            s1 = [-1, 2]
-            s1.extend(l[1:])
-            f = tf.reshape(f, s1)
-            f = tf.transpose(f, [0,2,3,4,1])
-            f = tf.reshape(f, [-1,l[1],l[2],l[3]*2])
+            f = split_reshape(f, 0, 2) # Nx2/2, 2, ...
+            f = axial_reshape(f, [0,2,3,(4,1)])
             return f
 
         with tf.name_scope('build_cnn', [x]):
@@ -62,7 +73,7 @@ class FlowNetBB(object):
                 log('s-static',  s_s)
                 log('s-dynamic', s_d)
                 log('cnn-input', x.shape)
-                x = tf.reshape(x, [s_d[0]*s_d[1], s_s[2], s_s[3], s_s[4]])
+                x = axial_reshape(x, [(0,1), 2, 3, 4]) # (merge "time" with batch)
                 log('cnn-format', x.shape)
             with tf.name_scope('cnn'):
                 with slim.arg_scope(self._arg_scope()):
@@ -70,22 +81,31 @@ class FlowNetBB(object):
                             outputs_collections=['cnn-feats']):
 
                         x = slim.conv2d(x, 64, 7, 2, scope='conv', padding='SAME')
-
                         x = slim.stack(x,
                                 slim.separable_conv2d,
-                                [(128,3,1,2),(256,3,1,2),(512,3,1,2)],
-                                scope='sconv_pre',
+                                [(128,3,1,2),(256,3,1,2),(196,1,1,1),(384,3,1,2),(256,1,1,1),(512,3,1,2),(512,1,1,1)],
+                                scope='sconv',
                                 padding='SAME',
                                 )
-                        log('post-conv', x.shape) #NTx30x40
-
-                        x = slim.stack(x,
-                                slim.separable_conv2d,
-                                [(256,3,1,1), (256,3,1,1), (256,3,1,1), (512,3,1,1), (512,3,1,1)],
-                                scope='sconv_post',
-                                padding='VALID'
-                                )
                         log('post-sconv', x.shape) #NTx4x5
+
+                        #x = slim.conv2d(x, 64, 7, 2, scope='conv', padding='SAME')
+
+                        #x = slim.stack(x,
+                        #        slim.separable_conv2d,
+                        #        [(128,3,1,2),(256,3,1,2),(512,3,1,2)],
+                        #        scope='sconv_pre',
+                        #        padding='SAME',
+                        #        )
+                        #log('post-conv', x.shape) #NTx30x40
+
+                        #x = slim.stack(x,
+                        #        slim.separable_conv2d,
+                        #        [(256,3,1,1), (256,3,1,1), (256,3,1,1), (512,3,1,1), (512,3,1,1)],
+                        #        scope='sconv_post',
+                        #        padding='VALID'
+                        #        )
+                        #log('post-sconv', x.shape) #NTx4x5
 
                         #x = slim.stack(x,
                         #        slim.conv2d,
@@ -103,16 +123,23 @@ class FlowNetBB(object):
             #        x = tf.reduce_mean(x, axis=[1,2]) # avg pooling
             #        log('post-cnn', x.shape)
             with tf.name_scope('format_out'):
-                s = x.get_shape().as_list()
+                #s = x.get_shape().as_list()
                 #x = tf.reshape(x, [s_d[0], s[1], s[2], s_s[1]*512]) # Nx1024
                 x = reshape_feat(x)
                 log('cnn-output', x.shape)
         log('-------------')
         feats = slim.utils.convert_collection_to_dict('cnn-feats')
-        print(feats)
-        feats = [feats[s] for s in ['vo/sconv_pre/sconv_pre_2', 'vo/sconv_post/sconv_post_1','vo/sconv_post/sconv_post_4']]
+        for (k,v) in feats.items():
+            print(k,v)
+        #feats = [feats[s] for s in ['vo/sconv_pre/sconv_pre_2', 'vo/sconv_post/sconv_post_1','vo/sconv_post/sconv_post_4']]
+        feats = [feats[s] for s in [
+            'vo/sconv/sconv_1',
+            'vo/sconv/sconv_3',
+            'vo/sconv/sconv_5',
+            ]]
         feats = [reshape_feat(f) for f in feats]
-        print('feats', feats)
+        for t in feats:
+            print(t.name, t.shape)
         return x, feats
 
     def _build_tcnn(self, x, feats, log=no_op):
@@ -124,27 +151,29 @@ class FlowNetBB(object):
                 # objective : (15x20), (30x40), (60x80), (120x160), (240x320)
                 x = slim.separable_conv2d(x, 256, 1, stride=1, padding='SAME') # feat reduction
                 #log('tcnn-rdc', x.shape)
-                x = slim.conv2d_transpose(x, 256, 3, stride=1, padding='VALID')
+                x = slim.conv2d_transpose(x, 256, 3, stride=1, padding='SAME')
                 feats2_rdc = slim.separable_conv2d(feats[2], 128, 1, stride=1, padding='SAME')
                 x = tf.concat([x, feats2_rdc],axis=-1)
                 log('cat-1', x.shape)
-                x = slim.conv2d_transpose(x, 256, 5, stride=1, padding='VALID')
-                x = slim.conv2d_transpose(x, 128, 3, stride=1, padding='VALID')
+                x = slim.conv2d_transpose(x, 256, 5, stride=1, padding='SAME')
+                x = slim.conv2d_transpose(x, 128, 3, stride=1, padding='SAME')
                 x = tf.concat([x, feats[1]],axis=-1)
                 log('cat-2', x.shape)
-                x = slim.conv2d_transpose(x, 128, 3, stride=1, padding='VALID')
+                x = slim.conv2d_transpose(x, 128, 3, stride=1, padding='SAME')
 
                 # resize-conv
+                log('xs-1', x.shape)
                 x = upsample(x)
                 x = slim.separable_conv2d(x, 128, 3, stride=1, padding='SAME')
+                log('xs-2', x.shape)
                 x = tf.concat([x, feats[0]],axis=-1)
                 log('cat-3', x.shape)
                 x = upsample(x)
                 x = slim.separable_conv2d(x, 128, 3, stride=1, padding='SAME')
+                log('xs-3', x.shape)
                 x = upsample(x)
                 x = slim.separable_conv2d(x, 64, 3, stride=1, padding='SAME')
                 x = upsample(x)
-
                 x = slim.conv2d(x, 2, 3, stride=1, padding='SAME',
                         activation_fn=None, normalizer_fn=normalizer_no_op
                         )
@@ -161,17 +190,109 @@ class FlowNetBB(object):
                 log('post-tcnn', x.shape)
         return x
 
+    def _build_tcnn_multi(self, inputs, feats, img, log=no_op):
+        # Nx1024 --> Nx240x320
+        log('- build-tcnn -')
 
-    def _build_multi_err(self, xs, y, log=no_op):
-        log('- build-multi-err -')
+        def to_flow(fx_in, pad='SAME', scope='flow'):
+            return slim.conv2d(fx_in, 2, 3, padding=pad,
+                    activation_fn=None,
+                    normalizer_fn=normalizer_no_op,
+                    scope=scope,
+                    outputs_collections='flow'
+                    )
+
+        with tf.name_scope('build_tcnn', [inputs, feats]):
+            x = inputs
+            with slim.arg_scope(self._arg_scope()):
+                log('tcnn-input', x.shape)
+                # objective : (15x20), (30x40), (60x80), (120x160), (240x320)
+                #x = slim.separable_conv2d(x, 256, 1, stride=1, padding='SAME') # feat reduction
+                #log('tcnn-rdc', x.shape)
+                x = slim.separable_conv2d(x, 1024, 3, stride=1, padding='SAME')
+                #feats2_rdc = slim.separable_conv2d(feats[2], 128, 1, stride=1, padding='SAME')
+                #x = tf.concat([x, feats2_rdc],axis=-1)
+                f0 = to_flow(x, scope='flow_0')
+                log('xs-0', x.shape)
+                print('flow-0', f0.shape)
+
+                #x = slim.conv2d_transpose(x, 128, 3, stride=2, padding='SAME')
+                x   = upconvolution(x, 512, 3, stride=1, padding='SAME')
+                f0u = upconvolution(f0, 2, 3, stride=1, padding='SAME')
+                x = tf.concat([x, feats[2], f0u],axis=-1)
+                f1 = to_flow(x, scope='flow_1')
+                log('xs-1', x.shape)
+                log('flow-1', f1.shape)
+
+                x   = upconvolution(x, 256, 3, stride=1, padding='SAME')
+                f1u = upconvolution(f1, 2, 3, stride=1, padding='SAME')
+                x = tf.concat([x, feats[1], f1u], axis=-1)
+                f2 = to_flow(x, scope='flow_2')
+                log('xs-1', x.shape)
+                log('flow-1', f2.shape)
+
+                x = upconvolution(x, 128, 3, stride=1, padding='SAME')
+                f2u = upconvolution(f2, 2, 3, stride=1, padding='SAME')
+                x = tf.concat([x, feats[0], f2u], axis=-1)
+                f3 = to_flow(x, scope='flow_3')
+                log('xs-2', x.shape)
+                log('flow-2', f3.shape)
+
+                x   = upconvolution(x, 64, 3, stride=1, padding='SAME')
+                f3u = upconvolution(f3, 2, 3, stride=1, padding='SAME')
+                x = tf.concat([x, f3u], axis=-1)
+                f4 = to_flow(x, scope='flow_4')
+                log('xs-3', x.shape)
+                log('flow-3', f4.shape)
+
+                x = upconvolution(x, 32, 3, stride=1, padding='SAME')
+                f4u = upconvolution(f4, 2, 3, stride=1, padding='SAME')
+                img2 = axial_reshape(img, [0,2,3,(4,1)])
+                x = tf.concat([x, f4u, img2], axis=-1)
+                x = to_flow(x, pad='SAME', scope='flow_5')
+                log('xs-4', x.shape)
+                log('flow-4', x.shape)
+
+                #x = slim.conv2d_transpose(x, 128, 3, stride=2, padding='SAME') #14x18
+                #x = tf.concat([x, feats[0]],axis=-1)
+                #log('cat-3', x.shape)
+                #x = slim.conv2d_transpose(x, 64, 3, stride=2, padding='SAME') #15x20
+                #x = slim.conv2d_transpose(x, 64, 3, stride=2, padding='SAME')
+                #x = slim.conv2d_transpose(x, 32, 3, stride=2, padding='SAME')
+                #x = slim.conv2d(x, 2, 1, 1, padding='SAME',
+                #        activation_fn=None, normalizer_fn=None
+                #        )
+                log('post-tcnn', x.shape)
+
+        fs = slim.utils.convert_collection_to_dict('flow').values()
+        return x, fs
+
+    def _build_err_multi(self, x, xs, y, log=no_op):
+        def err_x(f, y):
+            with tf.name_scope('err_x', [f, y]):
+                h, w = f.get_shape().as_list()[1:3]
+                y_rsz = tf.image.resize_images(y, (h,w), align_corners=True)
+                err = epe(f, y_rsz)
+                #err = tf.sqrt(tf.reduce_sum(tf.square(f-y_rsz),
+                #    axis=-1,keepdims=True))
+                err = tf.reduce_mean(err)
+            return err
+        log('- build-err-multi -')
+        with tf.name_scope('build-err-multi', [x,y,xs]):
+            opt, msk = tf.split(y, [2,1], axis=-1)
+            errs = [err_x(f,opt) for f in xs]
+            errs.append(err_x(x,opt))
+            err = tf.reduce_mean(errs)
+            log('err', err.shape)
         log('-------------------')
+        return err
 
     def _build_err(self, x, y, log=no_op):
         log('- build-err -')
         with tf.name_scope('build-err', [x,y]):
             opt, msk = tf.split(y, [2,1], axis=-1)
-
-            err = tf.sqrt(tf.reduce_sum(tf.square(x-opt),axis=-1,keepdims=True))
+            #err = tf.sqrt(tf.reduce_sum(tf.square(x-opt),axis=-1,keepdims=True))
+            err = epe(opt, x)
             err = tf.reduce_mean(err)
 
             #err = tf.losses.absolute_difference(labels=opt, predictions=x)
@@ -216,10 +337,12 @@ class FlowNetBB(object):
 
         with tf.variable_scope('vo', reuse=self.reuse_):
             cnn, feats = self._build_cnn(img, log=log)
-            tcnn = self._build_tcnn(cnn, feats, log=log)
+            #tcnn = self._build_tcnn(cnn, feats, log=log)
+            tcnn, prds = self._build_tcnn_multi(cnn, feats, img, log=log)
 
         if self.eval_:
-            err_c = self._build_err(tcnn, lab, log=log)
+            #err_c = self._build_err(tcnn, lab, log=log)
+            err_c = self._build_err_multi(tcnn, prds, lab, log=log)
 
         if self.train_:
             reg_c = tf.add_n(tf.losses.get_regularization_losses())

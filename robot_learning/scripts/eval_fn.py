@@ -5,15 +5,16 @@ import tensorflow as tf
 import os
 import sys
 import time
-from utils.ilsvrc_utils import ILSVRCLoader
-from utils.opt_utils import apply_opt
+#from utils.ilsvrc_utils import ILSVRCLoader
+from utils.fchair_utils import load_chair, load_ilsvrc
+from utils.opt_utils import apply_opt, flow_to_image
 from utils import mkdir, proc_img
 
 from flow_net_bb import FlowNetBB
 
-root = '/home/jamiecho/Repos/tf_flownet2'
-sys.path.append(root)
-from FlowNet2_src import flow_to_image
+#root = '/home/jamiecho/Repos/tf_flownet2'
+#sys.path.append(root)
+#from FlowNet2_src import flow_to_image
 
 # Visualization
 from matplotlib import pyplot as plt
@@ -56,11 +57,15 @@ def main():
         net = GetOptFlowNet()
         net._build()
 
-    ckpt_file = os.path.expanduser('~/fn/69/ckpt/model.ckpt-20000')
+    #ckpt_file = os.path.expanduser('~/fn/69/ckpt/model.ckpt-20000')
+    #ckpt_file = os.path.expanduser('~/fn/1/ckpt/model.ckpt-16100')
+    ckpt_file = os.path.expanduser('~/fn/13/ckpt/model.ckpt-11200')
     #gpu_options = tf.GPUOptions(allow_growth=True, per_process_gpu_memory_fraction=0.95)
     #config = tf.ConfigProto(log_device_placement=False, gpu_options=gpu_options)
     config=None
 
+    ilsvrc_root = os.path.expanduser('~/dispset/data')
+    chair_root = os.path.expanduser('~/Downloads/FlyingChairs/data')
 
     with tf.Session(graph=graph, config=config) as sess:
         #saver.restore(sess, ckpt_file)
@@ -72,23 +77,25 @@ def main():
             if event.key in ['q', 'escape']:
                 sys.exit()
             else:
-                data_i = np.random.randint(1,31)
-                loader = ILSVRCLoader(os.getenv('ILSVRC_ROOT'), data_type=('train_%d'%data_i), T=8,
-                        size=(320,240)
-                        )
-                imgs = loader.grab_pair(batch_size=1)[...,::-1] # RGB->BGR
+                #data_i = np.random.randint(1,31)
+                #loader = ILSVRCLoader(os.getenv('ILSVRC_ROOT'), data_type=('train_%d'%data_i), T=8,
+                #        size=(320,240)
+                #        )
+                #imgs = loader.grab_pair(batch_size=1)[...,::-1] # RGB->BGR
+                img1, img2, gt_flow = load_chair(chair_root, n=1)
+                imgs = np.stack([img1,img2], axis=1)
                 p_imgs = proc_img(imgs)
-                pred_flow_val = net(sess, p_imgs[:,0], p_imgs[:,1])
+                flow = net(sess, p_imgs[:,0], p_imgs[:,1])
 
                 im1 = imgs[:,0]
                 im2 = imgs[:,1]
 
-                flow_im = flow_to_image(pred_flow_val[0])
+                flow_im = flow_to_image(flow[0])
                 overlay = cv2.addWeighted(im1[0], 0.5, np.roll(im2[0],1,axis=-1), 0.5, 0.0)
-                ax0.imshow(overlay)
-                ax1.imshow(flow_im)
-                ax2.imshow(normalize(pred_flow_val[0,...,0]), cmap='gray') # u-channel
-                ax3.imshow(normalize(pred_flow_val[0,...,1]), cmap='gray') # v-channel
+                ax0.imshow(im1[0])
+                ax1.imshow(im2[0])
+                ax2.imshow(flow_im) # u-channel
+                ax3.imshow(apply_opt(im2[0], flow[0])) # v-channel
                 fig.canvas.draw()
 
         fig, ((ax0, ax1), (ax2, ax3)) = plt.subplots(2,2)

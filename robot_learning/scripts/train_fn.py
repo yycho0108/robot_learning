@@ -13,7 +13,7 @@ from flow_net_bb import FlowNetBB
 from data_manager import DataManager
 from utils import anorm, mkdir, proc_img, no_op
 from utils.ilsvrc_utils import ILSVRCLoader
-from utils.fchair_utils import load_chair
+from utils.fchair_utils import load_chair, load_ilsvrc
 
 import sys
 import signal
@@ -64,11 +64,10 @@ def main():
 
     # restore/train flags
     # checkpoint file to restore from
-    # restore_ckpt = '/tmp/vo/20/ckpt/model.ckpt-4'
+
     restore_ckpt = None
-    #restore_ckpt = os.path.expanduser('~/fn/68/ckpt/model.ckpt-10000')
+    #restore_ckpt = os.path.expanduser('~/fn/2/ckpt/model.ckpt-20000')
     is_training = True
-    data_type = 'fchair'
 
     # directory
     save_root = os.path.expanduser('~/fn')
@@ -95,15 +94,16 @@ def main():
     ckpt_file = os.path.join(ckpt_root, 'model.ckpt')
 
     #loaders = [ILSVRCLoader(os.getenv('ILSVRC_ROOT'), data_type=('train_%d' % i)) for i in range(1,31)]
-    sample_ratio = 0.5
-    data_root = os.path.expanduser('~/dispset/')
+    #data_img1, data_img2, data_pred, dlen = load_data(
+    #        data_root, sample_ratio=sample_ratio)
+    #sample_ratio = 0.5
+
+    ilsvrc_root = os.path.expanduser('~/dispset/data')
     chair_root = os.path.expanduser('~/Downloads/FlyingChairs/data')
 
     #sel = np.random.choice(np.arange(1,31), size=10, replace=False)
     #print('selected : {}'.format(sel))
 
-    data_img1, data_img2, data_pred, dlen = load_data(
-            data_root, sample_ratio=sample_ratio)
     #train_cnt = 0
 
     graph = tf.get_default_graph()
@@ -127,10 +127,10 @@ def main():
         
         # standard decay 1e-4 -> 1e-3
         lr1 = tf.train.exponential_decay(cfg.FN_LEARNING_RATE,
-                global_step, cfg.FN_STEPS_PER_DECAY, cfg.FN_DECAY_FACTOR, staircase=True)
+                global_step, cfg.FN_STEPS_PER_DECAY, cfg.FN_DECAY_FACTOR, staircase=False)
 
-        learning_rate = tf.where(global_step < cfg.FN_RAMP_STEPS, lr0, lr1) # employ slow initial learning rate
-        #learning_rate = lr1
+        #learning_rate = tf.where(global_step < cfg.FN_RAMP_STEPS, lr0, lr1) # employ slow initial learning rate
+        learning_rate = lr1
         
         net = FlowNetBB(global_step,
                 learning_rate=learning_rate, img=img, lab=lab,
@@ -162,7 +162,8 @@ def main():
                 #flow = data_pred[idx]
 
                 # fchair-mode
-                img1, img2, flow = load_chair(chair_root, 8)
+                img1, img2, flow = load_chair(chair_root, 8, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
+                #img1, img2, flow = load_ilsvrc(ilsvrc_root, 8)
                 img = np.stack([img1, img2], axis=1)[...,::-1] # RGB->BGR
 
                 # process + label
