@@ -58,7 +58,7 @@ def main():
         net = GetOptFlowNet()
         net._build()
 
-    ckpt_file = os.path.expanduser('~/fn/26/ckpt/model.ckpt-60000')
+    ckpt_file = os.path.expanduser('~/fn/32/ckpt/model.ckpt-80000')
     #gpu_options = tf.GPUOptions(allow_growth=True, per_process_gpu_memory_fraction=0.95)
     #config = tf.ConfigProto(log_device_placement=False, gpu_options=gpu_options)
     config=None
@@ -90,11 +90,13 @@ def main():
                 im2 = imgs[:,1]
 
                 flow_im = flow_to_image(flow[0])
+                gt_flow_im = flow_to_image(gt_flow[0])
                 overlay = cv2.addWeighted(im1[0], 0.5, np.roll(im2[0],1,axis=-1), 0.5, 0.0)
                 ax0.imshow(im1[0])
                 ax1.imshow(im2[0])
                 ax2.imshow(flow_im) # u-channel
-                ax3.imshow(apply_opt(im2[0], flow[0])) # v-channel
+                #ax3.imshow(apply_opt(im2[0], flow[0])) # v-channel
+                ax3.imshow(gt_flow_im) # v-channel
                 fig.canvas.draw()
 
         fig, ((ax0, ax1), (ax2, ax3)) = plt.subplots(2,2)

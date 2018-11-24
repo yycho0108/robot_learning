@@ -17,8 +17,8 @@ def augment_image_affine_1(img, opt, size=None):
 
         b0, bs, _ = tf.image.sample_distorted_bounding_box(
                 size, box,
-                min_object_covered=0.1,
-                area_range=[0.1, 1],
+                min_object_covered=0.5,
+                area_range=[0.5, 1],
                 use_image_if_no_bounding_boxes=True
                 )
 
