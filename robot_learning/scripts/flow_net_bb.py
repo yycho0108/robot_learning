@@ -1,8 +1,9 @@
 from __future__ import print_function
 
 import config as cfg
+import numpy as np
 import tensorflow as tf
-from utils import no_op, nest_log
+from utils import no_op, nest_log, normalize
 from utils.tf_utils import axial_reshape, split_reshape, tf_shape, net_size
 from tensorflow.contrib.framework import nest
 import sys
@@ -233,7 +234,7 @@ class FlowNetBB(object):
         log('--------------')
         return x, fs
 
-    def _build_err(self, x, xs, y, log=no_op):
+    def _build_err(self, xs, y, log=no_op):
         """ build error part """
         def err_x(f, y):
             with tf.name_scope('err_x', [f, y]):
@@ -255,13 +256,14 @@ class FlowNetBB(object):
 
         log('- build-err -')
         errs = {}
-        with tf.name_scope('build-err', [x,y,xs]):
-            for f in nest.flatten([x, xs]):
+        with tf.name_scope('build-err', [xs,y]):
+            for f in xs:
                 h, w = f.get_shape().as_list()[1:3]
                 key = 'err_{}x{}'.format(w,h)
                 errs[key] = err_x(f, y)
             ks = ['err_8x6', 'err_16x12','err_32x24', 'err_64x48', 'err_128x96', 'err_256x192']
-            ws = [2**-e for e in range(1,7)]
+            ws = np.float32([2**-e for e in range(1,7)])
+            ws /= ws.sum()
             #err = tf.reduce_mean(errs.values())
             err = tf.losses.compute_weighted_loss(
                     losses=[errs[k] for k in ks],
@@ -308,7 +310,7 @@ class FlowNetBB(object):
             tcnn, prds = self._build_tcnn(xs, img, log=log)
 
         if self.eval_:
-            err_c, errs = self._build_err(tcnn, prds, lab, log=log)
+            err_c, errs = self._build_err(prds, lab, log=log)
 
         if self.train_:
             reg_c = tf.add_n(tf.losses.get_regularization_losses())
