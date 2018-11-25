@@ -252,13 +252,12 @@ class ILSVRCLoader(VIDLoaderBase):
                     iou = box_iou(box0, box1)
                     if iou > 0.3: # "Good"
                         break
-            elif box_filter is 'area':
-                for dT in range(max_dT, 0, -1):
-                    box1 = data['boxs'][i+dT]
-                    area = (box[2] - box[0]) * (box[3] - box[1])
-                    if area > 
-                    if iou > 0.5: # "Good"
-                        break
+            #elif box_filter is 'area':
+            #    for dT in range(max_dT, 0, -1):
+            #        box1 = data['boxs'][i+dT]
+            #        area = (box[2] - box[0]) * (box[3] - box[1])
+            #        if iou > 0.5: # "Good"
+            #            break
             else:
                 dT = max_dT
             # if no "good" dT was found, dT will default to 1 (which is probably good enough)

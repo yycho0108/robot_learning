@@ -56,8 +56,7 @@ def load_ilsvrc1(data_root, index, size=None):
     return (img1, img2, flow)
 
 def load_ilsvrc(data_root, n, size=None):
-    #idx = np.random.choice(22732, size=n, replace=False)
-    idx = np.random.choice(8543, size=n, replace=False)
+    idx = np.random.choice(22732, size=n, replace=False)
     data = zip(*[load_ilsvrc1(data_root, i, size=size) for i in idx])
     img1, img2, flow = [np.stack(e, axis=0) for e in data]
     return (img1, img2, flow)

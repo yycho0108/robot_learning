@@ -64,7 +64,7 @@ def augment_image_affine_1(img, opt, size=None):
                 tf.math.greater(dst, l_lim),
                 tf.math.less(dst, u_lim)),tf.float32)
         msk = tf.reduce_min(msk, axis=-1, keepdims=True) # ~= logical_and
-        msk = tf.logical_and(msk, opt1[...,2]
+        #msk = tf.logical_and(msk, opt1[...,2]
         opt2 = tf.concat([opt2, msk], axis=-1)
 
     return (img2, opt2)
