@@ -4,6 +4,7 @@ import config as cfg
 import tensorflow as tf
 from utils import no_op, nest_log
 from utils.tf_utils import axial_reshape, split_reshape
+from tensorflow.contrib.framework import nest
 
 slim = tf.contrib.slim
 
@@ -270,22 +271,34 @@ class FlowNetBB(object):
     def _build_err_multi(self, x, xs, y, log=no_op):
         def err_x(f, y):
             with tf.name_scope('err_x', [f, y]):
+                h0, w0 = y.get_shape().as_list()[1:3]
                 h, w = f.get_shape().as_list()[1:3]
                 y_rsz = tf.image.resize_images(y, (h,w), align_corners=True)
+
+                # scale flow appropriately
+                rsz_s = [tf.cast(w,tf.float32)/w0, tf.cast(h, tf.float32)/h0]
+                rsz_s = tf.reshape(rsz_s, [1,1,1,2])
+                y_rsz = y_rsz * rsz_s
+
                 err = epe(f, y_rsz)
                 #err = tf.sqrt(tf.reduce_sum(tf.square(f-y_rsz),
                 #    axis=-1,keepdims=True))
                 err = tf.reduce_mean(err)
             return err
         log('- build-err-multi -')
+
+        errs = {}
         with tf.name_scope('build-err-multi', [x,y,xs]):
             opt, msk = tf.split(y, [2,1], axis=-1)
-            errs = [err_x(f,opt) for f in xs]
-            errs.append(err_x(x,opt))
-            err = tf.reduce_mean(errs)
+
+            for f in nest.flatten([x, xs]):
+                h, w = f.get_shape().as_list()[1:3]
+                key = 'err_{}x{}'.format(w,h)
+                errs[key] = err_x(f, opt)
+            err = tf.reduce_mean(errs.values())
             log('err', err.shape)
         log('-------------------')
-        return err
+        return err, errs
 
     def _build_err(self, x, y, log=no_op):
         log('- build-err -')
@@ -324,6 +337,8 @@ class FlowNetBB(object):
     def _build_log(self, log=no_op, **tensors):
         log('- build-log -')
         tf.summary.scalar('err', tensors['err'], collections=self.col_)
+        for (k,v) in tensors['errs'].items():
+            tf.summary.scalar(k, v, collections=self.col_)
         log('-------------')
         return None
 
@@ -342,7 +357,7 @@ class FlowNetBB(object):
 
         if self.eval_:
             #err_c = self._build_err(tcnn, lab, log=log)
-            err_c = self._build_err_multi(tcnn, prds, lab, log=log)
+            err_c, errs = self._build_err_multi(tcnn, prds, lab, log=log)
 
         if self.train_:
             reg_c = tf.add_n(tf.losses.get_regularization_losses())
@@ -353,7 +368,7 @@ class FlowNetBB(object):
             self.opt_ = opt
 
         if self.eval_:
-            _   = self._build_log(log=log, err=err_c)
+            _   = self._build_log(log=log, err=err_c, errs=errs)
 
         self.img_ = img
         self.pred_ = tcnn

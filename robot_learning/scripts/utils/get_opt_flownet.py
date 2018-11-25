@@ -72,8 +72,9 @@ def main():
     #config = tf.ConfigProto(log_device_placement=False, gpu_options=gpu_options)
     config=None
 
+    source_size = (512,384)
     target_size = (320,240)
-    target_dir  = os.path.expanduser('~/dispset/data')
+    target_dir  = os.path.expanduser('~/dispset/data2')
 
     with tf.Session(graph=graph, config=config) as sess:
         #saver.restore(sess, ckpt_file)
@@ -83,7 +84,7 @@ def main():
         for data_i in range(1,32):
             #out_dir = os.path.join(target_dir, str(data_i))
             out_dir = target_dir # flattened!
-            #mkdir(out_dir)
+            mkdir(out_dir)
 
             data_type = ('train_%d' % data_i) 
             loader = ILSVRCLoader(os.getenv('ILSVRC_ROOT'), data_type=('train_%d'%data_i), T=8,
@@ -91,7 +92,7 @@ def main():
                     )
 
             print('data length-0 : {}'.format(len(loader.keys)))
-            imgs = loader.grab_pair(batch_size=-1, per_seq=4)
+            imgs = loader.grab_pair(batch_size=32, per_seq=4)
             print('data length-1 : {}'.format(len(imgs)))
             split_n = np.round(len(imgs)/8.).astype(np.int32) # end up with batch_size of about 8
             print('split into {} sections'.format(split_n))
@@ -105,10 +106,16 @@ def main():
                 im1f_rgb = np.float32(im1[...,::-1]) / 255. # f32-rgb
                 im2f_rgb = np.float32(im2[...,::-1]) / 255.
                 flow_val = net(sess, im1f_rgb, im2f_rgb)
+
+                # important: rectify flow scale
+                flow_s   = [float(target_size[0]) / im1f_rgb.shape[2], float(target_size[1]) / im1f_rgb.shape[1]]
+                flow_s   = np.reshape(flow_s, [1,1,1,2])
+                flow_val *= flow_s
                 
                 img1_rsz = [cv2.resize(e, target_size) for e in im1]
                 img2_rsz = [cv2.resize(e, target_size) for e in im2]
                 flow_rsz = [cv2.resize(e, target_size) for e in flow_val]
+
 
                 #np.save(os.path.join(out_dir, '%05d_img1.npy' % cnt), img1_rsz)
                 #np.save(os.path.join(out_dir, '%05d_img2.npy' % cnt), img2_rsz)

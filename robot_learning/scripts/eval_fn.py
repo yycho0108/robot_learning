@@ -58,7 +58,7 @@ def main():
         net = GetOptFlowNet()
         net._build()
 
-    ckpt_file = os.path.expanduser('~/fn/32/ckpt/model.ckpt-80000')
+    ckpt_file = os.path.expanduser('~/fn/34/ckpt/model.ckpt-59000')
     #gpu_options = tf.GPUOptions(allow_growth=True, per_process_gpu_memory_fraction=0.95)
     #config = tf.ConfigProto(log_device_placement=False, gpu_options=gpu_options)
     config=None
@@ -81,7 +81,8 @@ def main():
                 #        size=(320,240)
                 #        )
                 #imgs = loader.grab_pair(batch_size=1)[...,::-1] # RGB->BGR
-                img1, img2, gt_flow = load_chair(chair_root, n=1, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
+                #img1, img2, gt_flow = load_chair(chair_root, n=1, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
+                img1, img2, gt_flow = load_ilsvrc(ilsvrc_root, n=1, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
                 imgs = np.stack([img1,img2], axis=1)
                 p_imgs = proc_img(imgs)
                 flow = net(sess, p_imgs[:,0], p_imgs[:,1])

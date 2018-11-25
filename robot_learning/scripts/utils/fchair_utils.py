@@ -32,7 +32,7 @@ def load_chair1(data_root, index, size=None):
         img2  = cv2.resize(img2, size) # 320x240 u8
     return (img1, img2, flow)
 
-def load_chair(data_root, n, size=(320,240)):
+def load_chair(data_root, n, size=None):
     idx = 1 + np.random.choice(22872, size=n, replace=False)
     data = zip(*[load_chair1(data_root, i, size=size) for i in idx])
     img1, img2, flow = [np.stack(e, axis=0) for e in data]
@@ -55,25 +55,30 @@ def load_ilsvrc1(data_root, index, size=None):
         flow[...,1] *= (h1 / h0)
     return (img1, img2, flow)
 
-def load_ilsvrc(data_root, n, size=(320,240)):
-    idx = np.random.choice(22732, size=n, replace=False)
+def load_ilsvrc(data_root, n, size=None):
+    #idx = np.random.choice(22732, size=n, replace=False)
+    idx = np.random.choice(95, size=n, replace=False)
     data = zip(*[load_ilsvrc1(data_root, i, size=size) for i in idx])
     img1, img2, flow = [np.stack(e, axis=0) for e in data]
     return (img1, img2, flow)
 
 def main():
-    n_test = 256
-    data_root = os.path.expanduser('~/Downloads/FlyingChairs/data')
-    img1, img2, flow = load_chair(data_root, n_test)
+    n_test = 32
+    #data_root = os.path.expanduser('~/Downloads/FlyingChairs/data')
+    #img1, img2, flow = load_chair(data_root, n_test)
+
     #data_root = os.path.expanduser('~/dispset/data/')
     #img1, img2, flow = load_ilsvrc(data_root, n_test)
+
+    data_root = os.path.expanduser('~/dispset/data2/')
+    img1, img2, flow = load_ilsvrc(data_root, n_test)
 
     #print img1.std(), img1.mean()
     #pimg = proc_img(img1)
     #print pimg.std(), pimg.mean()
     #print img2.std()
-    print flow.std()
 
+    print flow.std()
     print flow.shape
     print flow.dtype, flow.max(), flow.min()
     
@@ -83,7 +88,21 @@ def main():
         ax0.imshow(img1[index])
         ax1.imshow(img2[index])
         ax2.imshow(flow_to_image(flow[index]))
-        ax3.imshow(apply_opt(img2[index], flow[index]))
+
+        img1_re = apply_opt(img2[index], flow[index], inv=True)
+        ax3.imshow(img1_re)
+
+        d1 = np.clip(img2[index].astype(np.int32) - img1[index], 0, 255).astype(np.uint8)
+        d1 = np.mean(np.abs(d1), axis=-1).astype(np.uint8)
+        print(d1.sum())
+
+        d2 = np.clip(img1_re.astype(np.int32) - img1[index].astype(np.int32), 0, 255).astype(np.uint8)
+        d2 = np.mean(np.abs(d2), axis=-1).astype(np.uint8)
+        print(d2.sum())
+
+        ax4.imshow(d1)
+        ax5.imshow(d2)
+
         fig.canvas.draw()
 
     def press(event):
@@ -98,7 +117,7 @@ def main():
         cache['index'] = index
         show(index)
 
-    fig, ((ax0,ax1),(ax2,ax3)) = plt.subplots(2,2)
+    fig, ((ax0,ax1),(ax2,ax3), (ax4,ax5)) = plt.subplots(3,2)
     fig.canvas.mpl_connect('key_press_event', press)
     show(cache['index'])
     plt.show()

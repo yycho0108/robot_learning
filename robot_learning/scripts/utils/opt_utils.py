@@ -5,14 +5,40 @@ import sys
 
 from utils import normalize
 
-def apply_opt(img, opt, scale=1.0):
+from sklearn.neighbors import NearestNeighbors
+
+def apply_opt(img, opt, scale=1.0, inv=True):
     n,m = np.shape(img)[:2]
     g = np.mgrid[0:n,0:m]
     g = np.stack([g[1], g[0]], axis=-1) # u-v
-    mp = (g.astype(np.float32)+opt*scale)
-    return cv2.remap(img, mp, None,
-            interpolation=cv2.INTER_LINEAR
-            )
+
+    mp = (g+opt*scale).astype(np.float32) # mp(x_a,y_b) -> (x_b,y_b)
+
+    print(mp.dtype, mp.shape)
+
+    if inv: # img2 -> img1
+        # cv2.remap ... dst(x,y) = src(m(x), m(y))
+        return cv2.remap(img, mp, None,
+                interpolation=cv2.INTER_LINEAR
+                )
+    else:
+        #opt1 : simple
+        #res = np.full_like(img, 255)
+        #mp_j  = np.clip(mp[...,0], 0, m-1).astype(np.int32)
+        #mp_i  = np.clip(mp[...,1], 0, n-1).astype(np.int32)
+        #g_j  = np.clip(g[...,0], 0, m-1).astype(np.int32)
+        #g_i  = np.clip(g[...,1], 0, n-1).astype(np.int32)
+        #res[mp_i, mp_j] = img[g_i, g_j]
+        #return res
+        mp_f = mp.reshape(-1,2) # flatten
+        g_f  = g.reshape(-1,2)
+        neigh = NearestNeighbors(4)
+        neigh.fit(mp_f) # samples from x_b
+        idx = neigh.kneighbors(g_f, return_distance=False) # x_b -> x_a
+        mp_i = np.mean(mp_f[idx], axis=1).reshape(n,m,2)
+        return cv2.remap(img, mp_i, None,
+                interpolation=cv2.INTER_NEAREST
+                )
 
 def make_color_wheel():
     """
@@ -192,8 +218,9 @@ def main():
         pv = normalize(pred[i,...,1])
         cv2.imshow('i1',img1[i,...,::-1])
         cv2.imshow('i2',img2[i,...,::-1])
-        img2_re = apply_opt(img2[i], pred[i])
-        cv2.imshow('re',img2_re[...,::-1])
+        #img2_re = apply_opt(img2[i], pred[i])
+        img1_re = apply_opt(img1[i], pred[i], inv=False)
+        cv2.imshow('re',img1_re[...,::-1])
         cv2.imshow('pu',pu)
         cv2.imshow('pv',pv)
         if cv2.waitKey(0) == 27:

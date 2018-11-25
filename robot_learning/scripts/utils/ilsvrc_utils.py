@@ -98,6 +98,20 @@ def parmap(X, nprocs=multiprocessing.cpu_count()):
         p.start()
     [p.join() for p in proc]
 
+def box_iou(bbox_1, bbox_2):
+    lr = np.minimum(bbox_1[3], bbox_2[3]) - np.maximum(bbox_1[1], bbox_2[1])
+    tb = np.minimum(bbox_1[2], bbox_2[2]) - np.maximum(bbox_1[0], bbox_2[0])
+    lr = np.maximum(lr, lr * 0)
+    tb = np.maximum(tb, tb * 0)
+    ixn = np.multiply(tb, lr)
+    uxn = np.subtract(
+      np.multiply((bbox_1[3] - bbox_1[1]), (bbox_1[2] - bbox_1[0])) +
+      np.multiply((bbox_2[3] - bbox_2[1]), (bbox_2[2] - bbox_2[0])),
+      ixn
+    )
+    iou = ixn / uxn
+    return iou
+
 class ILSVRCLoader(VIDLoaderBase):
     def __init__(self, root_dir, data_type, T=128, size=None):
         self.size_ = (size if size is not None else (320,240))
@@ -148,8 +162,8 @@ class ILSVRCLoader(VIDLoaderBase):
             seq_dir = '_'.join(seq.split('_')[:-1])
             n = len(data['boxs'])
 
-            dT = np.random.randint(min_T, min(n-1, max_T))
-            i = np.random.randint(n-dT)
+            max_dT = np.random.randint(min_T, min(n-1, max_T))
+            i = np.random.randint(n-max_dT)
 
             img0 = cv2.imread(
                     os.path.join(
@@ -190,7 +204,7 @@ class ILSVRCLoader(VIDLoaderBase):
 
         return [np.stack(a, axis=0) for a in [imgs, lbls]]
 
-    def grab_pair(self, batch_size=-1, min_T=1, max_T=4,
+    def grab_pair(self, batch_size=-1, min_T=2, max_T=8,
             per_seq=1
             ):
         imgs = []
@@ -216,11 +230,11 @@ class ILSVRCLoader(VIDLoaderBase):
                 continue
 
             try:
-                dT = np.random.randint(min_T, min(n, max_T))
-                i = np.random.randint(n-dT)
+                max_dT = np.random.randint(min_T, min(n, max_T))
+                i = np.random.randint(n-max_dT)
             except Exception as e:
                 print(e, 'n', n)
-                dT = 1
+                max_dT = 1
                 i  = 0
 
             img0 = cv2.imread(
@@ -229,8 +243,15 @@ class ILSVRCLoader(VIDLoaderBase):
                         seq_dir,
                         data['imgs'][i]))
             img0 = cv2.resize(img0, self.size_)
-
             box0 = data['boxs'][i]
+
+            # "good" sampling
+            for dT in range(max_dT, 0, -1):
+                box1 = data['boxs'][i+dT]
+                iou = box_iou(box0, box1)
+                if iou > 0.5: # "Good"
+                    break
+            # if no "good" dT was found, dT will default to 1 (which is probably good enough)
 
             img1 = cv2.imread(
                     os.path.join(
