@@ -1,7 +1,7 @@
 import os
 import sys
 import tensorflow as tf
-from tf_utils import tf_shape
+from tf_utils import tf_shape, axial_reshape
 from functools import partial
 import cv2
 import numpy as np
@@ -37,16 +37,36 @@ def augment_image_affine_1(img, opt, size=None):
         # 2: rectify flow map scale based on box
         dx  = opt1[...,0] * (size[1] / tf.cast(bs[1], tf.float32))
         dy  = opt1[...,1] * (size[0] / tf.cast(bs[0], tf.float32))
-        msk = opt1[...,2]
+
 
         img2 = tf.image.resize_images(img1,
                 [size[0], size[1]],
                 align_corners=True)
-        opt2 = tf.stack([dx,dy,msk], axis=-1)
+        opt2 = tf.stack([dx,dy], axis=-1)
         opt2 = tf.image.resize_images(opt2,
                 [size[0], size[1]],
                 align_corners=True)
         img2 = tf.cast(img2, tf.uint8)
+
+        #msk = opt1[...,2]
+        # TODO : currently ignores input mask (which doesn't exit)
+        # for robustness, consider using input mask.
+        irange = tf.range( size[0] )
+        jrange = tf.range( size[1] )
+        gy, gx = tf.meshgrid(irange, jrange, indexing='ij')
+        g      = tf.stack([gx,gy], axis=-1)
+
+        dst = (tf.cast(g, tf.float32) + opt2) # == where the pixel would end up, in x-y orientation
+
+        l_lim = tf.cast(tf.reshape([0,0], (1,1,2)), tf.float32)
+        u_lim = tf.cast(tf.reshape([size[1], size[0]], (1,1,2)), tf.float32)
+        msk = tf.cast(tf.logical_and(
+                tf.math.greater(dst, l_lim),
+                tf.math.less(dst, u_lim)),tf.float32)
+        msk = tf.reduce_min(msk, axis=-1, keepdims=True) # ~= logical_and
+        msk = tf.logical_and(msk, opt1[...,2]
+        opt2 = tf.concat([opt2, msk], axis=-1)
+
     return (img2, opt2)
 
 def augment_image_affine(img, opt, size):
@@ -119,6 +139,7 @@ def main():
 
     with tf.Session() as sess:
         aimg, aflo = sess.run([aimg_t, aflo_t], {img1_t:img1, img2_t:img2, flow_t:flow})
+        print('aflo', aflo.shape)
 
     cache = {'index':0}
 
@@ -127,6 +148,7 @@ def main():
         ax1.imshow(unproc(aimg[index,1]))
         ax2.imshow(flow_to_image(aflo[index]))
         ax3.imshow(apply_opt(unproc(aimg[index,1]), aflo[index,...,:2]))
+        ax4.imshow(aflo[index, ..., 2], cmap='gray')
         fig.canvas.draw()
 
     def press(event):
@@ -141,7 +163,7 @@ def main():
         cache['index'] = index
         show(index)
 
-    fig, ((ax0,ax1),(ax2,ax3)) = plt.subplots(2,2)
+    fig, ((ax0,ax1),(ax2,ax3),(ax4,ax5)) = plt.subplots(3,2)
     fig.canvas.mpl_connect('key_press_event', press)
     show(cache['index'])
     plt.show()

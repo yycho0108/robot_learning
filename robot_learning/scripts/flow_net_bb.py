@@ -274,27 +274,26 @@ class FlowNetBB(object):
                 h0, w0 = y.get_shape().as_list()[1:3]
                 h, w = f.get_shape().as_list()[1:3]
                 y_rsz = tf.image.resize_images(y, (h,w), align_corners=True)
+                flo, msk = tf.split(y_rsz, [2,1], axis=-1)
 
                 # scale flow appropriately
                 rsz_s = [tf.cast(w,tf.float32)/w0, tf.cast(h, tf.float32)/h0]
                 rsz_s = tf.reshape(rsz_s, [1,1,1,2])
-                y_rsz = y_rsz * rsz_s
+                flo_s = flo * rsz_s # scaled flow
 
-                err = epe(f, y_rsz)
+                err = epe(f, flo_s)
                 #err = tf.sqrt(tf.reduce_sum(tf.square(f-y_rsz),
                 #    axis=-1,keepdims=True))
-                err = tf.reduce_mean(err)
+                err = tf.reduce_sum(err * msk) / tf.reduce_sum(msk)
             return err
         log('- build-err-multi -')
 
         errs = {}
         with tf.name_scope('build-err-multi', [x,y,xs]):
-            opt, msk = tf.split(y, [2,1], axis=-1)
-
             for f in nest.flatten([x, xs]):
                 h, w = f.get_shape().as_list()[1:3]
                 key = 'err_{}x{}'.format(w,h)
-                errs[key] = err_x(f, opt)
+                errs[key] = err_x(f, y)
             err = tf.reduce_mean(errs.values())
             log('err', err.shape)
         log('-------------------')

@@ -74,14 +74,21 @@ def main():
 
     source_size = (512,384)
     target_size = (320,240)
-    target_dir  = os.path.expanduser('~/dispset/data2')
+
+    # flow scale rectification
+    flow_s_w = float(target_size[0]) / source_size[0]
+    flow_s_h = float(target_size[1]) / source_size[1]
+    flow_s   = np.reshape([flow_s_w, flow_s_h], [1,1,1,2])
+
+    target_dir  = os.path.expanduser('~/dispset/data')
 
     with tf.Session(graph=graph, config=config) as sess:
         #saver.restore(sess, ckpt_file)
         net.load(sess, ckpt_file)
 
         cnt = 0
-        for data_i in range(1,32):
+        for data_i in range(1,31):
+            print('Current Set Index : {}/{}'.format(data_i, 31)
             #out_dir = os.path.join(target_dir, str(data_i))
             out_dir = target_dir # flattened!
             mkdir(out_dir)
@@ -92,13 +99,13 @@ def main():
                     )
 
             print('data length-0 : {}'.format(len(loader.keys)))
-            imgs = loader.grab_pair(batch_size=32, per_seq=4)
+            imgs = loader.grab_pair(batch_size=-1, per_seq=4)
             print('data length-1 : {}'.format(len(imgs)))
             split_n = np.round(len(imgs)/8.).astype(np.int32) # end up with batch_size of about 8
             print('split into {} sections'.format(split_n))
             simgs = np.array_split(imgs, split_n, axis=0)
             for si, img in enumerate(simgs):
-                print('{}/{}'.format(si, len(simgs)))
+                print('\t{}/{}'.format(si, len(simgs)))
                 im1, im2 = np.split(img, 2, axis=1)
                 im1 = np.squeeze(im1, axis=1)
                 im2 = np.squeeze(im2, axis=1) # u8-bgr
@@ -108,14 +115,12 @@ def main():
                 flow_val = net(sess, im1f_rgb, im2f_rgb)
 
                 # important: rectify flow scale
-                flow_s   = [float(target_size[0]) / im1f_rgb.shape[2], float(target_size[1]) / im1f_rgb.shape[1]]
-                flow_s   = np.reshape(flow_s, [1,1,1,2])
                 flow_val *= flow_s
-                
+
+                # resize everything
                 img1_rsz = [cv2.resize(e, target_size) for e in im1]
                 img2_rsz = [cv2.resize(e, target_size) for e in im2]
                 flow_rsz = [cv2.resize(e, target_size) for e in flow_val]
-
 
                 #np.save(os.path.join(out_dir, '%05d_img1.npy' % cnt), img1_rsz)
                 #np.save(os.path.join(out_dir, '%05d_img2.npy' % cnt), img2_rsz)

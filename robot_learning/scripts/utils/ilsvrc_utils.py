@@ -205,7 +205,7 @@ class ILSVRCLoader(VIDLoaderBase):
         return [np.stack(a, axis=0) for a in [imgs, lbls]]
 
     def grab_pair(self, batch_size=-1, min_T=2, max_T=8,
-            per_seq=1
+            per_seq=1, box_filter=''
             ):
         imgs = []
 
@@ -245,12 +245,22 @@ class ILSVRCLoader(VIDLoaderBase):
             img0 = cv2.resize(img0, self.size_)
             box0 = data['boxs'][i]
 
-            # "good" sampling
-            for dT in range(max_dT, 0, -1):
-                box1 = data['boxs'][i+dT]
-                iou = box_iou(box0, box1)
-                if iou > 0.5: # "Good"
-                    break
+            # "good" sampling ( reject "impossible" pair )
+            if box_filter is 'iou':
+                for dT in range(max_dT, 0, -1):
+                    box1 = data['boxs'][i+dT]
+                    iou = box_iou(box0, box1)
+                    if iou > 0.3: # "Good"
+                        break
+            elif box_filter is 'area':
+                for dT in range(max_dT, 0, -1):
+                    box1 = data['boxs'][i+dT]
+                    area = (box[2] - box[0]) * (box[3] - box[1])
+                    if area > 
+                    if iou > 0.5: # "Good"
+                        break
+            else:
+                dT = max_dT
             # if no "good" dT was found, dT will default to 1 (which is probably good enough)
 
             img1 = cv2.imread(
