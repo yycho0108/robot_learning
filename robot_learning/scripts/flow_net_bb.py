@@ -179,35 +179,50 @@ class FlowNetBB(object):
                     #x = slim.conv2d_transpose(x, 128, 3, stride=2, padding='SAME')
                     c, s = slim.conv2d, slim.separable_conv2d
                     x   = upconv(x, s, 512, 3, stride=1, padding='SAME')
-                    f0u = upconv(f0, c, 2, 3, stride=1, padding='SAME')
+                    f0u = upconv(f0, c, 2, 3, stride=1, padding='SAME',
+                            activation_fn=None,
+                            normalizer_fn=normalizer_no_op
+                            )
                     x = tf.concat([x, xs[2], f0u],axis=-1)
                     f1 = to_flow(x, scope='flow_1')
                     log('xs-1', x.shape)
                     log('flow-1', f1.shape)
 
                     x   = upconv(x, s, 256, 3, stride=1, padding='SAME')
-                    f1u = upconv(f1, c, 2, 3, stride=1, padding='SAME')
+                    f1u = upconv(f1, c, 2, 3, stride=1, padding='SAME',
+                            activation_fn=None,
+                            normalizer_fn=normalizer_no_op
+                            )
                     x = tf.concat([x, xs[1], f1u], axis=-1)
                     f2 = to_flow(x, scope='flow_2')
                     log('xs-1', x.shape)
                     log('flow-1', f2.shape)
 
-                    x = upconv(x, s, 128, 3, stride=1, padding='SAME')
-                    f2u = upconv(f2, c, 2, 3, stride=1, padding='SAME')
+                    x   = upconv(x, s, 128, 3, stride=1, padding='SAME')
+                    f2u = upconv(f2, c, 2, 3, stride=1, padding='SAME',
+                            activation_fn=None,
+                            normalizer_fn=normalizer_no_op
+                            )
                     x = tf.concat([x, xs[0], f2u], axis=-1)
                     f3 = to_flow(x, scope='flow_3')
                     log('xs-2', x.shape)
                     log('flow-2', f3.shape)
 
                     x   = upconv(x, s, 64, 3, stride=1, padding='SAME')
-                    f3u = upconv(f3, c, 2, 3, stride=1, padding='SAME')
+                    f3u = upconv(f3, c, 2, 3, stride=1, padding='SAME',
+                            activation_fn=None,
+                            normalizer_fn=normalizer_no_op
+                            )
                     x = tf.concat([x, f3u], axis=-1)
                     f4 = to_flow(x, scope='flow_4')
                     log('xs-3', x.shape)
                     log('flow-3', f4.shape)
 
-                    x = upconv(x, s, 32, 3, stride=1, padding='SAME')
-                    f4u = upconv(f4, c, 2, 3, stride=1, padding='SAME')
+                    x   = upconv(x, s, 32, 3, stride=1, padding='SAME')
+                    f4u = upconv(f4, c, 2, 3, stride=1, padding='SAME',
+                            activation_fn=None,
+                            normalizer_fn=normalizer_no_op
+                            )
                     img2 = axial_reshape(img, [0,2,3,(4,1)])
                     x = tf.concat([x, f4u, img2], axis=-1)
                     x = to_flow(x, pad='SAME', scope='flow_5')
@@ -245,7 +260,13 @@ class FlowNetBB(object):
                 h, w = f.get_shape().as_list()[1:3]
                 key = 'err_{}x{}'.format(w,h)
                 errs[key] = err_x(f, y)
-            err = tf.reduce_mean(errs.values())
+            ks = ['err_8x6', 'err_16x12','err_32x24', 'err_64x48', 'err_128x96', 'err_256x192']
+            ws = [2**-e for e in range(1,7)]
+            #err = tf.reduce_mean(errs.values())
+            err = tf.losses.compute_weighted_loss(
+                    losses=[errs[k] for k in ks],
+                    weights=ws
+                    )
             log('err', err.shape)
         log('-------------')
         return err, errs

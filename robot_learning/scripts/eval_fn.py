@@ -60,7 +60,7 @@ def main():
         net = GetOptFlowNet()
         net._build()
 
-    ckpt_file = os.path.expanduser('~/fn/35/ckpt/model.ckpt-80000')
+    ckpt_file = os.path.expanduser('~/fn/37/ckpt/model.ckpt-12700')
     #gpu_options = tf.GPUOptions(allow_growth=True, per_process_gpu_memory_fraction=0.95)
     #config = tf.ConfigProto(log_device_placement=False, gpu_options=gpu_options)
     config=None
