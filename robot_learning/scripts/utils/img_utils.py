@@ -6,7 +6,7 @@ from functools import partial
 import cv2
 import numpy as np
 from matplotlib import pyplot as plt
-from opt_utils import flow_to_image, apply_opt
+from opt_utils import flow_to_image, apply_opt, FlowShow
 from fchair_utils import load_chair
 
 def augment_image_affine_1(img, opt, size=None):
@@ -114,60 +114,30 @@ def main():
     img_t = tf.stack([img1_t, img2_t], axis=1)
 
     aimg_t, aflo_t  = augment_image_affine(img_t, flow_t, [h,w,c])
-    print aimg_t.shape
-    print aflo_t.shape
     aimg_t = augment_image_color(aimg_t)
-    print aimg_t.shape
 
-    idx = '01904'
     n_test = 16
-
-    #img1 = cv2.imread('/tmp/%s_img1.ppm' % idx)[...,::-1]
-    #img2 = cv2.imread('/tmp/%s_img2.ppm' % idx)[...,::-1]
-    #with open('/tmp/%s_flow.flo' % idx, 'rb') as f:
-    #    flow = load_flo(f)
-    #img1, img2, flow = [cv2.resize(e, (w,h)) for e in (img1,img2,flow)]
     img1, img2, flow = load_chair(chair_root, n_test, size=(w,h))
-
-
-    #img1 = np.stack([img1 for _ in range(n_test)])
-    #img2 = np.stack([img2 for _ in range(n_test)])
-    #flow = np.stack([flow for _ in range(n_test)])
     flow = np.concatenate([flow, np.ones_like(flow[..., :1])], axis=-1) # msk dim
-
     simg = np.stack([img1, img2], axis=1)
 
-    with tf.Session() as sess:
+    config = tf.ConfigProto(
+            device_count = {'GPU': 0})
+
+    with tf.Session(config=config) as sess:
         aimg, aflo = sess.run([aimg_t, aflo_t], {img1_t:img1, img2_t:img2, flow_t:flow})
-        print('aflo', aflo.shape)
 
-    cache = {'index':0}
+    disp = FlowShow(n=3, m=2)
+    disp.configure([
+        [FlowShow.AX_IMG1, FlowShow.AX_IMG2],
+        [FlowShow.AX_I1I2, FlowShow.AX_OVLY],
+        [FlowShow.AX_FLOW, FlowShow.AX_CODE]])
 
-    def show(index):
-        ax0.imshow(unproc(aimg[index,0]))
-        ax1.imshow(unproc(aimg[index,1]))
-        ax2.imshow(flow_to_image(aflo[index]))
-        ax3.imshow(apply_opt(unproc(aimg[index,1]), aflo[index,...,:2]))
-        ax4.imshow(aflo[index, ..., 2], cmap='gray')
-        fig.canvas.draw()
-
-    def press(event):
-        index = cache['index']
-        if event.key in ['x','q','escape']:
-            sys.exit()
-        if event.key in ['right', 'n']:
-            index += 1
-        if event.key in ['left', 'p']:
-            index -= 1
-        index = (index % n_test)
-        cache['index'] = index
-        show(index)
-
-    fig, ((ax0,ax1),(ax2,ax3),(ax4,ax5)) = plt.subplots(3,2)
-    fig.canvas.mpl_connect('key_press_event', press)
-    show(cache['index'])
-    plt.show()
-
+    img1 = unproc(aimg[:,0])
+    img2 = unproc(aimg[:,1])
+    flow = aflo
+    disp.add(img1, img2, flow)
+    disp.show()
 
 if __name__ == "__main__":
     main()

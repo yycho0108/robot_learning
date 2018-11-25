@@ -209,6 +209,7 @@ class FlowShow(object):
     AX_FLOX=7 # flow-x component
     AX_FLOY=8 # flow-y component
     AX_CODE=9 # show middlebury color code
+    AX_GRAY=10 # gray image
 
     def __init__(self, n, m, cfg=None):
         self.n_ = n
@@ -218,6 +219,8 @@ class FlowShow(object):
         # axis configuration
         cfg = np.zeros([n,m], dtype=np.int32) if (cfg is None) else cfg
         self.cfg_ = cfg
+
+        #assert cfg.shape[0] == n, 'Invalid Shape! '
 
         # gui
         self.start_ = False
@@ -230,6 +233,13 @@ class FlowShow(object):
     def start(self):
         self.fig_, self.ax_ = plt.subplots(self.n_, self.m_)
         self.start_ = True
+
+    def configure(self, cfg):
+        cfg = np.int32(cfg) # -> cvt to np array
+        self.cfg_ = cfg
+        n, m = np.shape(cfg)
+        self.n_ = n
+        self.m_ = m
 
     def config_axis(self, idx, t):
         self.cfg_[idx] = t
@@ -284,6 +294,9 @@ class FlowShow(object):
         elif cfg == FlowShow.AX_CODE:
             ax.set_title('code')
             ax.imshow(self.code_)
+        elif cfg == FlowShow.AX_GRAY:
+            ax.set_title('gray')
+            ax.imshow(self.code_, cmap='gray')
 
     def draw(self):
         for i in range(self.n_):

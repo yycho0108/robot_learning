@@ -70,69 +70,12 @@ def main():
     #img1, img2, flow = load_ilsvrc(data_root, n_test)
 
     disp = FlowShow(n=3, m=2)
-    disp.config_axis((0,0), FlowShow.AX_IMG1)
-    disp.config_axis((0,1), FlowShow.AX_IMG2)
-    disp.config_axis((1,0), FlowShow.AX_I1I2)
-    disp.config_axis((1,1), FlowShow.AX_OVLY)
-    disp.config_axis((2,0), FlowShow.AX_FLOW)
-    disp.config_axis((2,1), FlowShow.AX_CODE)
-    print disp.cfg_
-
+    disp.configure([
+        [FlowShow.AX_IMG1, FlowShow.AX_IMG2],
+        [FlowShow.AX_I1I2, FlowShow.AX_OVLY],
+        [FlowShow.AX_FLOW, FlowShow.AX_CODE]])
     disp.add(img1, img2, flow)
-
     disp.show()
-
-    #data_root = os.path.expanduser('~/dispset/data2/')
-    #img1, img2, flow = load_ilsvrc(data_root, n_test)
-
-    #print img1.std(), img1.mean()
-    #pimg = proc_img(img1)
-    #print pimg.std(), pimg.mean()
-    #print img2.std()
-
-    #print flow.std()
-    #print flow.shape
-    #print flow.dtype, flow.max(), flow.min()
-    #
-    #cache = {'index':0}
-
-    #def show(index):
-    #    ax0.imshow(img1[index])
-    #    ax1.imshow(img2[index])
-    #    ax2.imshow(flow_to_image(flow[index]))
-
-    #    img1_re = apply_opt(img2[index], flow[index], inv=True)
-    #    ax3.imshow(img1_re)
-
-    #    d1 = np.clip(img2[index].astype(np.int32) - img1[index], 0, 255).astype(np.uint8)
-    #    d1 = np.mean(np.abs(d1), axis=-1).astype(np.uint8)
-    #    print(d1.sum())
-
-    #    d2 = np.clip(img1_re.astype(np.int32) - img1[index].astype(np.int32), 0, 255).astype(np.uint8)
-    #    d2 = np.mean(np.abs(d2), axis=-1).astype(np.uint8)
-    #    print(d2.sum())
-
-    #    ax4.imshow(d1)
-    #    ax5.imshow(d2)
-
-    #    fig.canvas.draw()
-
-    #def press(event):
-    #    index = cache['index']
-    #    if event.key in ['x','q','escape']:
-    #        sys.exit()
-    #    if event.key in ['right', 'n']:
-    #        index += 1
-    #    if event.key in ['left', 'p']:
-    #        index -= 1
-    #    index = (index % n_test)
-    #    cache['index'] = index
-    #    show(index)
-
-    #fig, ((ax0,ax1),(ax2,ax3), (ax4,ax5)) = plt.subplots(3,2)
-    #fig.canvas.mpl_connect('key_press_event', press)
-    #show(cache['index'])
-    #plt.show()
 
 if __name__ == "__main__":
     main()
