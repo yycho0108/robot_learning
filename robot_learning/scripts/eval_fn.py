@@ -75,8 +75,8 @@ def main():
     with tf.Session(graph=graph, config=config) as sess:
         net.load(sess, ckpt_file)
 
-        img1, img2, gt_flow = load_chair(chair_root, n=n_test, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
-        #img1, img2, gt_flow = load_ilsvrc(ilsvrc_root, n=n_test, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
+        #img1, img2, gt_flow = load_chair(chair_root, n=n_test, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
+        img1, img2, gt_flow = load_ilsvrc(ilsvrc_root, n=n_test, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
         imgs = np.stack([img1,img2], axis=1)
         p_imgs = proc_img(imgs)
 
@@ -94,7 +94,7 @@ def main():
             )
     disp.configure([
         [FlowShow.AX_IMG1, FlowShow.AX_IMG2],
-        [FlowShow.AX_I1I2, FlowShow.AX_OVLY],
+        [FlowShow.AX_I2I1, FlowShow.AX_OVLY],
         [FlowShow.AX_FLOW, FlowShow.AX_CODE]])
     disp.add(img1, img2, flow)
     disp.show()

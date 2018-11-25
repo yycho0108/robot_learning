@@ -82,7 +82,8 @@ def xcor_feat(f,
         fa, fb = tf.unstack(f_ab, axis=1)
         # a, b, kernel_size, max_disp, stride-1, stride_2, pad
         fxf = xcor(fa, fb, 1, d*2, s_h, s_w, d*2)
-        log('coverage : {:.0%}x{:.0%}'.format(d/float(h), d/float(w)))
+        fxf = tf.nn.elu(fxf)
+        log('coverage : ({:.0%}x{:.0%})'.format(d/float(h), d/float(w)))
         log('shape : {}'.format(fxf.shape))
     return fxf
 
@@ -146,34 +147,39 @@ class FlowNetBB(object):
                                 padding='SAME',
                                 )
                         log('post-sconv', x.shape) #NTx4x5
-            with tf.name_scope('format_out'):
-                x = reshape_feat(x)
-                #x = xcor_feat(x, d=3, s_h=1, s_w=1, log=log) # 6x8x ((2*3+1)**2 == 49), win ~ (0.5x0.375)
-                log('cnn-output', x.shape)
 
         log('-------------')
-        feats = slim.utils.convert_collection_to_dict('cnn-feats')
-        for (k,v) in feats.items():
-            log(k,v)
-        #feats = [feats[s] for s in ['vo/sconv_pre/sconv_pre_2', 'vo/sconv_post/sconv_post_1','vo/sconv_post/sconv_post_4']]
+        xs = slim.utils.convert_collection_to_dict('cnn-feats')
 
-        feats = [feats[s] for s in [
+        log('- feats -')
+        for (k,v) in xs.items():
+            log(k,v)
+        log('---------')
+
+        xs = [xs[s] for s in [
             'vo/sconv/sconv_1', #48x64
             'vo/sconv/sconv_3', #24x32
             'vo/sconv/sconv_5', #12x16
+            'vo/sconv/sconv_7', #6x8
             ]]
 
         # d, s_h, s_w
-        xargs =  [
-                (7, 1, 1), #48x64x ((2*9+1)**2 == 361), win ~ (0.1875  x 0.140625)
-                (5, 1, 1), #24x32x ((2*7+1)**2 == 225), win ~ (0.2916' x 0.21875)
-                (3, 1, 1)  #12x16x ((2*5+1)**2 == 121), win ~ (0.416'  x 0.3125)
+        xcor_args =  [
+                (7, 1, 1), #48x64x ((2*7+1)**2 == 361), win ~ (0.1875  x 0.140625)
+                (5, 1, 1), #24x32x ((2*5+1)**2 == 225), win ~ (0.2916' x 0.21875)
+                (3, 1, 1), #12x16x ((2*3+1)**2 == 121), win ~ (0.416'  x 0.3125)
+                (3, 1, 1), #6x8x   ((2*3+1)**2 == 49),  win ~ (0.5x0.375)
                 ]
-        feats = [reshape_feat(f) for f in feats]
-        #feats = [xcor_feat(f,*a,log=log) for (f,a) in zip(feats,xargs)]
-        for t in feats:
-            log(t.name, t.shape)
-        return x, feats
+        #feats = [reshape_feat(f) for f in feats]
+        log('- xcor -')
+        xs = [xcor_feat(x,*a,log=log) for (x,a) in zip(xs,xcor_args)]
+        log('--------')
+
+        log('- xs -')
+        for x in xs:
+            log(x.name, x.shape)
+        log('------')
+        return xs
 
     def _build_tcnn(self, x, feats, log=no_op):
         # Nx1024 --> Nx240x320
@@ -223,7 +229,7 @@ class FlowNetBB(object):
                 log('post-tcnn', x.shape)
         return x
 
-    def _build_tcnn_multi(self, inputs, feats, img, log=no_op):
+    def _build_tcnn_multi(self, xs, img, log=no_op):
         # Nx1024 --> Nx240x320
         log('- build-tcnn -')
 
@@ -235,16 +241,12 @@ class FlowNetBB(object):
                     outputs_collections='flow'
                     )
 
-        with tf.name_scope('build_tcnn', [inputs, feats]):
-            x = inputs
+        with tf.name_scope('build_tcnn', [xs]):
             with slim.arg_scope(self._arg_scope()):
-                log('tcnn-input', x.shape)
                 # objective : (15x20), (30x40), (60x80), (120x160), (240x320)
                 #x = slim.separable_conv2d(x, 256, 1, stride=1, padding='SAME') # feat reduction
                 #log('tcnn-rdc', x.shape)
-                x = slim.separable_conv2d(x, 1024, 3, stride=1, padding='SAME')
-                #feats2_rdc = slim.separable_conv2d(feats[2], 128, 1, stride=1, padding='SAME')
-                #x = tf.concat([x, feats2_rdc],axis=-1)
+                x = slim.separable_conv2d(xs[3], 1024, 3, stride=1, padding='SAME')
                 f0 = to_flow(x, scope='flow_0')
                 log('xs-0', x.shape)
                 log('flow-0', f0.shape)
@@ -252,21 +254,21 @@ class FlowNetBB(object):
                 #x = slim.conv2d_transpose(x, 128, 3, stride=2, padding='SAME')
                 x   = upconvolution(x, 512, 3, stride=1, padding='SAME')
                 f0u = upconvolution(f0, 2, 3, stride=1, padding='SAME')
-                x = tf.concat([x, feats[2], f0u],axis=-1)
+                x = tf.concat([x, xs[2], f0u],axis=-1)
                 f1 = to_flow(x, scope='flow_1')
                 log('xs-1', x.shape)
                 log('flow-1', f1.shape)
 
                 x   = upconvolution(x, 256, 3, stride=1, padding='SAME')
                 f1u = upconvolution(f1, 2, 3, stride=1, padding='SAME')
-                x = tf.concat([x, feats[1], f1u], axis=-1)
+                x = tf.concat([x, xs[1], f1u], axis=-1)
                 f2 = to_flow(x, scope='flow_2')
                 log('xs-1', x.shape)
                 log('flow-1', f2.shape)
 
                 x = upconvolution(x, 128, 3, stride=1, padding='SAME')
                 f2u = upconvolution(f2, 2, 3, stride=1, padding='SAME')
-                x = tf.concat([x, feats[0], f2u], axis=-1)
+                x = tf.concat([x, xs[0], f2u], axis=-1)
                 f3 = to_flow(x, scope='flow_3')
                 log('xs-2', x.shape)
                 log('flow-2', f3.shape)
@@ -285,17 +287,6 @@ class FlowNetBB(object):
                 x = to_flow(x, pad='SAME', scope='flow_5')
                 log('xs-4', x.shape)
                 log('flow-4', x.shape)
-
-                #x = slim.conv2d_transpose(x, 128, 3, stride=2, padding='SAME') #14x18
-                #x = tf.concat([x, feats[0]],axis=-1)
-                #log('cat-3', x.shape)
-                #x = slim.conv2d_transpose(x, 64, 3, stride=2, padding='SAME') #15x20
-                #x = slim.conv2d_transpose(x, 64, 3, stride=2, padding='SAME')
-                #x = slim.conv2d_transpose(x, 32, 3, stride=2, padding='SAME')
-                #x = slim.conv2d(x, 2, 1, 1, padding='SAME',
-                #        activation_fn=None, normalizer_fn=None
-                #        )
-                log('post-tcnn', x.shape)
 
         fs = slim.utils.convert_collection_to_dict('flow').values()
         return x, fs
@@ -382,9 +373,9 @@ class FlowNetBB(object):
         lab = self.lab_
 
         with tf.variable_scope('vo', reuse=self.reuse_):
-            cnn, feats = self._build_cnn(img, log=log)
+            xs  = self._build_cnn(img, log=log)
             #tcnn = self._build_tcnn(cnn, feats, log=log)
-            tcnn, prds = self._build_tcnn_multi(cnn, feats, img, log=log)
+            tcnn, prds = self._build_tcnn_multi(xs, img, log=log)
 
         if self.eval_:
             #err_c = self._build_err(tcnn, lab, log=log)
