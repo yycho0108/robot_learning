@@ -1,6 +1,7 @@
 import tensorflow as tf
 import numpy as np
 from tensorflow.contrib.framework import nest
+slim = tf.contrib.slim
 
 def tf_shape(x):
     s_s = x.get_shape().as_list()
@@ -55,6 +56,14 @@ def axial_reshape(x, ix):
         s_out = [reduce(merge_dim, e, 1) for e in tm]
         x = tf.reshape(x, s_out)
     return x
+
+def net_size(scope=None, return_all=False):
+    ws = slim.get_model_variables(scope=scope)
+    ss = [reduce(lambda a,b:a*b, w.get_shape().as_list()) for w in ws]
+    if return_all:
+        return (ws, ss)
+    total = sum(ss)
+    return total
 
 def main():
     t1 = tf.placeholder(dtype=tf.float32, shape=[5,2,None,4])

@@ -1,3 +1,5 @@
+#!/usr/bin/env python2
+
 import numpy as np
 from scipy.misc import imread
 import cv2
@@ -5,9 +7,9 @@ import tensorflow as tf
 import os
 import sys
 import time
-#from utils.ilsvrc_utils import ILSVRCLoader
+
 from utils.fchair_utils import load_chair, load_ilsvrc
-from utils.opt_utils import apply_opt, flow_to_image
+from utils.opt_utils import apply_opt, flow_to_image, FlowShow
 from utils import mkdir, proc_img
 from flow_net_bb import FlowNetBB
 
@@ -58,89 +60,44 @@ def main():
         net = GetOptFlowNet()
         net._build()
 
-    ckpt_file = os.path.expanduser('~/fn/34/ckpt/model.ckpt-59000')
+    ckpt_file = os.path.expanduser('~/fn/35/ckpt/model.ckpt-80000')
     #gpu_options = tf.GPUOptions(allow_growth=True, per_process_gpu_memory_fraction=0.95)
     #config = tf.ConfigProto(log_device_placement=False, gpu_options=gpu_options)
     config=None
+
+    n_test  = 32
+    n_batch = 8
+    n_split = int(np.round(n_test / float(n_batch)))
 
     ilsvrc_root = os.path.expanduser('~/dispset/data')
     chair_root = os.path.expanduser('~/Downloads/FlyingChairs/data')
 
     with tf.Session(graph=graph, config=config) as sess:
-        #saver.restore(sess, ckpt_file)
         net.load(sess, ckpt_file)
 
-        def handle_key(event):
-            global index
-            sys.stdout.flush()
-            if event.key in ['q', 'escape']:
-                sys.exit()
-            else:
-                #data_i = np.random.randint(1,31)
-                #loader = ILSVRCLoader(os.getenv('ILSVRC_ROOT'), data_type=('train_%d'%data_i), T=8,
-                #        size=(320,240)
-                #        )
-                #imgs = loader.grab_pair(batch_size=1)[...,::-1] # RGB->BGR
-                #img1, img2, gt_flow = load_chair(chair_root, n=1, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
-                img1, img2, gt_flow = load_ilsvrc(ilsvrc_root, n=1, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
-                imgs = np.stack([img1,img2], axis=1)
-                p_imgs = proc_img(imgs)
-                flow = net(sess, p_imgs[:,0], p_imgs[:,1])
+        img1, img2, gt_flow = load_chair(chair_root, n=n_test, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
+        #img1, img2, gt_flow = load_ilsvrc(ilsvrc_root, n=n_test, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
+        imgs = np.stack([img1,img2], axis=1)
+        p_imgs = proc_img(imgs)
 
-                im1 = imgs[:,0]
-                im2 = imgs[:,1]
+        flow = []
+        sb_imgs = np.array_split(p_imgs, n_split, axis=0)
+        for i, b_imgs in enumerate(sb_imgs):
+            flow_tmp = net(sess, b_imgs[:,0], b_imgs[:,1])
+            print('{}/{} : {}'.format(i, n_split, len(b_imgs)))
+            flow.append(flow_tmp)
+        flow = np.concatenate(flow, axis=0)
+        print('complete?')
 
-                flow_im = flow_to_image(flow[0])
-                gt_flow_im = flow_to_image(gt_flow[0])
-                overlay = cv2.addWeighted(im1[0], 0.5, np.roll(im2[0],1,axis=-1), 0.5, 0.0)
-                ax0.imshow(im1[0])
-                ax1.imshow(im2[0])
-                ax2.imshow(flow_im) # u-channel
-                #ax3.imshow(apply_opt(im2[0], flow[0])) # v-channel
-                ax3.imshow(gt_flow_im) # v-channel
-                fig.canvas.draw()
-
-        fig, ((ax0, ax1), (ax2, ax3)) = plt.subplots(2,2)
-        fig.canvas.mpl_connect('close_event', sys.exit)
-        fig.canvas.mpl_connect('key_press_event', handle_key)
-        plt.show()
-
-        #while True:
-        #    data_i = np.random.randint(1,31)
-        #    loader = ILSVRCLoader(os.getenv('ILSVRC_ROOT'), data_type=('train_%d'%data_i), T=8,
-        #            size=(320,240)
-        #            )
-        #    imgs = loader.grab_pair(batch_size=1)
-        #    p_imgs = proc_img(imgs)
-        #    pred_flow_val = net(sess, p_imgs[:,0], p_imgs[:,1])
-
-        #    im1 = imgs[:,0]
-        #    im2 = imgs[:,1]
-
-        #    #pred_flow_val = net(sess, im1, im2)
-
-        #    ## warm-up
-        #    #for i in range(10):
-        #    #    pred_flow_val = net(sess, im1, im2)
-
-        #    #start = time.time()
-        #    #for i in range(100):
-        #    #    pred_flow_val = net(sess, im1, im2)
-        #    #end = time.time()
-        #    #print('Took {} sec'.format(end-start)) # ~60ms per one!!
-
-        #    # Double check loading is correct
-        #    #for var in tf.all_variables():
-        #    #  print(var.name, var.eval(session=sess).mean())
-        #    #feed_dict = {im1_pl: im1, im2_pl: im2}
-        #    #pred_flow_val = sess.run(pred_flow, feed_dict=feed_dict)
-
-        #    flow_im = flow_to_image(pred_flow_val[0])
-        #    overlay = cv2.addWeighted(im1[0], 0.5, im2[0], 0.5, 0.0)
-        #    ax0.imshow(overlay)
-        #    ax1.imshow(flow_im)
-        #    ax2.imshow(normalize(pred_flow_val[0,...,0]), cmap='gray') # u-channel
-        #    ax3.imshow(normalize(pred_flow_val[0,...,1]), cmap='gray') # v-channel
+    disp = FlowShow(n=3, m=2,
+            code_path='utils/middlebury_flow_code.png'
+            )
+    disp.configure([
+        [FlowShow.AX_IMG1, FlowShow.AX_IMG2],
+        [FlowShow.AX_I1I2, FlowShow.AX_OVLY],
+        [FlowShow.AX_FLOW, FlowShow.AX_CODE]])
+    disp.add(img1, img2, flow)
+    disp.show()
 
 if __name__ == '__main__':
     main()

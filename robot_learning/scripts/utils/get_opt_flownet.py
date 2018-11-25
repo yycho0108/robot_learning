@@ -7,11 +7,12 @@ import sys
 
 import time
 
+# WARNING : external dependency.
+# build tf_flownet2 from https://github.com/vt-vl-lab/tf_flownet2.git !
 root = '/home/jamiecho/Repos/tf_flownet2'
 sys.path.append(root)
 
 from FlowNet2_src import FlowNet2, LONG_SCHEDULE
-from FlowNet2_src import flow_to_image
 
 from ilsvrc_utils import ILSVRCLoader
 from utils import mkdir

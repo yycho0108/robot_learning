@@ -211,7 +211,9 @@ class FlowShow(object):
     AX_CODE=9 # show middlebury color code
     AX_GRAY=10 # gray image
 
-    def __init__(self, n, m, cfg=None):
+    def __init__(self, n, m, cfg=None,
+            code_path=''
+            ):
         self.n_ = n
         self.m_ = m
         self.index_ = 0
@@ -228,7 +230,7 @@ class FlowShow(object):
         self.ax_  = None
 
         self.data_ = []
-        self.code_ = cv2.imread('middlebury_flow_code.png')[...,::-1]
+        self.code_ = cv2.imread(code_path)[...,::-1]
 
     def start(self):
         self.fig_, self.ax_ = plt.subplots(self.n_, self.m_)
