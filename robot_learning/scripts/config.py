@@ -45,7 +45,9 @@ DECAY_FACTOR = FINAL_DECAY ** (1.0 / NUM_DECAY)
 
 # -- Technical -- 
 FN_USE_XCOR=True
-FN_ERR_DECAY=4.0
+FN_ERR_SCALE=4.0
+FN_ERR_SCALE_DECAY_FACTOR=0.5
+FN_ERR_SCALE_DECAY_STEPS=3000
 
 # -- Training --
 FN_BATCH_SIZE=16
@@ -54,7 +56,7 @@ FN_TRAIN_STEPS=1000000
 # -- Learning Rate --
 FN_LR_RAMP_0 = 1e-6
 FN_LR_RAMP_STEPS = int(1e3)
-FN_LR0=1e-4 # initial learning rate
+FN_LR0=2e-4 # initial learning rate
 FN_LR1=1e-5 # final learning rate
 FN_LR_DECAY_STEPS=200000
 FN_LR_STEPS_PER_DECAY = float(FN_LR_DECAY_STEPS) / (NUM_DECAY)

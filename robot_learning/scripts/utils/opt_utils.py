@@ -455,7 +455,7 @@ class FlowShow(object):
             ax.set_title('gray')
             ax.imshow(self.code_, cmap='gray')
         elif ax_type == FlowShow.AX_FLOG:
-            ax.set_title('i1>i2(g)')
+            ax.set_title('flow_grid')
             grid = self._grid(img1)
             img = apply_opt(grid, flow[...,:2], inv=False)
             ax.imshow(img, cmap='gray')

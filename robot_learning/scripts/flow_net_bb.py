@@ -266,8 +266,16 @@ class FlowNetBB(object):
             ks = ['err_8x6', 'err_16x12','err_32x24', 'err_64x48', 'err_128x96', 'err_256x192']
 
             # decay weight per size of flow-image
-            ws = np.float32([cfg.FN_ERR_DECAY**-e for e in range(len(ks))])
-            ws /= ws.sum()
+
+            # opt1 : dynamic error weight scaling (over step)
+            err_scale = tf.train.exponential_decay(cfg.FN_ERR_SCALE,
+                self.step_, cfg.FN_ERR_SCALE_DECAY_STEPS, cfg.FN_ERR_SCALE_DECAY_FACTOR, staircase=False)
+            ws = tf.pow(err_scale, -tf.to_float(tf.range(len(ks))) )
+            ws = ws / tf.reduce_sum(ws) # normalize weights
+
+            # opt2 : static error weight scaling
+            # ws = np.float32([cfg.FN_ERR_DECAY**-e for e in range(len(ks))])
+            # ws /= ws.sum() # normalize weights
 
             #err = tf.reduce_mean(errs.values())
             err = tf.losses.compute_weighted_loss(
@@ -276,7 +284,7 @@ class FlowNetBB(object):
                     )
             log('err', err.shape)
         log('-------------')
-        return err, errs
+        return err, errs, err_scale
 
     def _build_opt(self, c, log=no_op):
         """ build optimizer part """
@@ -296,6 +304,7 @@ class FlowNetBB(object):
         """ build log summaries part """
         log('- build-log -')
         tf.summary.scalar('err', tensors['err'], collections=self.col_)
+        tf.summary.scalar('err_scale', tensors['err_scale'], collections=self.col_)
         for (k,v) in tensors['errs'].items():
             tf.summary.scalar(k, v, collections=self.col_)
         log('-------------')
@@ -315,7 +324,7 @@ class FlowNetBB(object):
             tcnn, prds = self._build_tcnn(xs, img, log=log)
 
         if self.eval_:
-            err_c, errs = self._build_err(prds, lab, log=log)
+            err_c, errs, err_scale = self._build_err(prds, lab, log=log)
 
         if self.train_:
             reg_c = tf.add_n(tf.losses.get_regularization_losses())
@@ -326,7 +335,9 @@ class FlowNetBB(object):
             self.opt_ = opt
 
         if self.eval_:
-            _   = self._build_log(log=log, err=err_c, errs=errs)
+            _   = self._build_log(log=log, err=err_c, errs=errs,
+                    err_scale=err_scale
+                    )
 
         self.img_ = img
         self.pred_ = tcnn
@@ -374,7 +385,7 @@ class FlowNetBB(object):
                         ) as sc:
                     return sc
 def main():
-    net = FlowNetBB(step=None)
+    net = FlowNetBB(step=tf.train.get_or_create_global_step())
 
 if __name__ == "__main__":
     main()

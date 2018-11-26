@@ -62,6 +62,8 @@ def main():
 
     #ckpt_file = os.path.expanduser('~/fn/37/ckpt/model.ckpt-12700')
     ckpt_file = os.path.expanduser('~/fn/4/ckpt/model.ckpt-80000')
+    #ckpt_file = os.path.expanduser('~/fn/10/ckpt/model.ckpt-43100')
+
     #gpu_options = tf.GPUOptions(allow_growth=True, per_process_gpu_memory_fraction=0.95)
     #config = tf.ConfigProto(log_device_placement=False, gpu_options=gpu_options)
     config=None
@@ -96,12 +98,16 @@ def main():
 
     cfg_gt_flow = disp.encode_user(0, FlowShow.AX_FLOW)
 
-    disp.configure([
-        [FlowShow.AX_IMG1, FlowShow.AX_IMG2],
-        [FlowShow.AX_I1I2, FlowShow.AX_OVLY],
-        [FlowShow.AX_FLOW, FlowShow.AX_FLOG],
-        [cfg_gt_flow     , FlowShow.AX_CODE]
-        ])
+    layout = np.int32([[FlowShow.AX_IMG1, FlowShow.AX_IMG2, FlowShow.AX_I2ER, FlowShow.AX_DIFF],
+                [FlowShow.AX_I2I1, FlowShow.AX_I1I2, FlowShow.AX_FLOW, FlowShow.AX_OVLY],
+                [FlowShow.AX_FLOG, FlowShow.AX_FLOF, cfg_gt_flow, FlowShow.AX_I2OV]])
+    disp.configure(layout)
+    #disp.configure([
+    #    [FlowShow.AX_IMG1, FlowShow.AX_IMG2],
+    #    [FlowShow.AX_I1I2, FlowShow.AX_OVLY],
+    #    [FlowShow.AX_FLOW, FlowShow.AX_FLOG],
+    #    [cfg_gt_flow     , FlowShow.AX_CODE]
+    #    ])
 
     disp.add(img1, img2, flow)
     disp.set_user_data(k=0, v=gt_flow, t=FlowShow.I_FLOW)
