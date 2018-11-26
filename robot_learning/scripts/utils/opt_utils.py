@@ -198,6 +198,11 @@ def flow_to_image(flow, display=False, thresh=1e7):
 
 
 class FlowShow(object):
+    # indexing
+    I_IMG1 = 0
+    I_IMG2 = 1
+    I_FLOW = 2
+
     # configurations
     AX_NULL=0
     AX_IMG1=1
@@ -210,19 +215,25 @@ class FlowShow(object):
     AX_FLOY=8 # flow-y component
     AX_CODE=9 # show middlebury color code
     AX_GRAY=10 # gray image
+    AX_FLOG=11 # apply flow on grid
 
-    def __init__(self, n, m, cfg=None,
+    AX_USER=100 # apply user-defined drawing fn from here
+
+    def __init__(self, layout=None, cfg=None,
             code_path=''
             ):
-        self.n_ = n
-        self.m_ = m
-        self.index_ = 0
 
-        # axis configuration
-        cfg = np.zeros([n,m], dtype=np.int32) if (cfg is None) else cfg
-        self.cfg_ = cfg
+        self.n_ = None
+        self.m_ = None
+        self.cfg_ = None
+        self.configured_ = False
 
-        #assert cfg.shape[0] == n, 'Invalid Shape! '
+        if (layout is not None):
+            self.configure_layout(layout)
+        if (cfg is not None):
+            self.configure(cfg)
+        if not self.configured_:
+            print('No configuration initialized during __init__')
 
         # gui
         self.start_ = False
@@ -230,21 +241,44 @@ class FlowShow(object):
         self.ax_  = None
 
         self.data_ = []
-        self.code_ = cv2.imread(code_path)[...,::-1]
+        self.udata_ = {}
+        self.index_ = 0
+
+        if len(code_path) > 0:
+            try:
+                self.code_ = cv2.imread(code_path)[...,::-1]
+            except Exception as e:
+                print('Exception : {}'.format(e))
+                print('Could not read code image from supplied path : {}'.format(code_path))
+        else:
+            # self.code_ is fine as "None" as long as AX_CODE is not requested.
+            self.code_ = None
 
     def start(self):
         self.fig_, self.ax_ = plt.subplots(self.n_, self.m_)
         self.start_ = True
 
+    def configure_layout(self, layout):
+        n,m = layout
+        cfg = np.zeros([n,m], dtype=np.int32)
+        self.n_ = n
+        self.m_ = m
+        self.cfg_ = cfg
+        self.configured_ = True
+
     def configure(self, cfg):
         cfg = np.int32(cfg) # -> cvt to np array
-        self.cfg_ = cfg
         n, m = np.shape(cfg)
         self.n_ = n
         self.m_ = m
+        self.cfg_ = cfg
+        self.configured_ = True
 
     def config_axis(self, idx, t):
-        self.cfg_[idx] = t
+        if not self.configured_:
+            print('Unable to configure axis before specifying layout!')
+        else:
+            self.cfg_[idx] = t
 
     def add(self, img1, img2, flow):
         if np.ndim(img1) == 4:
@@ -255,55 +289,105 @@ class FlowShow(object):
             # single-add
             self.data_.append( [img1, img2, flow] )
 
-    def _draw_ax(self, i, j):
-        ax = self.ax_[i,j]
-        cfg = self.cfg_[i,j]
-        img1, img2, flow = self.data_[self.index_]
+    def _grid(self, ref_img):
+        h,w = ref_img.shape[:2]
+        grid = np.zeros(dtype=np.uint8, shape=[h,w])
+        di = max(np.round(h / 10.), 2)
+        dj = max(np.round(w / 10.), 2)
 
+        gi = np.arange(0, h, di).astype(np.int32)
+        gj = np.arange(0, w, dj).astype(np.int32)
+
+        grid[gi,:] = 255
+        grid[:,gj] = 255
+        return grid
+
+    def _draw_ax(self, ax, data, ax_type):
+        # prep
         ax.cla()
         ax.axis('off')
 
-        if cfg == FlowShow.AX_NULL:
-            pass
-        elif cfg == FlowShow.AX_IMG1:
+        # unroll data
+        img1, img2, flow = data
+
+        # draw
+        if ax_type == FlowShow.AX_NULL:
+            ax.set_title('null')
+        elif ax_type == FlowShow.AX_IMG1:
             ax.set_title('img1')
             ax.imshow(img1)
-        elif cfg == FlowShow.AX_IMG2:
+        elif ax_type == FlowShow.AX_IMG2:
             ax.set_title('img2')
             ax.imshow(img2)
-        elif cfg == FlowShow.AX_FLOW:
+        elif ax_type == FlowShow.AX_FLOW:
             ax.set_title('flow')
             print(flow.max(), flow.min())
             ax.imshow( flow_to_image(flow) )
-        elif cfg == FlowShow.AX_OVLY:
+        elif ax_type == FlowShow.AX_OVLY:
             ax.set_title('overlay')
             ovly = cv2.addWeighted(img1, 0.5, img2, 0.5, 0.0)
             ax.imshow(ovly)
-        elif cfg == FlowShow.AX_I1I2:
+        elif ax_type == FlowShow.AX_I1I2:
             ax.set_title('i1>i2')
             img = apply_opt(img1, flow[...,:2], inv=False)
             ax.imshow(img)
-        elif cfg == FlowShow.AX_I2I1:
+        elif ax_type == FlowShow.AX_I2I1:
             ax.set_title('i2>i1')
             img = apply_opt(img2, flow[...,:2], inv=True)
             ax.imshow(img)
-        elif cfg == FlowShow.AX_FLOX:
+        elif ax_type == FlowShow.AX_FLOX:
             ax.set_title('flow_x')
             ax.imshow( normalize(flow[...,0]) )
-        elif cfg == FlowShow.AX_FLOY:
+        elif ax_type == FlowShow.AX_FLOY:
             ax.set_title('flow_y')
             ax.imshow( normalize(flow[...,1]) )
-        elif cfg == FlowShow.AX_CODE:
+        elif ax_type == FlowShow.AX_CODE:
             ax.set_title('code')
             ax.imshow(self.code_)
-        elif cfg == FlowShow.AX_GRAY:
+        elif ax_type == FlowShow.AX_GRAY:
             ax.set_title('gray')
             ax.imshow(self.code_, cmap='gray')
+        elif ax_type == FlowShow.AX_FLOG:
+            ax.set_title('i1>i2(g)')
+            grid = self._grid(img1)
+            img = apply_opt(grid, flow[...,:2], inv=True)
+            ax.imshow(img, cmap='gray')
+
+    def _draw_ax_at(self, i, j):
+        ax = self.ax_[i,j]
+        cfg = self.cfg_[i,j]
+        if cfg >= FlowShow.AX_USER:
+            u_idx, ax_type = self.decode_user(cfg)
+            ax.set_title('user')
+            print 'dbg', len(self.udata_[u_idx][self.index_])
+            self._draw_ax(ax, self.udata_[u_idx][self.index_], ax_type)
+        else:
+            self._draw_ax(ax, self.data_[self.index_], cfg)
+
+    def encode_user(self, index, ax_type):
+        return FlowShow.AX_USER + (index * 16) + (ax_type)
+
+    def decode_user(self, code):
+        code = (code - FlowShow.AX_USER)
+        index = code // 16
+        ax_type = code % 16
+        return index, ax_type
+
+    def set_user_data(self, k, v, t):
+        if k in self.udata_:
+            n = len(v)
+            for i in range(n):
+                self.udata_[k][i][t] = v[i]
+        else:
+            # initialize self.udata_ --> (n,3)
+            n = len(v)
+            self.udata_[k] = [[None,None,None] for _ in range(n)]
+            self.set_user_data(k, v, t)
 
     def draw(self):
         for i in range(self.n_):
             for j in range(self.m_):
-                self._draw_ax(i,j)
+                self._draw_ax_at(i,j)
         self.fig_.suptitle('Optical Flow Display {}/{}'.format(1+self.index_, len(self.data_)))
         self.fig_.canvas.draw()
 
