@@ -146,6 +146,7 @@ class DataManager(object):
 
     def load(self, path):
         img   = np.load(os.path.join(path, 'img.npy'))
+        img   = img[..., ::-1] # stored as BGR : convert to RGB
         odom  = np.load(os.path.join(path, 'odom.npy'))
         return img, odom
 
@@ -179,7 +180,8 @@ class DataManager(object):
             lab[:,1:] = lab[:,1:] * -1.0
 
         if target_size is not None:
-            img = cv2.resize(img, target_size)
+            img = [cv2.resize(e, target_size) for e in img]
+            img = np.stack(img, axis=0)
 
         return [img, lab]
 
@@ -237,7 +239,7 @@ class DataManager(object):
                 )
         #ax0.set_xlim([-0.2,1.0])
         #ax0.set_ylim([-0.4,0.4])
-        ax1.imshow(cat[...,::-1])
+        ax1.imshow(cat)
         ax0.legend()
         if draw:
             fig.canvas.draw()
@@ -250,7 +252,6 @@ class DataManager(object):
         print('- instructions -')
         print('q to quit; any other key to inspect next sample')
         print('----------------')
-
 
         def handle_key(event):
             global index

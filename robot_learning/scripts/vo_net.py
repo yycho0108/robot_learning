@@ -1,6 +1,7 @@
 from __future__ import print_function
 
 import config as cfg
+import numpy as np
 import tensorflow as tf
 from tensorflow.contrib import slim
 from utils import no_op
@@ -289,7 +290,30 @@ class VONet(object):
                 return sc
 
 def main():
-    net = VONet(step=None)
+    graph = tf.Graph()
+
+    with graph.as_default():
+        global_step = tf.train.get_or_create_global_step()
+        learning_rate = tf.train.exponential_decay(cfg.LEARNING_RATE,
+                global_step, cfg.STEPS_PER_DECAY, cfg.DECAY_FACTOR, staircase=True)
+
+        net = VONet(step=global_step,
+                learning_rate=learning_rate,
+                batch_size=cfg.BATCH_SIZE,
+                train=True,
+                log=print
+                )
+
+    with tf.Session(graph=graph) as sess:
+        sess.run(tf.global_variables_initializer())
+        img = np.zeros(dtype=np.float32,
+                shape=[cfg.BATCH_SIZE, cfg.TIME_STEPS, cfg.IMG_HEIGHT, cfg.IMG_WIDTH, cfg.IMG_DEPTH])
+        lab = np.zeros(dtype=np.float32,
+                shape=[cfg.BATCH_SIZE, cfg.TIME_STEPS, 3])
+        print(lab.shape)
+        dps, err, _ = sess.run([net.dps_, net.err_, net.opt_],
+                feed_dict={net.img_:img, net.lab_:lab})
+        print(dps.shape)
 
 if __name__ == "__main__":
     main()
