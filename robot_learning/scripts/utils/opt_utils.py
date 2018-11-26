@@ -7,6 +7,47 @@ from utils import normalize
 from sklearn.neighbors import NearestNeighbors
 from matplotlib import pyplot as plt
 
+def map_inv(src, delta, window=9, eps=1e-9):
+    shape = np.shape(src)
+
+    src   = np.float32(src.reshape([-1, 2]))
+    delta = np.float32(delta.reshape([-1, 2]))
+    dst   = src + delta
+
+    neigh = NearestNeighbors(window)
+    neigh.fit(dst) # samples from x_b
+
+    dist, idx = neigh.kneighbors(src) # x_b -> x_a
+    # == dst[idx] is a neighbor of src
+
+    idx = idx.reshape(shape[0], shape[1], -1)
+
+    # inverse-delta
+    #delta_i = src[idx] - dst[idx]
+    delta_i = -delta[idx]
+    weight  = (1.0 / (dist + eps)).reshape(shape[0], shape[1], -1, 1)
+
+    # below is probably only valid for opt-flow related applications
+    weight *= np.linalg.norm(delta_i)[...,np.newaxis,np.newaxis]
+
+    #print 'di', delta_i.shape
+    #print 'w', weight.shape
+    # TODO : also weigh by flow magnitude??
+    # i.e. weight = weight * np.linalg.norm(delta_i)
+
+    # weighted mean
+    delta_i = np.sum(delta_i*weight, axis=2) / (np.sum(weight, axis=2))
+    map_i = np.float32(src.reshape(shape) + delta_i)
+
+    return map_i
+    # mp_fw[src1=(src+delta)] = src0
+    # mp_fw[ 
+
+    # mp_bw[src+delta] = src
+
+    # src+delta -> src
+    #return cv2.remap(-src_map, src_map, None, interpolation=cv2.INTER_LINEAR)
+
 def apply_opt(img, opt, scale=1.0, inv=True):
     n,m = np.shape(img)[:2]
     g = np.mgrid[0:n,0:m]
@@ -26,42 +67,47 @@ def apply_opt(img, opt, scale=1.0, inv=True):
                 interpolation=cv2.INTER_LINEAR
                 )
     else:
-        #opt1 : simple
-        res = np.full_like(img, 255)
+        ##opt1 : simple
+        #res = np.full_like(img, 255)
 
-        fmag = np.linalg.norm(mp, axis=-1)
-        print fmag.shape, mp.shape
+        #fmag = np.linalg.norm(mp, axis=-1)
+        #print fmag.shape, mp.shape
 
-        idx = np.argsort(fmag.ravel())
-        #idx = np.arange(fmag.size).reshape(fmag.shape)
+        #idx = np.argsort(fmag.ravel())
+        ##idx = np.arange(fmag.size).reshape(fmag.shape)
 
-        #idx = np.unravel_index(idx, fmag.shape)
+        ##idx = np.unravel_index(idx, fmag.shape)
 
-        #mp, uidx = np.unique(mp[idx], axis=2)
-        #g = g[uidx]
-         
-        mp_j = mp[...,0].ravel()[idx].reshape( (n,m) )#[idx]
-        mp_i = mp[...,1].ravel()[idx].reshape( (n,m) )#[idx]
-        g_j  = g[...,0].ravel()[idx].reshape( (n,m) )#[idx]
-        g_i  = g[...,1].ravel()[idx].reshape( (n,m) )#[idx]
+        ##mp, uidx = np.unique(mp[idx], axis=2)
+        ##g = g[uidx]
+        # 
+        #mp_j = mp[...,0].ravel()[idx].reshape( (n,m) )#[idx]
+        #mp_i = mp[...,1].ravel()[idx].reshape( (n,m) )#[idx]
+        #g_j  = g[...,0].ravel()[idx].reshape( (n,m) )#[idx]
+        #g_i  = g[...,1].ravel()[idx].reshape( (n,m) )#[idx]
 
-        mp_j  = np.clip(mp_j, 0, m-1).astype(np.int32)
-        mp_i  = np.clip(mp_i, 0, n-1).astype(np.int32)
-        g_j  = np.clip(g_j, 0, m-1).astype(np.int32)
-        g_i  = np.clip(g_i, 0, n-1).astype(np.int32)
-        res[mp_i, mp_j] = img[g_i, g_j]
-        return res
+        #mp_j  = np.clip(mp_j, 0, m-1).astype(np.int32)
+        #mp_i  = np.clip(mp_i, 0, n-1).astype(np.int32)
+        #g_j  = np.clip(g_j, 0, m-1).astype(np.int32)
+        #g_i  = np.clip(g_i, 0, n-1).astype(np.int32)
+        #res[mp_i, mp_j] = img[g_i, g_j]
+        #return res
 
         #opt2 : invert map
         #mp_f = mp.reshape(-1,2) # flatten
         #g_f  = g.reshape(-1,2)
-        #neigh = NearestNeighbors(4)
+        #neigh = NearestNeighbors(81)
         #neigh.fit(mp_f) # samples from x_b
         #idx = neigh.kneighbors(g_f, return_distance=False) # x_b -> x_a
-        #mp_i = np.mean(mp_f[idx], axis=1).reshape(n,m,2)
-        #return cv2.remap(img, mp_i, None,
-        #        interpolation=cv2.INTER_NEAREST
-        #        )
+        #mp_i = np.max(mp_f[idx], axis=1).reshape(n,m,2)
+
+        mp_i = map_inv(g, opt)
+
+        return cv2.remap(img, mp_i, None,
+                interpolation=cv2.INTER_NEAREST,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(255,0,0)
+                )
 
 def make_color_wheel():
     """
@@ -262,14 +308,16 @@ class FlowShow(object):
     AX_IMG2=2
     AX_FLOW=3
     AX_OVLY=4
-    AX_I1I2=5 # apply flow i1->i2
-    AX_I2I1=6 # apply flow i2->i1 (inverse)
-    AX_FLOX=7 # flow-x component
-    AX_FLOY=8 # flow-y component
-    AX_CODE=9 # show middlebury color code
-    AX_GRAY=10 # gray image
-    AX_FLOG=11 # apply flow on grid
-    AX_FLOF=12 # flow field
+    AX_DIFF=5
+    AX_I1I2=6 # apply flow i1->i2
+    AX_I2I1=7 # apply flow i2->i1 (inverse)
+    AX_FLOX=8 # flow-x component
+    AX_FLOY=9 # flow-y component
+    AX_CODE=10 # show middlebury color code
+    AX_GRAY=11 # gray image
+    AX_FLOG=12 # apply flow on grid
+    AX_FLOF=13 # flow field
+    AX_I2ER=14 # i2-err, (i1->i2) - i2
 
     AX_USER=100 # apply user-defined drawing fn from here
 
@@ -345,15 +393,15 @@ class FlowShow(object):
 
     def _grid(self, ref_img):
         h,w = ref_img.shape[:2]
-        grid = np.zeros(dtype=np.uint8, shape=[h,w])
-        di = max(np.round(h / 10.), 2)
-        dj = max(np.round(w / 10.), 2)
+        grid = np.full([h,w], 255, dtype=np.uint8)
+        di = max(np.round(h / 20.), 2)
+        dj = max(np.round(w / 20.), 2)
 
         gi = np.arange(0, h, di).astype(np.int32)
         gj = np.arange(0, w, dj).astype(np.int32)
 
-        grid[gi,:] = 255
-        grid[:,gj] = 255
+        grid[gi,:] = 0
+        grid[:,gj] = 0
         return grid
 
     def _draw_ax(self, ax, data, ax_type):
@@ -363,6 +411,9 @@ class FlowShow(object):
 
         # unroll data
         img1, img2, flow = data
+
+        # TODO : restructure with opcode-based cfg indexing?
+        # i.e. cfg = [STYLE={DIFF,OVLY,FLOW,PASSTHROUGH,...}]
 
         # draw
         if ax_type == FlowShow.AX_NULL:
@@ -378,9 +429,13 @@ class FlowShow(object):
             print(flow.max(), flow.min())
             ax.imshow( flow_to_image(flow) )
         elif ax_type == FlowShow.AX_OVLY:
-            ax.set_title('overlay')
+            ax.set_title('i1-i2 overlay')
             ovly = cv2.addWeighted(img1, 0.5, img2, 0.5, 0.0)
             ax.imshow(ovly)
+        elif ax_type == FlowShow.AX_DIFF:
+            ax.set_title('i1-i2 difference')
+            diff = np.clip(np.abs(np.float32(img2) - img1), 0, 255).astype(img2.dtype)
+            ax.imshow(diff)
         elif ax_type == FlowShow.AX_I1I2:
             ax.set_title('i1>i2')
             img = apply_opt(img1, flow[...,:2], inv=False)
@@ -404,26 +459,50 @@ class FlowShow(object):
         elif ax_type == FlowShow.AX_FLOG:
             ax.set_title('i1>i2(g)')
             grid = self._grid(img1)
-            img = apply_opt(grid, flow[...,:2], inv=True)
+            img = apply_opt(grid, flow[...,:2], inv=False)
             ax.imshow(img, cmap='gray')
         elif ax_type == FlowShow.AX_FLOF:
             ax.set_title('flow_field')
             n, m = np.shape(flow)[:2]
 
-            srcx, srcy  = np.meshgrid(
-                    np.arange(0,n,5),
-                    np.arange(0,m,5),
-                    indexing='xy')
+            srcy, srcx = np.meshgrid(
+                    np.arange(0,n),
+                    np.arange(0,m),
+                    indexing='ij')
+            flox, floy = flow[...,0], flow[...,1]
 
+            n_sample = int(1024 / 1.618)
+            s = np.maximum(np.round( (n*m) / n_sample), 1)
+            idx = np.arange(0, n*m, s)
+            print len(idx)
+            #idx = np.random.choice(n*m, size=n_sample, replace=True)
+            [srcx,srcy,flox,floy] = [e.ravel()[idx] for e in 
+                    (srcx,srcy,flox,floy)]
+
+            ax.set_ylim(0, n)
+            ax.set_xlim(0, m)
+            ax.set_aspect('equal')
             ax.quiver(
                     srcx,
                     srcy,
-                    flow[...,0], #x-y
-                    flow[...,1],
-                    angles = 'xy'
+                    flox, #x-y
+                    floy, # flip y
+                    angles = 'xy',
                     scale_units = 'xy',
-                    scale = 1
+                    scale = 1,
+                    headwidth = 9.0,
+                    headlength = 9.0
                     )
+            if not ax.yaxis_inverted():
+                ax.invert_yaxis()
+        elif ax_type == FlowShow.AX_I2ER:
+            ax.set_title('i2-(i1>i2) diff')
+            img2_r = apply_opt(img1, flow[...,:2], inv=False)
+            #ovly = cv2.addWeighted(img2, 0.5, img2_r, 0.5, 0.0)
+            ovly  = np.clip(np.abs(np.float32(img2)-img2_r), 0, 255).astype(img2.dtype)
+            #img2_d = np.sqrt(np.mean(np.square(img2 - img2_r), axis=-1))
+            #img2_d = np.float32(img2_d) / img2_d.max()
+            ax.imshow(ovly)
 
     def _draw_ax_at(self, i, j):
         ax = self.ax_[i,j]

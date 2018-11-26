@@ -64,16 +64,17 @@ def load_ilsvrc(data_root, n, size=None):
 def main():
     n_test = 32
 
-    data_root = os.path.expanduser('~/Downloads/FlyingChairs/data')
-    img1, img2, flow = load_chair(data_root, n_test)
-    #data_root = os.path.expanduser('~/dispset/data/')
-    #img1, img2, flow = load_ilsvrc(data_root, n_test)
+    #data_root = os.path.expanduser('~/Downloads/FlyingChairs/data')
+    #img1, img2, flow = load_chair(data_root, n_test)
+    data_root = os.path.expanduser('~/dispset/data/')
+    img1, img2, flow = load_ilsvrc(data_root, n_test)
 
-    disp = FlowShow(n=3, m=2)
+    disp = FlowShow(code_path='middlebury_flow_code.png')
     disp.configure([
-        [FlowShow.AX_IMG1, FlowShow.AX_IMG2],
-        [FlowShow.AX_I1I2, FlowShow.AX_OVLY],
-        [FlowShow.AX_FLOW, FlowShow.AX_CODE]])
+        [FlowShow.AX_IMG1, FlowShow.AX_IMG2, FlowShow.AX_I2ER, FlowShow.AX_DIFF],
+        [FlowShow.AX_I1I2, FlowShow.AX_FLOW, FlowShow.AX_I2I1, FlowShow.AX_OVLY],
+        [FlowShow.AX_FLOG, FlowShow.AX_FLOF, FlowShow.AX_CODE, FlowShow.AX_NULL],
+        ])
     disp.add(img1, img2, flow)
     disp.show()
 
