@@ -268,8 +268,9 @@ class FlowNetBB(object):
             # decay weight per size of flow-image
 
             # opt1 : dynamic error weight scaling (over step)
-            err_scale = tf.train.exponential_decay(cfg.FN_ERR_SCALE,
-                self.step_, cfg.FN_ERR_SCALE_DECAY_STEPS, cfg.FN_ERR_SCALE_DECAY_FACTOR, staircase=False)
+            # using exp so that err_scale is always >= 1
+            err_scale = tf.exp(tf.train.exponential_decay(tf.log(cfg.FN_ERR_SCALE),
+                self.step_, cfg.FN_ERR_SCALE_DECAY_STEPS, cfg.FN_ERR_SCALE_DECAY_FACTOR, staircase=False))
             ws = tf.pow(err_scale, -tf.to_float(tf.range(len(ks))) )
             ws = ws / tf.reduce_sum(ws) # normalize weights
 
