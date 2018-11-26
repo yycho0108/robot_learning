@@ -61,7 +61,7 @@ def augment_image_affine_1(img, opt, size=None):
         l_lim = tf.cast(tf.reshape([0,0], (1,1,2)), tf.float32)
         u_lim = tf.cast(tf.reshape([size[1], size[0]], (1,1,2)), tf.float32)
         msk = tf.cast(tf.logical_and(
-                tf.math.greater(dst, l_lim),
+                tf.math.greater_eq(dst, l_lim),
                 tf.math.less(dst, u_lim)),tf.float32)
         msk = tf.reduce_min(msk, axis=-1, keepdims=True) # ~= logical_and
         #msk = tf.logical_and(msk, opt1[...,2]

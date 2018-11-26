@@ -196,6 +196,59 @@ def flow_to_image(flow, display=False, thresh=1e7):
 
     return np.uint8(img)
 
+#def flow_to_image_tf(flow, thresh=1e7, eps=1e-9):
+#    """
+#    Convert flow into middlebury color code image
+#    :param flow: optical flow map
+#    :return: optical flow image in middlebury color
+#    """
+#    # from https://github.com/vt-vl-lab/tf_flownet2.git
+#
+#
+#    # first, rectify by flow magnitude
+#    rad  = tf.norm(flow, axis=-1)
+#    flow = tf.where(rad > thresh,
+#            tf.zeros_like(flow),
+#            flow)
+#
+#
+#    rad  = tf.norm(flow, axis=-1)
+#    flow = flow / (eps + tf.reduce_max(rad))
+#
+#    ang  = 
+#
+#    u,v = tf.unstack(flow, axis=-1)[:2]
+#
+#    u = flow[:, :, 0]
+#    v = flow[:, :, 1]
+#
+#    maxu = -999.
+#    maxv = -999.
+#    minu = 999.
+#    minv = 999.
+#
+#    msk_unk = tf.logical_or(
+#            tf.greater(tf.abs(u), thresh),
+#            tf.greater(tf.abs(v), thresh)
+#            ) # 'unknown'
+#    u = tf.where(msk_unk, tf.zeros_like(u), u)
+#    v = tf.where(msk_unk, tf.zeros_like(v), v)
+#
+#    #rad = np.sqrt(u ** 2 + v ** 2)
+#    rad = tf.norm(flow, axis=-1)
+#    rad_max = tf.maximum(-1.0, tf.reduce_max(rad))
+#
+#    u = u/(rad_max + eps)
+#    v = v/(rad_max + eps)
+#
+#    img = compute_color(u, v)
+#
+#    idx = np.repeat(idxUnknow[:, :, np.newaxis], 3, axis=2)
+#    img[idx] = 0
+#
+#    return np.uint8(img)
+
+
 
 class FlowShow(object):
     # indexing
@@ -216,6 +269,7 @@ class FlowShow(object):
     AX_CODE=9 # show middlebury color code
     AX_GRAY=10 # gray image
     AX_FLOG=11 # apply flow on grid
+    AX_FLOF=12 # flow field
 
     AX_USER=100 # apply user-defined drawing fn from here
 
@@ -352,6 +406,24 @@ class FlowShow(object):
             grid = self._grid(img1)
             img = apply_opt(grid, flow[...,:2], inv=True)
             ax.imshow(img, cmap='gray')
+        elif ax_type == FlowShow.AX_FLOF:
+            ax.set_title('flow_field')
+            n, m = np.shape(flow)[:2]
+
+            srcx, srcy  = np.meshgrid(
+                    np.arange(0,n,5),
+                    np.arange(0,m,5),
+                    indexing='xy')
+
+            ax.quiver(
+                    srcx,
+                    srcy,
+                    flow[...,0], #x-y
+                    flow[...,1],
+                    angles = 'xy'
+                    scale_units = 'xy',
+                    scale = 1
+                    )
 
     def _draw_ax_at(self, i, j):
         ax = self.ax_[i,j]
