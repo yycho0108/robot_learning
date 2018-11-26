@@ -126,7 +126,7 @@ def main():
     config = None
 
     with tf.Session(graph=graph, config=config) as sess:
-        sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+        #sess = tf_debug.LocalCLIDebugWrapperSession(sess)
         coord = tf.train.Coordinator()
         def enqueue():
             q_ts = [q_img, q_lab] # input tensors

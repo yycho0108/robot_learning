@@ -210,6 +210,7 @@ class VONet(object):
 
             err_x = tf.reduce_mean(tf.square(prd_x - lab_x))
             err_y = tf.reduce_mean(tf.square(prd_y - lab_y))
+            #err_h = tf.reduce_mean(tf.square(prd_h - lab_h))
             err_h = tf.reduce_mean(ang_err(prd_h, lab_h))
 
             err = tf.losses.compute_weighted_loss(
