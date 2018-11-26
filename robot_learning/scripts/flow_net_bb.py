@@ -10,9 +10,11 @@ import sys
 
 slim = tf.contrib.slim
 
-root = '/home/jamiecho/Repos/tf_flownet2'
-sys.path.append(root)
-from FlowNet2_src.correlation import correlation as xcor
+import os
+
+fn_repo = os.getenv('FN_REPO')
+sys.path.append(fn_repo)
+from correlation import correlation as xcor
 
 def normalizer_no_op(x, *a, **k):
     """ passthrough normalization """
