@@ -274,6 +274,15 @@ class FlowNetBB(object):
             ws = tf.pow(err_scale, -tf.to_float(tf.range(len(ks))) )
             ws = ws / tf.reduce_sum(ws) # normalize weights
 
+            # opt1.2 : dynamic error with possible final "topple"
+            # (numerically stable)
+            ws = -tf.log(err_scale) * tf.to_float(tf.range(len(ks)))
+            #ws = ws - np.max(ws)
+            #ws = np.exp(ws)
+            #ws = ws / tf.reduce_sum(ws)
+            ws = tf.nn.softmax(ws)
+            # TODO : verify equivalent ^^^
+
             # opt2 : static error weight scaling
             # ws = np.float32([cfg.FN_ERR_DECAY**-e for e in range(len(ks))])
             # ws /= ws.sum() # normalize weights
