@@ -25,7 +25,7 @@ class SE2CompositeLayer(LayerRNNCell):
         return self._output_size
 
     def build(self, inputs_shape):
-        print(type(inputs_shape), inputs_shape)
+        print('se2', type(inputs_shape), inputs_shape)
         self.built = True
 
     def __call__(self, inputs, state,
@@ -33,6 +33,10 @@ class SE2CompositeLayer(LayerRNNCell):
         # returns output, state
         # state  = (x, y, h)
         # inputs = (dx, dy, dh)
+
+        print('se2-input', inputs.shape)
+        print('se2-state', state.shape)
+
         x, y, h = tf.unstack(state, axis=-1)
         dx, dy, dh = tf.unstack(inputs, axis=-1)
         c = tf.cos(h)

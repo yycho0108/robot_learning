@@ -166,7 +166,7 @@ class DataManager(object):
         delta = np.concatenate([np.zeros_like(delta[0:1]), delta], axis=0)
         return img, delta
 
-    def get_1(self, data, time_steps, flip=False):
+    def get_1(self, data, time_steps, flip=False, target_size=None):
         img, lab = data
         i0 = np.random.randint(0, high=len(img)-time_steps)
         img, lab = img[i0:i0+time_steps], lab[i0:i0+time_steps]
@@ -178,17 +178,20 @@ class DataManager(object):
             lab = np.copy(lab)
             lab[:,1:] = lab[:,1:] * -1.0
 
+        if target_size is not None:
+            img = cv2.resize(img, target_size)
+
         return [img, lab]
 
     def get(self, batch_size, time_steps, aug=True,
-            as_path=False
+            as_path=False, target_size=None
             ):
         set_idx = np.random.choice(len(self.data_),
                 batch_size, replace=True, p=self.prob_)
         lr_flip = np.random.choice(2, batch_size, replace=True).astype(np.bool)
         if not aug:
             lr_flip = np.zeros_like(lr_flip)
-        data = [self.get_1(self.data_[i], time_steps, f) for (i,f) in zip(set_idx, lr_flip)]
+        data = [self.get_1(self.data_[i], time_steps, f, target_size) for (i,f) in zip(set_idx, lr_flip)]
         img, lab = zip(*data)
         if aug:
             # TODO : restore augmentation

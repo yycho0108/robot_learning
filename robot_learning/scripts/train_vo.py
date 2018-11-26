@@ -15,6 +15,8 @@ from utils import anorm, mkdir, proc_img, no_op
 
 import signal
 
+from tensorflow.python import debug as tf_debug
+
 class StopRequest(object):
     def __init__(self):
         self._start = False
@@ -37,7 +39,7 @@ def main():
     #restore_ckpt = '/home/jamiecho/fn/15/ckpt/model.ckpt-1000'
 
     fn_ckpt = None
-    #fn_ckpt = os.path.expanduser('~/fn/69/ckpt/model.ckpt-20000')
+    #fn_ckpt = os.path.expanduser('~/fn/4/ckpt/model.ckpt-80000')
 
     is_training = True
 
@@ -71,7 +73,8 @@ def main():
 
     graph = tf.get_default_graph()
     with graph.as_default():
-        global_step = slim.get_or_create_global_step()
+        global_step = tf.train.get_or_create_global_step()
+
         with tf.name_scope('queue'):
             q_img = tf.placeholder(tf.float32, 
                         [None, cfg.TIME_STEPS, cfg.IMG_HEIGHT, cfg.IMG_WIDTH, cfg.IMG_DEPTH], name='q_img')
@@ -123,12 +126,13 @@ def main():
     config = None
 
     with tf.Session(graph=graph, config=config) as sess:
+        sess = tf_debug.LocalCLIDebugWrapperSession(sess)
         coord = tf.train.Coordinator()
         def enqueue():
             q_ts = [q_img, q_lab] # input tensors
             while not coord.should_stop():
                 q_vs = dm.get(batch_size=8, time_steps=cfg.TIME_STEPS, aug=True,
-                        as_path=True
+                        as_path=True, target_size=(cfg.IMG_WIDTH,cfg.IMG_HEIGHT)
                         )
                 q_vs[0] = proc_img(q_vs[0])
                 sess.run(enqueue_op, feed_dict={t:v for (t,v) in zip(q_ts, q_vs)})
@@ -143,27 +147,34 @@ def main():
 
         if restore_ckpt is not None:
             saver.restore(sess, restore_ckpt)
+
         i = i0 = sess.run(global_step)
 
         q_threads = [threading.Thread(target=enqueue) for _ in range(cfg.Q_THREADS)]
-        for t in q_threads:
-            t.daemon = True
-            t.start()
+        #for t in q_threads:
+        #    t.daemon = True
+        #    t.start()
 
         sig.start()
         for i in range(i0, cfg.TRAIN_STEPS):
             if sig._stop:
                 break
+
             # usual training
-            # img, lab = dm.get(batch_size=cfg.BATCH_SIZE, time_steps=cfg.TIME_STEPS, aug=True)
-            # img = proc_img(img)
-            s, err, _ = sess.run([summary_t, net.err_, net.opt_]) #{net.img_ : img, net.lab_ : lab})
+            img, lab = dm.get(batch_size=cfg.BATCH_SIZE, time_steps=cfg.TIME_STEPS, aug=True,
+                    as_path=False, target_size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT)
+                    )
+            img = proc_img(img)
+            s, err, _ = sess.run([summary_t, net.err_, net.opt_], {net.img_ : img, net.lab_ : lab})
+
+            # queue-based
+            #s, err, _ = sess.run([summary_t, net.err_, net.opt_])
             writer_t.add_summary(s, i)
 
             if (i>0) and (i%cfg.VAL_STEPS)==0:
                 # validation
                 img, lab = dm_v.get(batch_size=cfg.VAL_BATCH_SIZE, time_steps=cfg.TIME_STEPS, aug=True,
-                        as_path=True
+                        as_path=False, target_size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT)
                         )
                 img = proc_img(img)
                 s_v, err_v = sess.run([summary_v, net_v.err_],

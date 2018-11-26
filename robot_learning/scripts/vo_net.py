@@ -6,6 +6,7 @@ from tensorflow.contrib import slim
 from utils import no_op
 from tensorflow.contrib.framework import nest
 from se2 import SE2CompositeLayer
+from utils.tf_utils import tf_shape, axial_reshape, split_reshape
 
 def ang_err(h0, h1):
     c0, s0 = tf.cos(h0), tf.sin(h0)
@@ -56,29 +57,30 @@ class VONet(object):
             cnn = self._build_cnn(img, log)
             rnn, rnn_s1, rnn_s0 = self._build_rnn(cnn, log)
             dps = self._build_dps(rnn, log)
-            poss, pos = tf.nn.dynamic_rnn(
-                    cell=SE2CompositeLayer(),
-                    inputs=dps,
-                    dtype=tf.float32)
-            print('pos')
-            print(poss.shape)
-            print(pos.shape)
+            #x_pos, x_poss, y_pos, y_poss = self._build_pos(dps, lab, log)
 
-        err_c = self._build_err(poss, lab, log=log)
+        #err_c, (err_x, err_y, err_h) = self._build_err(x_poss, y_poss, log=log)
+        err_c, (err_x, err_y, err_h) = self._build_err(dps, lab, log=log)
 
         if self.train_:
             reg_c = tf.add_n(tf.losses.get_regularization_losses())
             tf.summary.scalar('err_loss', err_c)
             tf.summary.scalar('reg_loss', reg_c)
             cost = (err_c + reg_c)
-
             opt       = self._build_opt(cost, log=log)
             self.opt_ = opt
-        _   = self._build_log(log=log, err=err_c, lab=lab, pos=pos)
+
+        _   = self._build_log(log=log,
+                lab=lab, dps=dps,
+                err_c=err_c,
+                err_x=err_x,
+                err_y=err_y,
+                err_h=err_h
+                )
 
         # cache tensors
         self.img_ = img
-        self.pos_ = pos
+        self.dps_ = dps
         self.lab_ = lab
         self.err_ = err_c
         self.rnn_s1_ = rnn_s1
@@ -91,55 +93,31 @@ class VONet(object):
             log(w.name, s)
         log('total : {}'.format(sum(ss)))
         log('-------------')
-
         return
 
     def _build_cnn(self, x, log=no_op):
         log('- build-cnn -')
         with tf.name_scope('build_cnn', [x]):
             with tf.name_scope('format_in'):
-                s_s = x.get_shape().as_list()
-                s_d = tf.unstack(tf.shape(x))
-                log('s-static',  s_s)
-                log('s-dynamic', s_d)
                 log('cnn-input', x.shape)
-                x = tf.reshape(x, [s_d[0]*s_d[1], s_s[2], s_s[3], s_s[4]])
+                dim_t = tf_shape(x)[1]
+                x = axial_reshape(x, [(0,1), 2, 3, 4]) # (merge "time" with batch)
                 log('cnn-format', x.shape)
             with tf.name_scope('cnn'):
                 with slim.arg_scope(self._arg_scope()):
                     x = slim.conv2d(x, 64, 7, 2, scope='conv', padding='SAME')
-
                     x = slim.stack(x,
                             slim.separable_conv2d,
-                            [(128,3,1,2),(256,3,1,2),(512,3,1,2)],
-                            scope='sconv_pre',
+                            [(128,3,1,2),(256,3,1,2),(196,1,1,1),(384,3,1,2),(256,1,1,1),(512,3,1,2),(512,1,1,1)],
+                            scope='sconv',
                             padding='SAME',
                             )
-                    log('post-conv', x.shape) #NTx30x40
-
-                    x = slim.stack(x,
-                            slim.separable_conv2d,
-                            [(256,3,1,1), (256,3,1,1), (256,3,1,1), (512,3,1,1), (512,3,1,1)],
-                            scope='sconv_post',
-                            padding='VALID'
-                            )
                     log('post-sconv', x.shape) #NTx4x5
-                    x = tf.reduce_mean(x, axis=[1,2]) # avg pooling
+                    x = tf.reduce_mean(x, axis=[1,2])
                     x = slim.dropout(x, keep_prob=0.2, is_training=self.train_, scope='dropout')
                     log('post-cnn', x.shape)
-                    #x = slim.stack(x,
-                    #        slim.conv2d,
-                    #        [(64,7,2),(128,3,2),(128,3,2),(256,3,2)],
-                    #        scope='conv')
-                    #log('post-conv', x.shape) #NTx30x40
-                    #x = slim.stack(x,
-                    #        slim.separable_conv2d,
-                    #        [(256,3,1,2), (256,3,1,2), (256,3,1,2), (512,3,1,2)], scope='sconv')
-                    #log('post-sconv', x.shape) #NTx4x5
-                    #x = tf.reduce_mean(x, axis=[1,2]) # avg pooling
-                    #log('post-cnn', x.shape)
             with tf.name_scope('format_out'):
-                x = tf.reshape(x, [s_d[0], s_d[1], 512])
+                x = split_reshape(x, 0, dim_t) # ==> [N,T,...]
                 log('cnn-output', x.shape)
         log('-------------')
         return x
@@ -206,17 +184,38 @@ class VONet(object):
         log('-------------')
         return x
 
-    def _build_err(self, x, y, k=cfg.W_COST, log=no_op):
+    def _build_pos(self, x, y, log=no_op):
+        log('-build-pos-')
+        with tf.name_scope('build-pos'):
+            cell = SE2CompositeLayer()
+
+            x_poss, x_pos=tf.nn.dynamic_rnn(
+                    cell=cell,
+                    inputs=x,
+                    dtype=tf.float32)
+
+            y_poss, y_pos=tf.nn.dynamic_rnn(
+                    cell=cell,
+                    inputs=y,
+                    dtype=tf.float32)
+        log('pos-output', x_poss.shape, x.shape)
+        log('-----------')
+        return x_pos, x_poss, y_pos, y_poss
+
+    def _build_err(self, x, y, ws=cfg.W_COST, log=no_op):
         log('- build-err -')
         with tf.name_scope('build-err', [x,y]):
             prd_x,prd_y,prd_h = tf.unstack(x, axis=-1)
             lab_x,lab_y,lab_h = tf.unstack(y, axis=-1)
 
-            err_x = k[0]*tf.reduce_mean(tf.square(prd_x - lab_x))
-            err_y = k[1]*tf.reduce_mean(tf.square(prd_y - lab_y))
-            err_h = k[2]*tf.reduce_mean(ang_err(prd_h, lab_h))
-            err = (err_x + err_y + err_h)
+            err_x = tf.reduce_mean(tf.square(prd_x - lab_x))
+            err_y = tf.reduce_mean(tf.square(prd_y - lab_y))
+            err_h = tf.reduce_mean(ang_err(prd_h, lab_h))
 
+            err = tf.losses.compute_weighted_loss(
+                    losses=[err_x, err_y, err_h],
+                    weights=ws
+                    )
             #err = tf.square(x-y)
             #log('raw-err', err.shape)
             #scale orientation error!
@@ -224,7 +223,7 @@ class VONet(object):
 
             log('fin-err', err.shape)
         log('-------------')
-        return err
+        return err, [err_x, err_y, err_h]
 
     def _build_opt(self, c, log=no_op):
         log('- build-opt -')
@@ -247,9 +246,15 @@ class VONet(object):
 
     def _build_log(self, log=no_op, **tensors):
         log('- build-log -')
-        tf.summary.scalar('err', tensors['err'], collections=self.col_)
-        tf.summary.histogram('pos', tensors['pos'], collections=self.col_)
+        tf.summary.scalar('err_c', tensors['err_c'], collections=self.col_)
+
+        tf.summary.scalar('err_x', tensors['err_x'], collections=self.col_)
+        tf.summary.scalar('err_y', tensors['err_y'], collections=self.col_)
+        tf.summary.scalar('err_h', tensors['err_h'], collections=self.col_)
+
+        tf.summary.histogram('dps', tensors['dps'], collections=self.col_)
         tf.summary.histogram('lab', tensors['lab'], collections=self.col_)
+
         #if self.train_:
         #    tf.summary.histogram('grad', tensors['grad'], collections=self.col_)
         log('-------------')

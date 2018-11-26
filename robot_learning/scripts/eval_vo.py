@@ -55,12 +55,12 @@ def main():
             rnn_s = None
             for img1, lab1 in zip(t_img, t_lab):
                 if rnn_s is None:
-                    pos1, rnn_s = sess.run([net.pos_, net.rnn_s1_], 
+                    dps1, rnn_s = sess.run([net.dps_, net.rnn_s1_], 
                             {net.img_ : img1[nax,nax,...]})
                 else:
-                    pos1, rnn_s = sess.run([net.pos_, net.rnn_s1_], 
+                    dps1, rnn_s = sess.run([net.dps_, net.rnn_s1_], 
                             {net.img_ : img1[nax,nax,...], net.rnn_s0_ : rnn_s})
-                t_pos.append(pos1[0,0])
+                t_pos.append(dps1[0,0])
             pos.append(t_pos)
         pos = np.float32(pos)
         print(np.shape(pos), np.shape(lab))

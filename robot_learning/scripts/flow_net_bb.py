@@ -262,8 +262,11 @@ class FlowNetBB(object):
                 key = 'err_{}x{}'.format(w,h)
                 errs[key] = err_x(f, y)
             ks = ['err_8x6', 'err_16x12','err_32x24', 'err_64x48', 'err_128x96', 'err_256x192']
-            ws = np.float32([2**-e for e in range(1,7)])
+
+            # decay weight per size of flow-image
+            ws = np.float32([cfg.FN_ERR_DECAY**-e for e in range(len(ks))])
             ws /= ws.sum()
+
             #err = tf.reduce_mean(errs.values())
             err = tf.losses.compute_weighted_loss(
                     losses=[errs[k] for k in ks],
