@@ -28,12 +28,8 @@ def map_inv(src, delta, window=9, eps=1e-9):
     weight  = (1.0 / (dist + eps)).reshape(shape[0], shape[1], -1, 1)
 
     # below is probably only valid for opt-flow related applications
-    weight *= np.linalg.norm(delta_i)[...,np.newaxis,np.newaxis]
-
-    #print 'di', delta_i.shape
-    #print 'w', weight.shape
-    # TODO : also weigh by flow magnitude??
-    # i.e. weight = weight * np.linalg.norm(delta_i)
+    # weigh by flow magnitude
+    # weight *= np.linalg.norm(delta_i)[...,np.newaxis,np.newaxis]
 
     # weighted mean
     delta_i = np.sum(delta_i*weight, axis=2) / (np.sum(weight, axis=2))
@@ -318,6 +314,7 @@ class FlowShow(object):
     AX_FLOG=12 # apply flow on grid
     AX_FLOF=13 # flow field
     AX_I2ER=14 # i2-err, (i1->i2) - i2
+    AX_I2OV=15 # i2-overlay, (i1->i2), i2
 
     AX_USER=100 # apply user-defined drawing fn from here
 
@@ -394,14 +391,12 @@ class FlowShow(object):
     def _grid(self, ref_img):
         h,w = ref_img.shape[:2]
         grid = np.full([h,w], 255, dtype=np.uint8)
-        di = max(np.round(h / 20.), 2)
-        dj = max(np.round(w / 20.), 2)
-
-        gi = np.arange(0, h, di).astype(np.int32)
-        gj = np.arange(0, w, dj).astype(np.int32)
-
-        grid[gi,:] = 0
-        grid[:,gj] = 0
+        di = int(max(np.round(h / 32.), 2))
+        dj = int(max(np.round(w / 32.), 2))
+        grid[0:h:di,:] = 0
+        grid[1:h:di,:] = 0
+        grid[:,0:w:dj] = 0
+        grid[:,1:w:dj] = 0
         return grid
 
     def _draw_ax(self, ax, data, ax_type):
@@ -498,10 +493,12 @@ class FlowShow(object):
         elif ax_type == FlowShow.AX_I2ER:
             ax.set_title('i2-(i1>i2) diff')
             img2_r = apply_opt(img1, flow[...,:2], inv=False)
-            #ovly = cv2.addWeighted(img2, 0.5, img2_r, 0.5, 0.0)
-            ovly  = np.clip(np.abs(np.float32(img2)-img2_r), 0, 255).astype(img2.dtype)
-            #img2_d = np.sqrt(np.mean(np.square(img2 - img2_r), axis=-1))
-            #img2_d = np.float32(img2_d) / img2_d.max()
+            diff = np.clip(np.abs(np.float32(img2)-img2_r), 0, 255).astype(img2.dtype)
+            ax.imshow(diff)
+        elif ax_type == FlowShow.AX_I2OV:
+            ax.set_title('i2,(i1>i2) overlay')
+            img2_r = apply_opt(img1, flow[...,:2], inv=False)
+            ovly = cv2.addWeighted(img2, 0.5, img2_r, 0.5, 0.0)
             ax.imshow(ovly)
 
     def _draw_ax_at(self, i, j):
