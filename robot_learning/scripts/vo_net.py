@@ -46,7 +46,6 @@ class VONet(object):
             if self.img_ is None:
                 img = tf.placeholder(tf.float32, 
                         [None, None, cfg.IMG_HEIGHT, cfg.IMG_WIDTH, cfg.IMG_DEPTH], name='img')
-                # TODO : consider stacking img_{t-1} and img_{t}?
             else:
                 img = self.img_
             if self.lab_ is None:
@@ -58,10 +57,10 @@ class VONet(object):
             cnn = self._build_cnn(img, log)
             rnn, rnn_s1, rnn_s0 = self._build_rnn(cnn, log)
             dps = self._build_dps(rnn, log)
-            #x_pos, x_poss, y_pos, y_poss = self._build_pos(dps, lab, log)
+            x_pos, x_poss, y_pos, y_poss = self._build_pos(dps, lab, log)
 
-        #err_c, (err_x, err_y, err_h) = self._build_err(x_poss, y_poss, log=log)
-        err_c, (err_x, err_y, err_h) = self._build_err(dps, lab, log=log)
+        err_c, (err_x, err_y, err_h) = self._build_err(x_poss, y_poss, log=log)
+        #err_c, (err_x, err_y, err_h) = self._build_err(dps, lab, log=log)
 
         if self.train_:
             reg_c = tf.add_n(tf.losses.get_regularization_losses())
@@ -192,12 +191,12 @@ class VONet(object):
 
             x_poss, x_pos=tf.nn.dynamic_rnn(
                     cell=cell,
-                    inputs=x,
+                    inputs=x[:,1:], # output @ t=0 shouldn't count
                     dtype=tf.float32)
 
             y_poss, y_pos=tf.nn.dynamic_rnn(
                     cell=cell,
-                    inputs=y,
+                    inputs=y[:,1:], # output @ t=0 shouldn't count
                     dtype=tf.float32)
         log('pos-output', x_poss.shape, x.shape)
         log('-----------')
@@ -304,16 +303,16 @@ def main():
                 log=print
                 )
 
-    with tf.Session(graph=graph) as sess:
-        sess.run(tf.global_variables_initializer())
-        img = np.zeros(dtype=np.float32,
-                shape=[cfg.BATCH_SIZE, cfg.TIME_STEPS, cfg.IMG_HEIGHT, cfg.IMG_WIDTH, cfg.IMG_DEPTH])
-        lab = np.zeros(dtype=np.float32,
-                shape=[cfg.BATCH_SIZE, cfg.TIME_STEPS, 3])
-        print(lab.shape)
-        dps, err, _ = sess.run([net.dps_, net.err_, net.opt_],
-                feed_dict={net.img_:img, net.lab_:lab})
-        print(dps.shape)
+    #with tf.Session(graph=graph) as sess:
+    #    sess.run(tf.global_variables_initializer())
+    #    img = np.zeros(dtype=np.float32,
+    #            shape=[cfg.BATCH_SIZE, cfg.TIME_STEPS, cfg.IMG_HEIGHT, cfg.IMG_WIDTH, cfg.IMG_DEPTH])
+    #    lab = np.zeros(dtype=np.float32,
+    #            shape=[cfg.BATCH_SIZE, cfg.TIME_STEPS, 3])
+    #    print(lab.shape)
+    #    dps, err, _ = sess.run([net.dps_, net.err_, net.opt_],
+    #            feed_dict={net.img_:img, net.lab_:lab})
+    #    print(dps.shape)
 
 if __name__ == "__main__":
     main()

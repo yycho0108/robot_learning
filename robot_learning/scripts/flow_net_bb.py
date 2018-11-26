@@ -359,7 +359,7 @@ class FlowNetBB(object):
                 ):
             with slim.arg_scope(
                     [slim.conv2d, slim.separable_conv2d, slim.conv2d_transpose],
-                    padding='VALID',
+                    padding='SAME',
                     data_format='NHWC',
                     activation_fn=tf.nn.elu,
                     weights_regularizer=(slim.l2_regularizer(1e-6) if self.train_ else None),

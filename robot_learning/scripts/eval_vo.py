@@ -21,7 +21,8 @@ def main():
     # restore_ckpt = '/tmp/vo/20/ckpt/model.ckpt-4'
     #restore_ckpt = os.path.expanduser('~/vo/0/ckpt/model.ckpt-1000')
     #restore_ckpt = os.path.expanduser('~/vo/8/ckpt/model.ckpt-2000')
-    restore_ckpt = os.path.expanduser('~/vo/19/ckpt/model.ckpt-2000')
+    #restore_ckpt = os.path.expanduser('~/vo/19/ckpt/model.ckpt-2000')
+    restore_ckpt = os.path.expanduser('~/vo/50/ckpt/model.ckpt-2000')
     is_training = False
 
     # override cfg params
@@ -44,11 +45,12 @@ def main():
         sess.run(tf.global_variables_initializer())
         saver.restore(sess, restore_ckpt)
 
-        img, lab = dm.get(batch_size=n_test, time_steps=n_step)
+        img, lab = dm.get(batch_size=n_test, time_steps=n_step,
+                target_size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT)
+                )
         pimg = proc_img(img)
         nax = np.newaxis
 
-        # TODO : try to also feed rnn_s0_ and stuff
         pos = []
         for t_img, t_lab in zip(pimg, lab):
             t_pos = []

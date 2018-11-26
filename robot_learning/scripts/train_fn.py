@@ -134,16 +134,25 @@ def main():
                 pimg = proc_img_tf(img)
                 plab = lab
 
+        # =========================
         # initial ramp-up 1e-6 -> 1e-4
-        lr0 = tf.train.exponential_decay(cfg.LR_RAMP_0,
-                global_step, cfg.FN_RAMP_STEPS, cfg.FN_LEARNING_RATE/cfg.FN_RAMP_0, staircase=False)
+        #lr0 = tf.train.exponential_decay(cfg.FN_LR_RAMP_0,
+        #        global_step, cfg.FN_LR_RAMP_STEPS, cfg.FN_LEARNING_RATE/cfg.FN_RAMP_0, staircase=False)
         
         # standard decay 1e-4 -> 1e-3
-        lr1 = tf.train.exponential_decay(cfg.FN_LEARNING_RATE,
-                global_step, cfg.FN_STEPS_PER_DECAY, cfg.FN_DECAY_FACTOR, staircase=False)
+        lr1 = tf.train.exponential_decay(cfg.FN_LR0,
+                global_step, cfg.FN_LR_STEPS_PER_DECAY, cfg.FN_LR_DECAY_FACTOR, staircase=False)
 
+        # opt1 : ramp
         #learning_rate = tf.where(global_step < cfg.FN_RAMP_STEPS, lr0, lr1) # employ slow initial learning rate
-        learning_rate = lr1
+
+        # opt2 : standard
+        #learning_rate = lr1
+
+        # opt3 : decay + constant
+        learning_rate = tf.where(
+                global_step < cfg.FN_LR_DECAY_STEPS, lr1, cfg.FN_LR1)
+        # =========================
         
         net = FlowNetBB(global_step,
                 learning_rate=learning_rate, img=pimg, lab=plab,
@@ -175,7 +184,6 @@ def main():
                 #flow = data_pred[idx]
 
                 if (np.random.random() < 0.5):
-                    # TODO : configure probability, etc
                     # fchair-mode
                     img1, img2, flow = load_chair(chair_root, 8, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
                 else:
@@ -205,7 +213,7 @@ def main():
 
         sig.start()
         errs = []
-        for i in range(i0, cfg.FN_STOP):
+        for i in range(i0, cfg.FN_TRAIN_STEPS):
             # dataset management
             #train_cnt += cfg.FN_BATCH_SIZE
             #if train_cnt > dlen * cnt_per_data:
@@ -225,6 +233,10 @@ def main():
                 err_mean = np.mean(errs)
                 print('{} : {}'.format(i, err_mean))
                 errs = []
+                s_emean = tf.Summary(value=[
+                    tf.Summary.Value(tag="err_smooth", simple_value=err_mean)
+                    ])
+                writer_t.add_summary(s_emean, i)
             writer_t.add_summary(s, i)
 
             if (i>0) and (i%cfg.SAVE_STEPS)==0:
