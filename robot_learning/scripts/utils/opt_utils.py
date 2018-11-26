@@ -60,7 +60,9 @@ def apply_opt(img, opt, scale=1.0, inv=True):
         #msk[mp_m[...,1], mp_m[...,0], :] = 1
         #img = img * msk
         return cv2.remap(img, mp, None,
-                interpolation=cv2.INTER_LINEAR
+                interpolation=cv2.INTER_NEAREST,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(255,0,0)
                 )
     else:
         ##opt1 : simple
@@ -388,7 +390,8 @@ class FlowShow(object):
             # single-add
             self.data_.append( [img1, img2, flow] )
 
-    def _grid(self, ref_img):
+    @staticmethod
+    def _grid(ref_img):
         h,w = ref_img.shape[:2]
         grid = np.full([h,w], 255, dtype=np.uint8)
         di = int(max(np.round(h / 32.), 2))
@@ -512,10 +515,12 @@ class FlowShow(object):
         else:
             self._draw_ax(ax, self.data_[self.index_], cfg)
 
-    def encode_user(self, index, ax_type):
+    @staticmethod
+    def encode_user(index, ax_type):
         return FlowShow.AX_USER + (index * 16) + (ax_type)
 
-    def decode_user(self, code):
+    @staticmethod
+    def decode_user(code):
         code = (code - FlowShow.AX_USER)
         index = code // 16
         ax_type = code % 16
@@ -531,6 +536,13 @@ class FlowShow(object):
             n = len(v)
             self.udata_[k] = [[None,None,None] for _ in range(n)]
             self.set_user_data(k, v, t)
+
+    @staticmethod
+    def full_config():
+        cfg = np.int32([[FlowShow.AX_IMG1, FlowShow.AX_IMG2, FlowShow.AX_I2ER, FlowShow.AX_DIFF],
+                [FlowShow.AX_I2I1, FlowShow.AX_I1I2, FlowShow.AX_FLOW, FlowShow.AX_OVLY],
+                [FlowShow.AX_FLOG, FlowShow.AX_FLOF, FlowShow.AX_CODE, FlowShow.AX_I2OV]])
+        return cfg
 
     def draw(self):
         for i in range(self.n_):

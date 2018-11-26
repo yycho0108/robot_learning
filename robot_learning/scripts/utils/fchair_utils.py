@@ -70,11 +70,7 @@ def main():
     img1, img2, flow = load_ilsvrc(data_root, n_test)
 
     disp = FlowShow(code_path='middlebury_flow_code.png')
-    disp.configure([
-        [FlowShow.AX_IMG1, FlowShow.AX_IMG2, FlowShow.AX_I2ER, FlowShow.AX_DIFF],
-        [FlowShow.AX_I2I1, FlowShow.AX_I1I2, FlowShow.AX_FLOW, FlowShow.AX_OVLY],
-        [FlowShow.AX_FLOG, FlowShow.AX_FLOF, FlowShow.AX_CODE, FlowShow.AX_I2OV],
-        ])
+    disp.configure(FlowShow.full_config())
     disp.add(img1, img2, flow)
     disp.show()
 
