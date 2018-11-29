@@ -113,8 +113,15 @@ class VONet(object):
                             padding='SAME',
                             )
                     log('post-sconv', x.shape) #NTx4x5
-                    x = tf.reduce_mean(x, axis=[1,2])
+                    #x = tf.reduce_mean(x, axis=[1,2])
+
+                    #x = axial_reshape(x, [0,(1,2,3)])
+                    x = slim.separable_conv2d(x, 512, (6,8), 1, 1, scope='reduction', padding='VALID')
+                    #x = tf.expand_dims(x, 1)
+                    #x = tf.expand_dims(x, 1)
+                    #x = slim.separable_conv2d(x, 1024, 1, 1, 1, scope='reduction')
                     x = slim.dropout(x, keep_prob=0.2, is_training=self.train_, scope='dropout')
+                    x = tf.squeeze(x, [1,2])
                     log('post-cnn', x.shape)
             with tf.name_scope('format_out'):
                 x = split_reshape(x, 0, dim_t) # ==> [N,T,...]
@@ -226,21 +233,36 @@ class VONet(object):
         log('-------------')
         return err, [err_x, err_y, err_h]
 
-    def _build_opt(self, c, log=no_op):
+    def _build_opt(self, c, freeze_cnn=True, log=no_op):
         log('- build-opt -')
         opt = tf.train.AdamOptimizer(learning_rate=self.learning_rate_)
 
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+
+        if freeze_cnn:
+            log('freezing cnn')
+            train_vars = [v for v in slim.get_trainable_variables() if ('vo/sconv' not in v.name) and ('vo/conv' not in v.name)]
+            log('train variables:')
+            for v in train_vars:
+                log('\t {} : {}'.format(v.name, v.shape))
+            log('---------')
+        else:
+            # train everything
+            train_vars = None
+
         with tf.control_dependencies(update_ops):
             #grads, vars = zip(*opt.compute_gradients(c))
             #grads_c, _ = tf.clip_by_global_norm(grads, 1.0)
             #train_op = opt.apply_gradients(zip(grads_c, vars), global_step=self.step_)
             ##train_op = opt.minimize(c, global_step=self.step_)
+
             train_op = tf.contrib.layers.optimize_loss(c, self.step_,
                     learning_rate=self.learning_rate_,
                     optimizer='Adam',
                     clip_gradients=3.0,
-                    summaries=['loss', 'learning_rate', 'global_gradient_norm', 'gradients'])
+                    summaries=['loss', 'learning_rate', 'global_gradient_norm', 'gradients'],
+                    variables=train_vars
+                    )
 
         log('-------------')
         return train_op
@@ -276,14 +298,14 @@ class VONet(object):
                 padding='SAME',
                 data_format='NHWC',
                 activation_fn=tf.nn.elu,
-                weights_regularizer=(slim.l2_regularizer(1e-4) if self.train_ else None),
+                weights_regularizer=(slim.l2_regularizer(1e-6) if self.train_ else None),
                 normalizer_fn=slim.batch_norm,
                 normalizer_params=bn_params,
                 reuse=self.reuse_
                 ):
             with slim.arg_scope(
                     [slim.fully_connected],
-                    weights_regularizer=(slim.l2_regularizer(1e-4) if self.train_ else None),
+                    weights_regularizer=(slim.l2_regularizer(1e-6) if self.train_ else None),
                     reuse=self.reuse_
                     ) as sc:
                 return sc
@@ -302,6 +324,7 @@ def main():
                 train=True,
                 log=print
                 )
+        #print([v.name for v in slim.get_trainable_variables()])
 
     #with tf.Session(graph=graph) as sess:
     #    sess.run(tf.global_variables_initializer())

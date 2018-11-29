@@ -22,7 +22,8 @@ def main():
     #restore_ckpt = os.path.expanduser('~/vo/0/ckpt/model.ckpt-1000')
     #restore_ckpt = os.path.expanduser('~/vo/8/ckpt/model.ckpt-2000')
     #restore_ckpt = os.path.expanduser('~/vo/19/ckpt/model.ckpt-2000')
-    restore_ckpt = os.path.expanduser('~/vo/50/ckpt/model.ckpt-2000')
+    #restore_ckpt = os.path.expanduser('~/vo/50/ckpt/model.ckpt-2000')
+    restore_ckpt = os.path.expanduser('~/vo/3/ckpt/model.ckpt-5000')
     is_training = False
 
     # override cfg params
