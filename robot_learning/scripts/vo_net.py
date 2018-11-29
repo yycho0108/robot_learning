@@ -233,7 +233,7 @@ class VONet(object):
         log('-------------')
         return err, [err_x, err_y, err_h]
 
-    def _build_opt(self, c, freeze_cnn=True, log=no_op):
+    def _build_opt(self, c, freeze_cnn=cfg.FREEZE_CNN, log=no_op):
         log('- build-opt -')
         opt = tf.train.AdamOptimizer(learning_rate=self.learning_rate_)
 

@@ -20,6 +20,7 @@ SAVE_STEPS=100
 VAL_STEPS=10
 TRAIN_STEPS=10000
 LOG_STEPS=100
+FREEZE_CNN=True
 
 # -- Learning Rate --
 # initial ramp
