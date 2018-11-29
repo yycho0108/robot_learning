@@ -344,6 +344,7 @@ class FlowShow(object):
         self.data_ = []
         self.udata_ = {}
         self.index_ = 0
+        self.draw_cb_ = []
 
         if len(code_path) > 0:
             try:
@@ -537,6 +538,9 @@ class FlowShow(object):
             self.udata_[k] = [[None,None,None] for _ in range(n)]
             self.set_user_data(k, v, t)
 
+    def add_user_cb(self, fn):
+        self.draw_cb_.append(fn)
+
     @staticmethod
     def full_config():
         cfg = np.int32([[FlowShow.AX_IMG1, FlowShow.AX_IMG2, FlowShow.AX_I2ER, FlowShow.AX_DIFF],
@@ -548,6 +552,10 @@ class FlowShow(object):
         for i in range(self.n_):
             for j in range(self.m_):
                 self._draw_ax_at(i,j)
+
+        for fn in self.draw_cb_:
+            fn(self, self.index_, self.ax_, self.fig_)
+
         self.fig_.suptitle('Optical Flow Display {}/{}'.format(1+self.index_, len(self.data_)))
         self.fig_.canvas.draw()
 

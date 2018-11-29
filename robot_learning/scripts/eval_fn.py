@@ -61,7 +61,7 @@ def main():
         net._build()
 
     #ckpt_file = os.path.expanduser('~/fn/37/ckpt/model.ckpt-12700')
-    ckpt_file = os.path.expanduser('~/fn/4/ckpt/model.ckpt-80000')
+    ckpt_file = os.path.expanduser('~/fn/14/ckpt/model.ckpt-281000')
     #ckpt_file = os.path.expanduser('~/fn/10/ckpt/model.ckpt-43100')
 
     #gpu_options = tf.GPUOptions(allow_growth=True, per_process_gpu_memory_fraction=0.95)
@@ -78,8 +78,8 @@ def main():
     with tf.Session(graph=graph, config=config) as sess:
         net.load(sess, ckpt_file)
 
-        #img1, img2, gt_flow = load_chair(chair_root, n=n_test, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
-        img1, img2, gt_flow = load_ilsvrc(ilsvrc_root, n=n_test, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
+        img1, img2, gt_flow = load_chair(chair_root, n=n_test, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
+        #img1, img2, gt_flow = load_ilsvrc(ilsvrc_root, n=n_test, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
         imgs = np.stack([img1,img2], axis=1)
         p_imgs = proc_img(imgs)
 

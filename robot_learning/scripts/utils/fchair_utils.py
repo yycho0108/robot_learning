@@ -64,10 +64,10 @@ def load_ilsvrc(data_root, n, size=None):
 def main():
     n_test = 32
 
-    #data_root = os.path.expanduser('~/Downloads/FlyingChairs/data')
-    #img1, img2, flow = load_chair(data_root, n_test)
-    data_root = os.path.expanduser('~/dispset/data/')
-    img1, img2, flow = load_ilsvrc(data_root, n_test)
+    data_root = os.path.expanduser('~/Downloads/FlyingChairs/data')
+    img1, img2, flow = load_chair(data_root, n_test)
+    #data_root = os.path.expanduser('~/dispset/data/')
+    #img1, img2, flow = load_ilsvrc(data_root, n_test)
 
     disp = FlowShow(code_path='middlebury_flow_code.png')
     disp.configure(FlowShow.full_config())

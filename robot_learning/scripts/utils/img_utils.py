@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 from matplotlib import pyplot as plt
 from opt_utils import flow_to_image, apply_opt, FlowShow
-from fchair_utils import load_chair
+from fchair_utils import load_chair, load_ilsvrc
 
 def augment_image_affine_1(img, opt, size=None):
     # size formatted (h,w,c)
@@ -17,9 +17,9 @@ def augment_image_affine_1(img, opt, size=None):
 
         b0, bs, _ = tf.image.sample_distorted_bounding_box(
                 size, box,
-                min_object_covered=0.5,
-                area_range=[0.5, 1],
-                use_image_if_no_bounding_boxes=True
+                min_object_covered=0.25,
+                area_range=[0.25, 1],
+                use_image_if_no_bounding_boxes=True,
                 )
 
         imga, imgb = tf.unstack(img, axis=0)
@@ -35,9 +35,10 @@ def augment_image_affine_1(img, opt, size=None):
         opt1 = tf.slice(opt, b0, bs)
 
         # 2: rectify flow map scale based on box
-        dx  = opt1[...,0] * (size[1] / tf.cast(bs[1], tf.float32))
-        dy  = opt1[...,1] * (size[0] / tf.cast(bs[0], tf.float32))
-
+        xs = (size[1] / tf.to_float(bs[1]))
+        ys = (size[0] / tf.to_float(bs[0]))
+        dx  = opt1[...,0] * xs
+        dy  = opt1[...,1] * ys
 
         img2 = tf.image.resize_images(img1,
                 [size[0], size[1]],
@@ -104,6 +105,7 @@ def unproc(x):
 
 def main():
     chair_root = os.path.expanduser('~/Downloads/FlyingChairs/data')
+    ilsvrc_root = os.path.expanduser('~/dispset/data/')
 
     h, w, c = 192, 256, 3
 
@@ -117,21 +119,41 @@ def main():
     aimg_t = augment_image_color(aimg_t)
 
     n_test = 16
-    img1, img2, flow = load_chair(chair_root, n_test, size=(w,h))
-    flow = np.concatenate([flow, np.ones_like(flow[..., :1])], axis=-1) # msk dim
-    simg = np.stack([img1, img2], axis=1)
+    img1_gt, img2_gt, flow_gt = load_chair(chair_root, n_test, size=(w,h))
+    #img1_gt, img2_gt, flow_gt = load_ilsvrc(ilsvrc_root, n_test, size=(w,h))
+
+    flow_gt = np.concatenate([flow_gt, np.ones_like(flow_gt[..., :1])], axis=-1) # msk dim
 
     config = tf.ConfigProto(
             device_count = {'GPU': 0})
 
     with tf.Session(config=config) as sess:
-        aimg, aflo = sess.run([aimg_t, aflo_t], {img1_t:img1, img2_t:img2, flow_t:flow})
+        aimg, aflo = sess.run([aimg_t, aflo_t], {img1_t:img1_gt, img2_t:img2_gt, flow_t:flow_gt})
 
-    disp = FlowShow(n=3, m=2)
+    # simple validation
+    #print('simple validation')
+    #print(flow_gt[0].max(axis=(0,1,2)))
+    #print(aflo[0].max(axis=(0,1,2)))
+
+    disp = FlowShow(code_path='middlebury_flow_code.png')
     disp.configure([
-        [FlowShow.AX_IMG1, FlowShow.AX_IMG2],
-        [FlowShow.AX_I1I2, FlowShow.AX_OVLY],
-        [FlowShow.AX_FLOW, FlowShow.AX_CODE]])
+        [FlowShow.AX_NULL, FlowShow.AX_NULL, FlowShow.AX_FLOW],
+        [FlowShow.AX_IMG1, FlowShow.AX_IMG2, FlowShow.AX_OVLY],
+        [FlowShow.AX_I2I1, FlowShow.AX_I1I2, FlowShow.AX_I2OV],
+        ])
+
+    disp.add_user_cb(
+            lambda d, i, a, f: d._draw_ax(
+                a[0,0],
+                [img1_gt[i],img2_gt[i],flow_gt[i]],
+                FlowShow.AX_IMG1
+            ))
+    disp.add_user_cb(
+            lambda d, i, a, f: d._draw_ax(
+                a[0,1],
+                [img1_gt[i],img2_gt[i],flow_gt[i]],
+                FlowShow.AX_FLOW
+            ))
 
     img1 = unproc(aimg[:,0])
     img2 = unproc(aimg[:,1])
