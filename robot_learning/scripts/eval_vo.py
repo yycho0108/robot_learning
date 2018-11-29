@@ -11,6 +11,7 @@ import sys
 from vo_net import VONet
 from data_manager import DataManager
 from utils import anorm, proc_img
+from utils.tf_utils import latest_checkpoint
 
 from matplotlib import pyplot as plt
 
@@ -23,7 +24,9 @@ def main():
     #restore_ckpt = os.path.expanduser('~/vo/8/ckpt/model.ckpt-2000')
     #restore_ckpt = os.path.expanduser('~/vo/19/ckpt/model.ckpt-2000')
     #restore_ckpt = os.path.expanduser('~/vo/50/ckpt/model.ckpt-2000')
-    restore_ckpt = os.path.expanduser('~/vo/3/ckpt/model.ckpt-5000')
+    #restore_ckpt = os.path.expanduser('~/vo/5/ckpt/model.ckpt-5000')
+    restore_ckpt = latest_checkpoint('~/vo')
+
     is_training = False
 
     # override cfg params
@@ -31,7 +34,7 @@ def main():
     cfg.TIME_STEPS = 1
 
     n_test = 32
-    n_step = 16
+    n_step = 64
 
     dm = DataManager(mode='valid', log=print)
     #dm = DataManager(mode='train', log=print)

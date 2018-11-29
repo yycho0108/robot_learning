@@ -7,7 +7,7 @@ from tensorflow.contrib import slim
 from utils import no_op
 from tensorflow.contrib.framework import nest
 from se2 import SE2CompositeLayer
-from utils.tf_utils import tf_shape, axial_reshape, split_reshape
+from utils.tf_utils import tf_shape, axial_reshape, split_reshape, normalizer_no_op
 
 def ang_err(h0, h1):
     c0, s0 = tf.cos(h0), tf.sin(h0)
@@ -185,7 +185,9 @@ class VONet(object):
         with tf.name_scope('build-dps'):
             with tf.name_scope('dps'):
                 x = slim.fully_connected(x, 128, activation_fn=tf.nn.elu, scope='fc1')
-                x = slim.fully_connected(x, 3, activation_fn=None, scope='fc2') # operate in 2d : (dx,dy,dh)
+                x = slim.fully_connected(x, 3, activation_fn=None,
+                        normalizer_fn=normalizer_no_op,
+                        scope='fc2') # operate in 2d : (dx,dy,dh)
                 # NOTE: don't bother composing motion here
         log('dps-output', x.shape)
         log('-------------')

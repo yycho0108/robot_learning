@@ -97,7 +97,7 @@ def main():
         
         # standard decay 1e-4 -> 1e-3
         lr1 = tf.train.exponential_decay(cfg.LEARNING_RATE,
-                global_step, cfg.STEPS_PER_DECAY, cfg.DECAY_FACTOR, staircase=True)
+                global_step, cfg.STEPS_PER_DECAY, cfg.DECAY_FACTOR, staircase=False)
         learning_rate = tf.where(global_step < cfg.LR_RAMP_STEPS, lr0, lr1) # employ slow initial learning rate
         
         # option 2 : standard

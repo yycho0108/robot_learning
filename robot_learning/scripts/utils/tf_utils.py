@@ -1,7 +1,31 @@
 import tensorflow as tf
 import numpy as np
 from tensorflow.contrib.framework import nest
+import os
 slim = tf.contrib.slim
+
+def all_subdirs_of(b='.'):
+    """ from https://stackoverflow.com/a/2014704 """
+    result = []
+    for d in os.listdir(b):
+        bd = os.path.join(b, d)
+        if os.path.isdir(bd):
+            result.append(bd)
+    return result
+
+def latest_subdir(root):
+    result = max(all_subdirs_of(root), key=os.path.getmtime)
+    return result
+
+def latest_checkpoint(root):
+    root = os.path.expanduser(root)
+    d = latest_subdir(root)
+    ckpt_dir = os.path.join(d, 'ckpt')
+    return tf.train.latest_checkpoint(ckpt_dir)
+
+def normalizer_no_op(x, *a, **k):
+    """ passthrough normalization """
+    return x
 
 def tf_shape(x):
     s_s = x.get_shape().as_list()

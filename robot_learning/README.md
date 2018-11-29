@@ -20,3 +20,5 @@ Sample Output:
 ![sample](figs/sample_output.png)
 
 ## Visual Odometry
+
+![sample](figs/vo/sample_output_v2.png)
