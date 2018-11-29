@@ -153,7 +153,6 @@ class VONet(object):
                             cell=cell,
                             inputs=x,
                             initial_state=state0,
-                            #initial_state=state0,
                             time_major=False,
                             dtype=tf.float32)
                 #log('rnn-output', output.shape)
@@ -224,7 +223,7 @@ class VONet(object):
 
             err = tf.losses.compute_weighted_loss(
                     losses=[err_x, err_y, err_h],
-                    weights=ws
+                    weights=(np.float32(ws) / np.sum(ws))
                     )
             #err = tf.square(x-y)
             #log('raw-err', err.shape)
