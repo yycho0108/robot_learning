@@ -184,9 +184,10 @@ class VONet(object):
         with tf.name_scope('build-dps'):
             with tf.name_scope('dps'):
                 x = slim.fully_connected(x, 128, activation_fn=tf.nn.elu, scope='fc1')
+                x = slim.fully_connected(x, 64, activation_fn=tf.nn.elu, scope='fc2')
                 x = slim.fully_connected(x, 3, activation_fn=None,
                         normalizer_fn=normalizer_no_op,
-                        scope='fc2') # operate in 2d : (dx,dy,dh)
+                        scope='fc3') # operate in 2d : (dx,dy,dh)
                 # NOTE: don't bother composing motion here
         log('dps-output', x.shape)
         log('-------------')

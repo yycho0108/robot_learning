@@ -12,6 +12,7 @@ import threading
 from vo_net import VONet
 from data_manager import DataManager
 from utils import anorm, mkdir, proc_img, no_op
+from utils.kitti_utils import KittiLoader
 
 import signal
 
@@ -69,7 +70,8 @@ def main():
     mkdir(ckpt_root)
     ckpt_file = os.path.join(ckpt_root, 'model.ckpt')
 
-    dm = DataManager(mode='train',log=print)
+    dm = KittiLoader(root='~/datasets/kitti')
+    #dm = DataManager(mode='train',log=print)
     dm_v = DataManager(mode='valid',log=no_op)
 
     graph = tf.get_default_graph()

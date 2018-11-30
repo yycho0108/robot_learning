@@ -19,13 +19,8 @@ def main():
     global index
     # restore/train flags
     # checkpoint file to restore from
-    # restore_ckpt = '/tmp/vo/20/ckpt/model.ckpt-4'
-    #restore_ckpt = os.path.expanduser('~/vo/0/ckpt/model.ckpt-1000')
-    #restore_ckpt = os.path.expanduser('~/vo/8/ckpt/model.ckpt-2000')
-    #restore_ckpt = os.path.expanduser('~/vo/19/ckpt/model.ckpt-2000')
-    #restore_ckpt = os.path.expanduser('~/vo/50/ckpt/model.ckpt-2000')
-    #restore_ckpt = os.path.expanduser('~/vo/5/ckpt/model.ckpt-5000')
     restore_ckpt = latest_checkpoint('~/vo')
+    print('Restoring from : {}'.format(restore_ckpt))
 
     is_training = False
 

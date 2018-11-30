@@ -11,56 +11,7 @@ from functools import partial
 import sys
 from utils import anorm, no_op
 
-import imgaug as ia
-from imgaug import augmenters as iaa
-
-def sub_p3d(b,a):
-    x0,y0,h0 = a
-    x1,y1,h1 = b
-
-    dh = anorm(h1-h0)
-    dx = x1-x0
-    dy = y1-y0
-
-def add_p3d(a,b):
-    # final p3d composition -- mostly for verification
-    x0,y0,h0 = a
-    dx,dy,dh = b
-    c, s = np.cos(h0), np.sin(h0)
-    R = np.reshape([c,-s,s,c], [2,2]) # [2,2,N]
-    dp = R.dot([dx,dy])
-    x1 = x0 + dp[0]
-    y1 = y0 + dp[1]
-    h1 = anorm(h0 + dh)
-    return [x1,y1,h1]
-
-def add_p3d_batch(a, b):
-    x0,y0,h0 = a.T
-    dx,dy,dh = b.T
-    c, s = np.cos(h0), np.sin(h0)
-    dx_R = (c*dx - s*dy)
-    dy_R = (s*dx + c*dy)
-
-    x = x0+dx_R
-    y = y0+dy_R
-    h = anorm(h0+dh)
-    return np.stack([x,y,h], axis=-1)
-
-def dps2pos(dps):
-    # construct path
-    p0 = np.zeros_like(dps[0])
-    ps = [p0]
-    for dp in dps[1:]:
-        #p = add_p3d(ps[-1], dp)
-        p = add_p3d_batch(ps[-1], dp)
-        ps.append(p)
-    ps = np.float32(ps)
-    return ps
-
-def batch_augment(aug, imgs):
-    # N-H-W-C
-    n,h,w,c = imgs.shape
-    return aug.augment_image(imgs.reshape(n*h,w,c)).reshape(n,h,w,c)
+from utils.vo_utils import sub_p3d, add_p3d, add_p3d_batch, dps2pos, batch_augment, VoShow
 
 class DataManager(object):
     def __init__(self, dirs=None, mode='train', log=no_op):
@@ -104,45 +55,6 @@ class DataManager(object):
         self.prob_ /= self.prob_.sum()
 
         # augmentation functor
-        self.seq_ = iaa.Sequential(
-            [
-                # execute 0 to 5 of the following (less important) augmenters per image
-                # don't execute all of them, as that would often be way too strong
-                iaa.SomeOf((0, 5),
-                    [
-                        iaa.OneOf([
-                            iaa.GaussianBlur((0, 2.0)), # blur images with a sigma between 0 and 3.0
-                            iaa.AverageBlur(k=(3, 5)), # blur image using local means with kernel sizes between 2 and 7
-                            iaa.MedianBlur(k=(3, 7)), # blur image using local medians with kernel sizes between 2 and 7
-                        ]),
-                        #iaa.Sharpen(alpha=(0, 1.0), lightness=(0.75, 1.5)), # sharpen images
-                        # search either for all edges or for directed edges,
-                        # blend the result with the original image using a blobby mask
-                        #iaa.SimplexNoiseAlpha(iaa.OneOf([
-                        #    iaa.EdgeDetect(alpha=(0.5, 1.0)),
-                        #    iaa.DirectedEdgeDetect(alpha=(0.5, 1.0), direction=(0.0, 1.0)),
-                        #])),
-                        iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.05*255), per_channel=0.5), # add gaussian noise to images
-
-                        iaa.Add((-10, 10), per_channel=0.5), # change brightness of images (by -10 to 10 of original value)
-                        iaa.AddToHueAndSaturation((-10, 10)), # change hue and saturation
-                        # either change the brightness of the whole image (sometimes
-                        # per channel) or change the brightness of subareas
-                        iaa.OneOf([
-                            iaa.Multiply((0.75, 1.25), per_channel=0.5),
-                            #iaa.FrequencyNoiseAlpha(
-                            #    exponent=(-4, 0),
-                            #    first=iaa.Multiply((0.5, 1.5), per_channel=True),
-                            #    second=iaa.ContrastNormalization((0.5, 2.0))
-                            #)
-                        ]),
-                        iaa.ContrastNormalization((0.75, 1.33), per_channel=0.5), # improve or worsen the contrast
-                    ],
-                    random_order=True
-                )
-            ],
-            random_order=True
-        )
 
     def load(self, path):
         img   = np.load(os.path.join(path, 'img.npy'))
@@ -197,7 +109,7 @@ class DataManager(object):
         img, lab = zip(*data)
         if aug:
             # TODO : consider using augmentation from utils/img_utils.py
-            img = np.stack([batch_augment(self.seq_, timg) for timg in img], axis=0)
+            img = np.stack([batch_augment(timg) for timg in img], axis=0)
             #img  = np.stack(img, axis=0)
         else:
             img = np.stack(img, axis=0) # [NxTxHxWxC]
@@ -275,6 +187,9 @@ class DataManager(object):
         plt.show()
 
 def main():
+    as_path = False
+    target_size = (256, 192)
+
     # opt 1.0 : all training data
     # dirs = None
 
@@ -289,6 +204,14 @@ def main():
 
     dm = DataManager(dirs=dirs, log=print)
 
+    img, dps = dm.get(batch_size=32, time_steps=16,
+            as_path=as_path,
+            target_size=target_size)
+
+    data = zip(img, dps)
+    disp = VoShow(data, as_path=as_path)
+    disp.show()
+
     # opt 2.0 : data augmentation observation
     #s = np.random.randint(65536)
     #np.random.seed(s)
@@ -302,7 +225,7 @@ def main():
     #plt.show()
 
     # opt 2.1 : overall inspection
-    dm.inspect()
+    #dm.inspect()
 
 if __name__ == "__main__":
     main()
