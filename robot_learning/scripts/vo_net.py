@@ -187,15 +187,15 @@ class VONet(object):
                 x = slim.fully_connected(x, 64, activation_fn=tf.nn.elu, scope='fc2')
                 xyh = slim.fully_connected(x, 3, activation_fn=None,
                         normalizer_fn=normalizer_no_op,
-                        scope='xyh')
+                        scope='fc3')
+                #x = xyh
+                ## explicitly model scale 
                 xy, h = tf.split(xyh, [2,1], axis=-1)
-
-                # explicitly model scale 
                 s = slim.fully_connected(x, 1, activation_fn=tf.exp,
                         normalizer_fn=normalizer_no_op,
                         scope='s')
-
                 x = tf.concat([xy*s, h], axis=-1)
+
                 # NOTE: don't bother composing motion here
         log('dps-output', x.shape)
         log('-------------')

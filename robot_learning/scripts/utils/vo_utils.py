@@ -163,41 +163,54 @@ class VoShow(object):
         self.data_ = data
         self.as_path_ = as_path
 
-    def draw(self, clear=True, draw=True, label='path', color=None):
-        # unroll data
-        i = self.index_
-        t_imgs, t_labs = self.data_[i]
-        fig = self.fig_
-        ax0, ax1 = self.ax_
-
-        cat = np.concatenate(t_imgs, axis=1)
-        next = False
-
-        # construct path
-        if self.as_path_:
-            # data came in as path
-            ps = t_labs
-        else:
-            p0 = np.zeros_like(t_labs[0])
-            ps = [p0]
-            for dp in t_labs[1:]:
-                p = add_p3d(ps[-1], dp)
-                ps.append(p)
-            ps = np.float32(ps)
-
-        # show path
-        if clear:
-            ax0.cla()
-            ax1.cla()
-
-        ax0.plot(ps[:,0], ps[:,1], '--', label=label,color=color) # starting point
-        ax0.quiver(
+    def _draw(self, ax, ps, label='path', color=None):
+        ax.plot(ps[:,0], ps[:,1], '--', label=label,color=color) # starting point
+        ax.quiver(
                 ps[:,0], ps[:,1],
                 np.cos(ps[:,2]), np.sin(ps[:,2]),
                 scale_units='xy',
                 angles='xy',
                 color=color
                 )
+
+    def draw(self, clear=True, draw=True, label='path'):
+        # unroll data
+        i = self.index_
+
+        t_pred = None
+        if len(self.data_[i]) == 2:
+            t_imgs, t_labs = self.data_[i]
+        elif len(self.data_[i]) == 3:
+            t_imgs, t_labs, t_pred = self.data_[i]
+
+        fig = self.fig_
+        ax0, ax1 = self.ax_
+
+        cat = np.concatenate(t_imgs, axis=1)
+        next = False
+
+        # show path
+        if clear:
+            ax0.cla()
+            ax1.cla()
+
+
+        # construct path
+        if self.as_path_:
+            # data came in as path
+            ps = t_labs
+        else:
+            ps = dps2pos(t_labs)
+        self._draw(ax0, ps, 'path')
+
+        if t_pred is not None:
+            if self.as_path_:
+                # data came in as path
+                ps = t_pred
+            else:
+                ps = dps2pos(t_pred)
+            self._draw(ax0, ps, 'pred', color='r')
+
         ax0.set_aspect('equal', 'datalim')
         #ax0.set_xlim([-0.2,1.0])
         #ax0.set_ylim([-0.4,0.4])
