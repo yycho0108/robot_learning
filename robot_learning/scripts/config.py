@@ -10,9 +10,9 @@ Q_THREADS=8 # Data Queue
 # -- Technical --
 LSTM_SIZE=512
 NUM_LSTM=2
-#W_COST=[1.0, 5.0, 4.0]
-W_COST_K=[1.0/50, 1.0/3.0, 1.0] # W Cost for Kitti
-W_COST=W_COST_K
+W_COST=[1.0, 5.0, 4.0] # X-Y-H
+#W_COST_K=[1.0/50, 1.0/3.0, 1.0] # W Cost for Kitti
+#W_COST=W_COST_K
 
 # -- Training --
 BATCH_SIZE=16

@@ -3,6 +3,7 @@ import numpy as np
 from tensorflow.contrib.framework import nest
 import os
 slim = tf.contrib.slim
+from matplotlib import pyplot as plt
 
 def all_subdirs_of(b='.'):
     """ from https://stackoverflow.com/a/2014704 """
@@ -89,13 +90,58 @@ def net_size(scope=None, return_all=False):
     total = sum(ss)
     return total
 
+def decay_np(learning_rate, step, steps_per_decay, decay_factor):
+    return learning_rate * np.power(decay_factor, step / steps_per_decay)
+
+def cyclic_decay(fin_lr, step, period, decay_steps,
+        min_lr, max_lr
+        ):
+    with tf.name_scope('cyclic_decay',
+            [fin_lr,step,period,decay_steps,min_lr,max_lr]):
+        # upper bound
+        lr_u = tf.train.exponential_decay(max_lr, step,
+                decay_steps, (fin_lr / max_lr), staircase=False)
+        # lower bound
+        lr_l = tf.train.exponential_decay(min_lr, step,
+                decay_steps, (fin_lr / min_lr), staircase=False)
+
+        # define a cyclic term that starts at the minimum
+        w = float(2*3.1415926535897932 / period)
+        oc = (-tf.cos(tf.to_float(step) * w) + 1.0)/2.0
+        lr_m = lr_l + ((lr_u-lr_l) * oc)
+
+        fin_lr = tf.broadcast_to(fin_lr, lr_m.shape)
+        lr = tf.where(step<decay_steps, lr_m, fin_lr)
+
+    return lr
+
 def main():
-    t1 = tf.placeholder(dtype=tf.float32, shape=[5,2,None,4])
-    print tf_shape(t1)
-    print(split_reshape(t1, 2, 2))
+    #t1 = tf.placeholder(dtype=tf.float32, shape=[5,2,None,4])
+    #print tf_shape(t1)
+    #print(split_reshape(t1, 2, 2))
 
     #t2 = axial_reshape(t1, [0,2,(1,3)])
     #print(t2.shape)
+
+    #steps = np.linspace(0, 20000)
+    #lr0 = decay_np(1e-6, steps, 10000 / 6., 100 ** (1.0 / 6))
+    #lr1 = decay_np(1e-3, steps, 10000 / 6., 0.1 ** (1.0 / 6))
+    #p   = 2000.
+    #lr  = lr0 + ((lr1-lr0)/2. * (np.sin(steps*2*np.pi/p)+1.0))
+    #plt.plot(steps, lr0, label='lr0')
+    #plt.plot(steps, lr1, label='lr1')
+    #plt.plot(steps, lr, label='lr_m')
+    #plt.legend()
+    #plt.show()
+
+    lr = cyclic_decay(1e-4, tf.linspace(0.0, 20000.0, 100), 2000, 10000,
+            1e-6, 1e-3)
+    with tf.Session() as sess:
+        lr_ = sess.run(lr)
+    steps = np.linspace(0,20000,100)
+    plt.plot(steps, lr_)
+    plt.show()
+
 
 if __name__ == "__main__":
     main()

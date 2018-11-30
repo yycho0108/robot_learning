@@ -12,6 +12,7 @@ import threading
 from vo_net import VONet
 from data_manager import DataManager
 from utils import anorm, mkdir, proc_img, no_op
+from utils.tf_utils import latest_checkpoint, cyclic_decay
 from utils.kitti_utils import KittiLoader
 
 import signal
@@ -32,17 +33,18 @@ class StopRequest(object):
 
 def main():
     sig = StopRequest()
-
     # restore/train flags
     # checkpoint file to restore from
     # restore_ckpt = '/tmp/vo/20/ckpt/model.ckpt-4'
     restore_ckpt = None
     #restore_ckpt = '/home/jamiecho/fn/15/ckpt/model.ckpt-1000'
 
-    #fn_ckpt = None
-    #fn_ckpt = os.path.expanduser('~/fn/4/ckpt/model.ckpt-80000')
-    fn_ckpt = os.path.expanduser('~/fnckpt/model.ckpt-281200')
+    fn_ckpt = None
+    #fn_ckpt = os.path.expanduser('~/fnckpt/model.ckpt-281200')
 
+    kt_ckpt = None
+    #kt_ckpt = latest_checkpoint('~/vo')
+    #kt_ckpt = os.path.expanduser('~/vo/14/ckpt/model.ckpt-5000')
     is_training = True
 
     # directory
@@ -70,8 +72,8 @@ def main():
     mkdir(ckpt_root)
     ckpt_file = os.path.join(ckpt_root, 'model.ckpt')
 
-    dm = KittiLoader(root='~/datasets/kitti')
-    #dm = DataManager(mode='train',log=print)
+    #dm = KittiLoader(root='~/datasets/kitti')
+    dm = DataManager(mode='train',log=print)
     dm_v = DataManager(mode='valid',log=no_op)
 
     graph = tf.get_default_graph()
@@ -94,17 +96,22 @@ def main():
         # ============================
         # option 1 : ramp-up -> standard
         # initial ramp-up 1e-6 -> 1e-4
-        lr0 = tf.train.exponential_decay(cfg.LR_RAMP_0,
-                global_step, cfg.LR_RAMP_STEPS, cfg.LEARNING_RATE/cfg.LR_RAMP_0, staircase=False)
-        
-        # standard decay 1e-4 -> 1e-3
-        lr1 = tf.train.exponential_decay(cfg.LEARNING_RATE,
-                global_step, cfg.STEPS_PER_DECAY, cfg.DECAY_FACTOR, staircase=False)
-        learning_rate = tf.where(global_step < cfg.LR_RAMP_STEPS, lr0, lr1) # employ slow initial learning rate
+        # lr0 = tf.train.exponential_decay(cfg.LR_RAMP_0,
+        #         global_step, cfg.LR_RAMP_STEPS, cfg.LEARNING_RATE/cfg.LR_RAMP_0, staircase=False)
+        # 
+        # # standard decay 1e-4 -> 1e-3
+        # lr1 = tf.train.exponential_decay(cfg.LEARNING_RATE,
+        #         global_step, cfg.STEPS_PER_DECAY, cfg.DECAY_FACTOR, staircase=False)
+        # learning_rate = tf.where(global_step < cfg.LR_RAMP_STEPS, lr0, lr1) # employ slow initial learning rate
         
         # option 2 : standard
         #learning_rate = tf.train.exponential_decay(cfg.LEARNING_RATE,
         #        global_step, cfg.STEPS_PER_DECAY, cfg.DECAY_FACTOR, staircase=True)
+
+        # option 3 : cyclic (super experimental)
+        learning_rate = cyclic_decay(1e-4, global_step, 2000, 10000,
+            1e-6, 1e-3)
+
         # ============================
 
         with tf.name_scope('net_t'):
@@ -150,6 +157,15 @@ def main():
             print('flownet vars', fn_vars)
             fn_saver = tf.train.Saver(var_list=fn_vars)
             fn_saver.restore(sess, fn_ckpt)
+
+        if kt_ckpt is not None:
+            # kitti checkpoint = need to re-learn scale
+            fn_vars = [v for v in slim.get_model_variables() if ('vo/sconv' in v.name) or ('vo/conv' in v.name)]
+            vo_vars_nos = [v for v in slim.get_model_variables() if ('vo/fc' in v.name)]# or ('vo/s/' in v.name)]
+            print('flownet vars', fn_vars)
+            print('vo vars (no scale)', vo_vars_nos)
+            kt_saver = tf.train.Saver(var_list=fn_vars+vo_vars_nos)
+            kt_saver.restore(sess, kt_ckpt)
 
         if restore_ckpt is not None:
             saver.restore(sess, restore_ckpt)

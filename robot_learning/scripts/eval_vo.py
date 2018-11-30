@@ -31,10 +31,10 @@ def main():
     cfg.TIME_STEPS = 1
 
     n_test = 8
-    n_step = 32
+    n_step = 64
 
-    dm = KittiLoader(root='~/datasets/kitti')
-    #dm = DataManager(mode='valid', log=print)
+    #dm = KittiLoader(root='~/datasets/kitti')
+    dm = DataManager(mode='valid', log=print)
     #dm = DataManager(mode='train', log=print)
 
     graph = tf.get_default_graph()
@@ -48,7 +48,8 @@ def main():
         saver.restore(sess, restore_ckpt)
 
         img, lab = dm.get(batch_size=n_test, time_steps=n_step,
-                target_size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT)
+                target_size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT),
+                aug=False
                 )
         pimg = proc_img(img)
         nax = np.newaxis

@@ -59,7 +59,7 @@ class VONet(object):
             dps = self._build_dps(rnn, log)
             x_pos, x_poss, y_pos, y_poss = self._build_pos(dps, lab, log)
 
-        err_c, (err_x, err_y, err_h) = self._build_err(x_poss, y_poss, log=log)
+        err_c, (err_x, err_y, err_h) = self._build_err(x_pos, y_pos, log=log)
         #err_c, (err_x, err_y, err_h) = self._build_err(dps, lab, log=log)
 
         if self.train_:
