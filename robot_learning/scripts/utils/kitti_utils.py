@@ -105,12 +105,11 @@ class KittiLoader(object):
             aug=True,
             as_path=None, # TODO: WARNING: ignored!
             target_size=None):
-        img, ps = zip(*[self.get_1(time_steps, target_size, seq_idx=0) for _ in range(batch_size)])
+        img, ps = zip(*[self.get_1(time_steps, target_size) for _ in range(batch_size)])
         if aug:
-            img = np.stack([batch_augment(e) for e in img], axis=0)
-        else:
-            img = np.stack(img, axis=0)
-        ps = np.stack(ps, axis=0)
+            img = [batch_augment(e) for e in img]
+        img = np.stack(img, axis=0)
+        ps  = np.stack(ps, axis=0)
         return [img, ps]
 
     def save_dump(self, dump_dir=None,
