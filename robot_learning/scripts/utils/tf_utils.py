@@ -135,8 +135,11 @@ def main():
     #plt.show()
 
     lr = cyclic_decay(1e-4, tf.linspace(0.0, 20000.0, 100), 2000, 10000,
-            1e-6, 1e-3)
-    with tf.Session() as sess:
+            2e-4, 1e-3)
+
+    config = tf.ConfigProto(
+            device_count = {'GPU': 0})
+    with tf.Session(config=config) as sess:
         lr_ = sess.run(lr)
     steps = np.linspace(0,20000,100)
     plt.plot(steps, lr_)

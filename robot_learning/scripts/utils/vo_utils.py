@@ -166,8 +166,8 @@ class VoShow(object):
     def _draw(self, ax, ps, label='path', color=None):
         ax.plot(ps[:,0], ps[:,1], '--', label=label,color=color) # starting point
         ax.quiver(
-                ps[:,0], ps[:,1],
-                np.cos(ps[:,2]), np.sin(ps[:,2]),
+                ps[::2,0], ps[::2,1],
+                np.cos(ps[::2,2]), np.sin(ps[::2,2]),
                 scale_units='xy',
                 angles='xy',
                 color=color

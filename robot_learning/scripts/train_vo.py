@@ -44,7 +44,7 @@ def main():
 
     kt_ckpt = None
     #kt_ckpt = latest_checkpoint('~/vo')
-    #kt_ckpt = os.path.expanduser('~/vo/14/ckpt/model.ckpt-5000')
+    kt_ckpt = os.path.expanduser('~/vo/25/ckpt/model.ckpt-10000')
     is_training = True
 
     # directory
@@ -109,8 +109,8 @@ def main():
         #        global_step, cfg.STEPS_PER_DECAY, cfg.DECAY_FACTOR, staircase=True)
 
         # option 3 : cyclic (super experimental)
-        learning_rate = cyclic_decay(1e-4, global_step, 2000, 10000,
-            1e-6, 1e-3)
+        learning_rate = cyclic_decay(1e-4, global_step, 1000, 5000,
+            2e-4, 1e-3)
 
         # ============================
 
@@ -153,18 +153,12 @@ def main():
         # initialization
         sess.run(tf.global_variables_initializer())
         if fn_ckpt is not None:
-            fn_vars = [v for v in slim.get_model_variables() if ('vo/sconv' in v.name) or ('vo/conv' in v.name)]
-            print('flownet vars', fn_vars)
-            fn_saver = tf.train.Saver(var_list=fn_vars)
+            fn_saver = tf.train.Saver()#var_list=fn_vars + [global_step])
             fn_saver.restore(sess, fn_ckpt)
 
         if kt_ckpt is not None:
             # kitti checkpoint = need to re-learn scale
-            fn_vars = [v for v in slim.get_model_variables() if ('vo/sconv' in v.name) or ('vo/conv' in v.name)]
-            vo_vars_nos = [v for v in slim.get_model_variables() if ('vo/fc' in v.name)]# or ('vo/s/' in v.name)]
-            print('flownet vars', fn_vars)
-            print('vo vars (no scale)', vo_vars_nos)
-            kt_saver = tf.train.Saver(var_list=fn_vars+vo_vars_nos)
+            kt_saver = tf.train.Saver()#var_list=fn_vars+vo_vars_nos+[global_step])
             kt_saver.restore(sess, kt_ckpt)
 
         if restore_ckpt is not None:

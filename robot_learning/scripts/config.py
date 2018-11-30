@@ -11,7 +11,7 @@ Q_THREADS=8 # Data Queue
 LSTM_SIZE=512
 NUM_LSTM=2
 W_COST=[1.0, 5.0, 4.0] # X-Y-H
-#W_COST_K=[1.0/50, 1.0/3.0, 1.0] # W Cost for Kitti
+#W_COST_K=[1.0, 10.0, 100.0] # W Cost for Kitti
 #W_COST=W_COST_K
 
 # -- Training --
@@ -20,9 +20,11 @@ VAL_BATCH_SIZE=8
 TIME_STEPS=16
 SAVE_STEPS=100
 VAL_STEPS=10
-TRAIN_STEPS=10000
+TRAIN_STEPS=15000
 LOG_STEPS=100
 FREEZE_CNN=True
+FREEZE_VO_NOS=True
+DROPOUT=0.5
 
 # -- Learning Rate --
 # initial ramp
@@ -39,10 +41,6 @@ NUM_DECAY   = 5
 LR_DECAY_STEPS = 10000
 STEPS_PER_DECAY = float(LR_DECAY_STEPS) / (1 + NUM_DECAY)
 DECAY_FACTOR = FINAL_DECAY ** (1.0 / NUM_DECAY)
-# (Deprecated)
-# EPOCHS_PER_DECAY = 0.2
-# STEPS_PER_EPOCH  = (2332 / BATCH_SIZE)
-# STEPS_PER_DECAY  = (STEPS_PER_EPOCH * EPOCHS_PER_DECAY)
 # ========================= 
 
 # == FlowNet Params ==

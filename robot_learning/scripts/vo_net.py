@@ -59,7 +59,7 @@ class VONet(object):
             dps = self._build_dps(rnn, log)
             x_pos, x_poss, y_pos, y_poss = self._build_pos(dps, lab, log)
 
-        err_c, (err_x, err_y, err_h) = self._build_err(x_pos, y_pos, log=log)
+        err_c, (err_x, err_y, err_h) = self._build_err(x_poss[:,1:], y_poss[:,1:], log=log)
         #err_c, (err_x, err_y, err_h) = self._build_err(dps, lab, log=log)
 
         if self.train_:
@@ -120,7 +120,7 @@ class VONet(object):
                     #x = tf.expand_dims(x, 1)
                     #x = tf.expand_dims(x, 1)
                     #x = slim.separable_conv2d(x, 1024, 1, 1, 1, scope='reduction')
-                    x = slim.dropout(x, keep_prob=0.2, is_training=self.train_, scope='dropout')
+                    x = slim.dropout(x, keep_prob=cfg.DROPOUT, is_training=self.train_, scope='dropout')
                     x = tf.squeeze(x, [1,2])
                     log('post-cnn', x.shape)
             with tf.name_scope('format_out'):
@@ -184,10 +184,9 @@ class VONet(object):
         with tf.name_scope('build-dps'):
             with tf.name_scope('dps'):
                 x = slim.fully_connected(x, 128, activation_fn=tf.nn.elu, scope='fc1')
-                x = slim.fully_connected(x, 64, activation_fn=tf.nn.elu, scope='fc2')
                 xyh = slim.fully_connected(x, 3, activation_fn=None,
                         normalizer_fn=normalizer_no_op,
-                        scope='fc3')
+                        scope='fc2')
                 #x = xyh
                 ## explicitly model scale 
                 xy, h = tf.split(xyh, [2,1], axis=-1)
@@ -243,7 +242,10 @@ class VONet(object):
         log('-------------')
         return err, [err_x, err_y, err_h]
 
-    def _build_opt(self, c, freeze_cnn=cfg.FREEZE_CNN, log=no_op):
+    def _build_opt(self, c,
+            freeze_cnn=cfg.FREEZE_CNN,
+            freeze_vo_nos=cfg.FREEZE_VO_NOS,
+            log=no_op):
         log('- build-opt -')
         opt = tf.train.AdamOptimizer(learning_rate=self.learning_rate_)
 
@@ -252,6 +254,8 @@ class VONet(object):
         if freeze_cnn:
             log('freezing cnn')
             train_vars = [v for v in slim.get_trainable_variables() if ('vo/sconv' not in v.name) and ('vo/conv' not in v.name)]
+            if freeze_vo_nos:
+                train_vars = [v for v in train_vars if ('vo/reduction' not in v.name) and ('vo/rnn' not in v.name)]
             log('train variables:')
             for v in train_vars:
                 log('\t {} : {}'.format(v.name, v.shape))

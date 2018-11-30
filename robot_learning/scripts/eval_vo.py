@@ -30,11 +30,11 @@ def main():
     cfg.BATCH_SIZE = 1
     cfg.TIME_STEPS = 1
 
-    n_test = 8
+    n_test = 16
     n_step = 64
 
-    #dm = KittiLoader(root='~/datasets/kitti')
-    dm = DataManager(mode='valid', log=print)
+    dm = KittiLoader(root='~/datasets/kitti')
+    #dm = DataManager(mode='valid', log=print)
     #dm = DataManager(mode='train', log=print)
 
     graph = tf.get_default_graph()

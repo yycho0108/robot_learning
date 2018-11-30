@@ -31,7 +31,7 @@ class KittiLoader(object):
         else:
             self.pos_ = [np.loadtxt(os.path.join(self.pos_root, '%02d.txt' % i)).reshape(-1,3,4)
                     for i in self.drange_]
-            self.seq_len_ = [e.shape[0] for e in self.pos_]
+            self.seq_len_ = np.float32([e.shape[0] for e in self.pos_])
 
     def format(self, pos):
         # format the data to be compatible with the training network
@@ -54,8 +54,11 @@ class KittiLoader(object):
             target_size=None,
             seq_idx=None
             ):
+
         # parse arguments
-        seq_idx = (np.random.choice(len(self.drange_))
+        sel_p = self.seq_len_ / self.seq_len_.sum()
+
+        seq_idx = (np.random.choice(len(self.drange_), p=sel_p)
                 if (seq_idx is None)
                 else seq_idx)
         #img_dir = (np.random.choice(['image_2','image_3'])
@@ -67,9 +70,9 @@ class KittiLoader(object):
         # takes the pose into coordinate frame of the right camera
         # if the reference image is from the right camera.
         # TODO : is this important at all??
-        offset = (np.reshape([0,0.54,0], (-1,3))
-            if (img_dir == 'image_3')
-            else 0)
+        # offset = (np.reshape([0,0.54,0], (-1,3))
+        #     if (img_dir == 'image_3')
+        #     else 0)
 
         n = self.seq_len_[seq_idx]
         i0 = np.random.randint(0, n-time_steps)
@@ -135,7 +138,8 @@ class KittiLoader(object):
         try:
             self.img_ = [np.load(os.path.join(dump_dir, 'img_%02d.npy' % i)) for i in self.drange_]
             self.pos_ = [np.load(os.path.join(dump_dir, 'pos_%02d.npy' % i)) for i in self.drange_]
-            self.seq_len_ = [e.shape[0] for e in self.pos_]
+            self.seq_len_ = np.float32([e.shape[0] for e in self.pos_])
+            print('seq_len : {}'.format(self.seq_len_))
         except Exception as e:
             print('dump index does not exist yet : {}'.format(e))
 
@@ -150,17 +154,9 @@ def main():
             as_path=as_path
             )
     #loader.save_dump()
-
-    start = time.time()
-    img, dps = loader.get(batch_size=32, time_steps=16,
+    img, dps = loader.get(batch_size=32, time_steps=4,
         target_size=target_size)
     end   = time.time()
-    print(end - start)
-    start = end
-    img, dps = loader.get(batch_size=32, time_steps=16,
-        target_size=target_size)
-    end   = time.time()
-    print(end - start)
 
     data = zip(img, dps)
     disp = VoShow(data, as_path=as_path)
