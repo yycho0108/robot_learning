@@ -33,8 +33,8 @@ def main():
     n_test = 16
     n_step = 64
 
-    dm = KittiLoader(root='~/datasets/kitti')
-    #dm = DataManager(mode='valid', log=print)
+    #dm = KittiLoader(root='~/datasets/kitti')
+    dm = DataManager(mode='valid', log=print)
     #dm = DataManager(mode='train', log=print)
 
     graph = tf.get_default_graph()

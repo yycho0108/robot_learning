@@ -104,8 +104,8 @@ def unproc(x):
     return (x / 2.0) + 0.5
 
 def main():
-    chair_root = os.path.expanduser('~/Downloads/FlyingChairs/data')
-    ilsvrc_root = os.path.expanduser('~/dispset/data/')
+    chair_root = os.path.expanduser('~/datasets/fchair/data')
+    ilsvrc_root = os.path.expanduser('~/datasets/ilsvrc_opt')
 
     h, w, c = 192, 256, 3
 

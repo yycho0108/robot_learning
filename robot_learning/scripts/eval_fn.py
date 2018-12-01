@@ -61,7 +61,7 @@ def main():
         net._build()
 
     #ckpt_file = os.path.expanduser('~/fn/37/ckpt/model.ckpt-12700')
-    ckpt_file = os.path.expanduser('~/fn/14/ckpt/model.ckpt-281000')
+    ckpt_file = os.path.expanduser('~/fnckpt/model.ckpt-281000')
     #ckpt_file = os.path.expanduser('~/fn/10/ckpt/model.ckpt-43100')
 
     #gpu_options = tf.GPUOptions(allow_growth=True, per_process_gpu_memory_fraction=0.95)
@@ -72,14 +72,14 @@ def main():
     n_batch = 8
     n_split = int(np.round(n_test / float(n_batch)))
 
-    ilsvrc_root = os.path.expanduser('~/dispset/data')
-    chair_root = os.path.expanduser('~/Downloads/FlyingChairs/data')
+    ilsvrc_root = os.path.expanduser('~/datasets/ilsvrc_opt')
+    chair_root = os.path.expanduser('~/datasets/fchair/data')
 
     with tf.Session(graph=graph, config=config) as sess:
         net.load(sess, ckpt_file)
 
-        img1, img2, gt_flow = load_chair(chair_root, n=n_test, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
-        #img1, img2, gt_flow = load_ilsvrc(ilsvrc_root, n=n_test, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
+        #img1, img2, gt_flow = load_chair(chair_root, n=n_test, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
+        img1, img2, gt_flow = load_ilsvrc(ilsvrc_root, n=n_test, size=(cfg.IMG_WIDTH, cfg.IMG_HEIGHT))
         imgs = np.stack([img1,img2], axis=1)
         p_imgs = proc_img(imgs)
 

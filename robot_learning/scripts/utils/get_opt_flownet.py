@@ -81,7 +81,7 @@ def main():
     flow_s_h = float(target_size[1]) / source_size[1]
     flow_s   = np.reshape([flow_s_w, flow_s_h], [1,1,1,2])
 
-    target_dir  = os.path.expanduser('~/dispset/data')
+    target_dir  = os.path.expanduser('~/datasets/ilsvrc_opt')
 
     with tf.Session(graph=graph, config=config) as sess:
         #saver.restore(sess, ckpt_file)
@@ -157,7 +157,7 @@ def main():
     #fig, ((ax0, ax1), (ax2, ax3)) = plt.subplots(2,2)
     #ax0.imshow(overlay)
     #ax1.imshow(flow_im)
-    #ax2.imshow(normalize(flow_val[0,...,0]), cmap='gray') # u-channel
+    opt#ax2.imshow(normalize(flow_val[0,...,0]), cmap='gray') # u-channel
     #ax3.imshow(normalize(flow_val[0,...,1]), cmap='gray') # v-channel
     #plt.show()
 

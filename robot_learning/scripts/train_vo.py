@@ -44,7 +44,7 @@ def main():
 
     kt_ckpt = None
     #kt_ckpt = latest_checkpoint('~/vo')
-    kt_ckpt = os.path.expanduser('~/vo/25/ckpt/model.ckpt-10000')
+    kt_ckpt = os.path.expanduser('~/vo/29/ckpt/model.ckpt-15000')
     is_training = True
 
     # directory
@@ -158,7 +158,10 @@ def main():
 
         if kt_ckpt is not None:
             # kitti checkpoint = need to re-learn scale
-            kt_saver = tf.train.Saver()#var_list=fn_vars+vo_vars_nos+[global_step])
+            var_names = [u'vo/conv/weights:0', u'vo/conv/batch_norm/gamma:0', u'vo/conv/batch_norm/beta:0', u'vo/conv/batch_norm/moving_mean:0', u'vo/conv/batch_norm/moving_variance:0', u'vo/sconv/sconv_1/depthwise_weights:0', u'vo/sconv/sconv_1/pointwise_weights:0', u'vo/sconv/sconv_1/batch_norm/gamma:0', u'vo/sconv/sconv_1/batch_norm/beta:0', u'vo/sconv/sconv_1/batch_norm/moving_mean:0', u'vo/sconv/sconv_1/batch_norm/moving_variance:0', u'vo/sconv/sconv_2/depthwise_weights:0', u'vo/sconv/sconv_2/pointwise_weights:0', u'vo/sconv/sconv_2/batch_norm/gamma:0', u'vo/sconv/sconv_2/batch_norm/beta:0', u'vo/sconv/sconv_2/batch_norm/moving_mean:0', u'vo/sconv/sconv_2/batch_norm/moving_variance:0', u'vo/sconv/sconv_3/depthwise_weights:0', u'vo/sconv/sconv_3/pointwise_weights:0', u'vo/sconv/sconv_3/batch_norm/gamma:0', u'vo/sconv/sconv_3/batch_norm/beta:0', u'vo/sconv/sconv_3/batch_norm/moving_mean:0', u'vo/sconv/sconv_3/batch_norm/moving_variance:0', u'vo/sconv/sconv_4/depthwise_weights:0', u'vo/sconv/sconv_4/pointwise_weights:0', u'vo/sconv/sconv_4/batch_norm/gamma:0', u'vo/sconv/sconv_4/batch_norm/beta:0', u'vo/sconv/sconv_4/batch_norm/moving_mean:0', u'vo/sconv/sconv_4/batch_norm/moving_variance:0', u'vo/sconv/sconv_5/depthwise_weights:0', u'vo/sconv/sconv_5/pointwise_weights:0', u'vo/sconv/sconv_5/batch_norm/gamma:0', u'vo/sconv/sconv_5/batch_norm/beta:0', u'vo/sconv/sconv_5/batch_norm/moving_mean:0', u'vo/sconv/sconv_5/batch_norm/moving_variance:0', u'vo/sconv/sconv_6/depthwise_weights:0', u'vo/sconv/sconv_6/pointwise_weights:0', u'vo/sconv/sconv_6/batch_norm/gamma:0', u'vo/sconv/sconv_6/batch_norm/beta:0', u'vo/sconv/sconv_6/batch_norm/moving_mean:0', u'vo/sconv/sconv_6/batch_norm/moving_variance:0', u'vo/sconv/sconv_7/depthwise_weights:0', u'vo/sconv/sconv_7/pointwise_weights:0', u'vo/sconv/sconv_7/batch_norm/gamma:0', u'vo/sconv/sconv_7/batch_norm/beta:0', u'vo/sconv/sconv_7/batch_norm/moving_mean:0', u'vo/sconv/sconv_7/batch_norm/moving_variance:0', u'vo/reduction/depthwise_weights:0', u'vo/reduction/pointwise_weights:0', u'vo/reduction/batch_norm/gamma:0', u'vo/reduction/batch_norm/beta:0', u'vo/reduction/batch_norm/moving_mean:0', u'vo/reduction/batch_norm/moving_variance:0', u'vo/rnn/rnn/multi_rnn_cell/cell_0/lstm_cell/kernel:0', u'vo/rnn/rnn/multi_rnn_cell/cell_0/lstm_cell/bias:0', u'vo/rnn/rnn/multi_rnn_cell/cell_1/lstm_cell/kernel:0', u'vo/rnn/rnn/multi_rnn_cell/cell_1/lstm_cell/bias:0', u'vo/fc1/weights:0', u'vo/fc1/biases:0', u'vo/fc2/weights:0', u'vo/s/weights:0']
+            var_list = [v for v in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='vo') if v.name in var_names]
+            print(var_list)
+            kt_saver = tf.train.Saver(var_list=var_list+[global_step])#var_list=fn_vars+vo_vars_nos+[global_step])
             kt_saver.restore(sess, kt_ckpt)
 
         if restore_ckpt is not None:

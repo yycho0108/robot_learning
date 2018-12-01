@@ -102,8 +102,8 @@ def main():
     #        data_root, sample_ratio=sample_ratio)
     #sample_ratio = 0.5
 
-    ilsvrc_root = os.path.expanduser('~/dispset/data')
-    chair_root = os.path.expanduser('~/Downloads/FlyingChairs/data')
+    ilsvrc_root = os.path.expanduser('~/datasets/ilsvrc_opt')
+    chair_root = os.path.expanduser('~/datasets/fchair/data')
 
     #sel = np.random.choice(np.arange(1,31), size=10, replace=False)
     #print('selected : {}'.format(sel))

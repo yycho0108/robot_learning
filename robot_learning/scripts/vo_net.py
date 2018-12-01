@@ -244,7 +244,7 @@ class VONet(object):
 
     def _build_opt(self, c,
             freeze_cnn=cfg.FREEZE_CNN,
-            freeze_vo_nos=cfg.FREEZE_VO_NOS,
+            freeze_rnn=cfg.FREEZE_RNN,
             log=no_op):
         log('- build-opt -')
         opt = tf.train.AdamOptimizer(learning_rate=self.learning_rate_)
@@ -254,7 +254,7 @@ class VONet(object):
         if freeze_cnn:
             log('freezing cnn')
             train_vars = [v for v in slim.get_trainable_variables() if ('vo/sconv' not in v.name) and ('vo/conv' not in v.name)]
-            if freeze_vo_nos:
+            if freeze_rnn:
                 train_vars = [v for v in train_vars if ('vo/reduction' not in v.name) and ('vo/rnn' not in v.name)]
             log('train variables:')
             for v in train_vars:
@@ -338,6 +338,8 @@ def main():
                 train=True,
                 log=print
                 )
+        print([v.name for v in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)])
+
         #print([v.name for v in slim.get_trainable_variables()])
 
     #with tf.Session(graph=graph) as sess:

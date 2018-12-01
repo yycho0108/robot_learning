@@ -7,7 +7,7 @@ from utils import normalize
 from sklearn.neighbors import NearestNeighbors
 from matplotlib import pyplot as plt
 
-def map_inv(src, delta, window=9, eps=1e-9):
+def map_inv(src, delta, window=5, eps=1e-9):
     shape = np.shape(src)
 
     src   = np.float32(src.reshape([-1, 2]))
@@ -586,7 +586,7 @@ class FlowShow(object):
 def main():
     pass
 
-    #root = os.path.expanduser('~/dispset')
+    #root = os.path.expanduser('~/datasets/ilsvrc_opt')
     #didx = str(np.random.randint(1,31))
     #ddir = os.path.join(root, didx)
 
