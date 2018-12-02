@@ -11,6 +11,8 @@ class ClassicalVO(object):
         self.prv_ = None # previous image
 
         # build detector
+        self.gftt_ = cv2.GFTTDetector.create()
+        self.brisk_ = cv2.BRISK_create()
         self.orb_ = cv2.ORB_create(nfeatures=1024, scaleFactor=1.2, WTA_K=2)
 
         # build flann matcher
@@ -37,8 +39,8 @@ class ClassicalVO(object):
         # lowe filter
         good = []
         for i,(m,n) in enumerate(matches):
-            if m.distance < 0.75*n.distance and \
-                    m.distance < thresh:
+            if m.distance < 0.75*n.distance:
+                # and m.distance < thresh
                 good.append(m)
         good = np.asarray(good, dtype=cv2.DMatch)
         return good
@@ -81,7 +83,10 @@ class ClassicalVO(object):
     #    return cv2.findEssentialMat(p1, p2)[0]
 
     def __call__(self, img):
-        kp2, des2 = self.orb_.detectAndCompute(img, None)
+        #kp2, des2 = self.orb_.detectAndCompute(img, None)
+        kp = self.gftt_.detect(img)
+        kp2, des2 = self.brisk_.compute(img, kp)
+
         if des2 is None:
             # something is invalid about the image?
             return True, None
@@ -118,6 +123,9 @@ class ClassicalVO(object):
         pp    = (160,120)#(0,0)#(160,120)
 
         eres = cv2.findEssentialMat(p2, p1, focal=focal, pp=pp)
+
+        R1, R2, t = cv2.decomposeEssentialMat(eres[0])
+
         Emat, mask = eres[0], eres[1] # p2 w.r.t. p1
         _, R, t, _ = cv2.recoverPose(Emat, p2, p1, focal=focal, pp=pp, mask=mask)
 
@@ -129,7 +137,8 @@ class ClassicalVO(object):
 
         h = -h[1]
         #print('dh', np.round(np.rad2deg(h), 2))
-        t = [t[2,0], 0.0 * -t[0,0]] # no-slip
+        t = [t[2,0], -t[0,0]] # no-slip
+        # TODO : why is t[0,0] so bad???
         #print('dt', t)
 
         ##kim1 = cv2.drawKeypoints(img1, kp1[m1], img1.copy() )
