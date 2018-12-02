@@ -11,7 +11,7 @@ class ClassicalVO(object):
         self.prv_ = None # previous image
 
         # build detector
-        self.orb_ = cv2.ORB_create(nfeatures=256, scaleFactor=1.2, WTA_K=2)
+        self.orb_ = cv2.ORB_create(nfeatures=1024, scaleFactor=1.2, WTA_K=2)
 
         # build flann matcher
         FLANN_INDEX_KDTREE = 0
@@ -97,11 +97,13 @@ class ClassicalVO(object):
         kp1, des1, img1 = self.prv_
         matches = self.match_v1(des1, des2)
         if matches is None:
+            self.prv_ = (kp2, des2, img2)
             return True, None
         #matches = self.match(des1, des2)
 
         if len(matches) <= 5:
             # skip frame without updating prv
+            self.prv_ = (kp2, des2, img2)
             return True, None
 
         draw_params = dict(matchColor = (0,255,0),
@@ -113,11 +115,11 @@ class ClassicalVO(object):
         p2 = np.int32([e.pt for e in kp2[i2]])
 
         focal = 530.0 / 2.0
-        pp    = (0,0)#(160,120)
+        pp    = (160,120)#(0,0)#(160,120)
 
-        Emat = cv2.findEssentialMat(p2, p1, focal=focal, pp=pp)
-        Emat = Emat[0] # p2 w.r.t. p1
-        _, R, t, _ = cv2.recoverPose(Emat, p2, p1, focal=focal, pp=pp)
+        eres = cv2.findEssentialMat(p2, p1, focal=focal, pp=pp)
+        Emat, mask = eres[0], eres[1] # p2 w.r.t. p1
+        _, R, t, _ = cv2.recoverPose(Emat, p2, p1, focal=focal, pp=pp, mask=mask)
 
         h = tx.euler_from_matrix(R)
         #h = np.round(np.rad2deg(tx.euler_from_matrix(R)), 2)
@@ -126,7 +128,9 @@ class ClassicalVO(object):
         #print ('t-xy', t[2,0], -t[0,0])
 
         h = -h[1]
-        t = [t[2,0], -t[0,0]]
+        #print('dh', np.round(np.rad2deg(h), 2))
+        t = [t[2,0], 0.0 * -t[0,0]] # no-slip
+        #print('dt', t)
 
         ##kim1 = cv2.drawKeypoints(img1, kp1[m1], img1.copy() )
         ##kim2 = cv2.drawKeypoints(img2, kp2[m2], img2.copy() )
@@ -155,7 +159,8 @@ class ClassicalVO(object):
         #print 'm', m
 
 def main():
-    imgs = np.load('../data/train/9/img.npy')
+    idx = np.random.choice(14)
+    imgs = np.load('../data/train/{}/img.npy'.format(idx))
     vo = ClassicalVO()
 
     fig, (ax0,ax1) = plt.subplots(1,2)
@@ -164,6 +169,7 @@ def main():
 
     tx = []
     ty = []
+    th = []
 
     for img in imgs:
         suc, res = vo(img)
@@ -172,10 +178,19 @@ def main():
                 (img, dh, dt) = res
                 dps = np.float32([dt[0], dt[1], dh])
                 pos = add_p3d(pos, dps)
+
                 tx.append(pos[0])
                 ty.append(pos[1])
+                th.append(pos[2])
+
                 ax0.imshow(img[...,::-1])
-                ax1.plot(tx, ty)
+
+                ax1.plot(tx, ty, '--')
+                ax1.quiver(tx, ty,
+                        np.cos(th), np.sin(th),
+                        scale_units='xy',
+                        angles='xy')
+
                 fig.canvas.draw()
                 plt.pause(0.001)
         else:
