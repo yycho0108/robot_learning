@@ -82,7 +82,7 @@ def recoverPoseWithPoints(E, p1, p2,
     R1, R2, t = cv2.decomposeEssentialMat(E)
     # choose from argmin(R(z))
 
-    cmb = (
+    cand = (
             (R1, t),
             (R2, t),
             (R1, -t),
@@ -93,7 +93,8 @@ def recoverPoseWithPoints(E, p1, p2,
     R_res = None
     t_res = None
 
-    for (cR,ct) in cmb:
+    # candidates filtering by chirality test
+    for (cR,ct) in cand:
         cP = np.concatenate((cR, ct), axis=1)
         Q  = triangulatePoints(P0, cP, p1, p2)
 
@@ -101,7 +102,7 @@ def recoverPoseWithPoints(E, p1, p2,
                 np.greater(Q[:,:2], 0.0),
                 np.less(Q[:,:2], 50.0))
         det = np.sum(msk)
-        if (max_det is None) or (det > max_det):
+        if (max_det is None) or (det >= max_det):
             max_det = det
             R_res = cR
             t_res = ct
@@ -230,14 +231,10 @@ class ClassicalVO(object):
         pp    = (160,120)#(0,0)#(160,120)
 
         eres = cv2.findEssentialMat(p2, p1, focal=focal, pp=pp)
-
-        #R1, R2, t = cv2.decomposeEssentialMat(eres[0])
-
         Emat, mask = eres[0], eres[1] # p2 w.r.t. p1
-        n_in, R, t = recoverPoseWithPoints(Emat, p2, p1, focal, focal, pp[0], pp[1])
-        print R,t
-        n_in, R, t, _ = cv2.recoverPose(Emat, p2, p1, focal=focal, pp=pp, mask=mask)
-        print R,t
+        cmat = np.float32([focal,0,pp[0], 0, focal, pp[1], 0,0,1]).reshape(3,3)
+        n_in, R, t, msk, pts = cv2.recoverPose(Emat, p2, p1, cameraMatrix=cmat, distanceThresh=50.0)
+        pts3 = pts[:3] / pts[3]
 
         if n_in < in_thresh:
             # insufficient number of inliers to recover pose
