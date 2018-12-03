@@ -234,7 +234,20 @@ class ClassicalVO(object):
         Emat, mask = eres[0], eres[1] # p2 w.r.t. p1
         cmat = np.float32([focal,0,pp[0], 0, focal, pp[1], 0,0,1]).reshape(3,3)
         n_in, R, t, msk, pts = cv2.recoverPose(Emat, p2, p1, cameraMatrix=cmat, distanceThresh=50.0)
+
+        # TODO : do the correct scale estimation
+
+        # points: homogeneous --> 3d coordinates
+        pts = pts[:, (msk[:,0]==255)]
         pts3 = pts[:3] / pts[3]
+
+        # TODO : will this take care of scale?
+        pts2 = s * np.stack([pts3[2], -pts3[0]], axis=-1)
+
+        # filter by large displacement
+        pts2 = pts2[np.linalg.norm(pts2, axis=-1) < 10.0] #filter by radius=10.0m
+        pts2 = pts2[np.sign(pts2[:,0]) == 1]
+        print n_in, len(pts2)
 
         if n_in < in_thresh:
             # insufficient number of inliers to recover pose
@@ -263,7 +276,7 @@ class ClassicalVO(object):
                 matches,None,**draw_params)
         print('---')
 
-        return True, (mim, h, t)
+        return True, (mim, h, t, pts2)
 
         #print 'm', m
 
@@ -274,7 +287,7 @@ def Rmat(x):
 
 def main():
     #idx = np.random.choice(14)
-    idx = 14
+    idx = 13
     print('idx', idx)
 
     # load data
@@ -325,14 +338,17 @@ def main():
 
     n = len(stamps)
     vo(imgs[0]) # initialize vo
+
+    pt_map = np.empty((0, 2), dtype=np.float32)
+
     for i in range(1, n):
         stamp = stamps[i]
         img   = imgs[i]
 
         # TODO : there was a bug in data_collector that corrupted all time-stamp data!
         # very unfortunate.
-        dt    = (stamps[i] - stamps[i-1])
-        #dt = 0.1
+        #dt    = (stamps[i] - stamps[i-1])
+        dt = 0.1
 
         # experimental : pass in scale as a parameter
         # TODO : estimate scale
@@ -351,7 +367,7 @@ def main():
             # skip filter updates
             continue
 
-        (img, dh, dt) = res
+        (img, dh, dt, pts) = res
         dps = np.float32([dt[0], dt[1], dh])
         print('(pred-gt) {} vs {}'.format(dps, dps_gt) )
         pos = add_p3d(prv, dps)
@@ -378,6 +394,15 @@ def main():
                 angles='xy')
 
         ax1.plot(odom[:i+1,0], odom[:i+1,1], 'k--')
+
+        # pts2 in the proper coordinate system
+        pts_c = pts.dot(Rmat(odom[i,2]).T) + np.reshape(odom[i,:2], (1,2))
+
+        ph = np.rad2deg(np.arctan2(pts[:,1], pts[:,0]))
+        print 'fov', np.min(ph), np.max(ph)
+
+        pt_map = np.concatenate([pt_map, pts_c], axis=0)
+        ax1.plot(pts_c[:,0], pts_c[:,1], '.')
         #ax1.quiver(tx, ty,
         #        np.cos(th), np.sin(th),
         #        scale_units='xy',
