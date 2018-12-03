@@ -6,6 +6,45 @@ from matplotlib import pyplot as plt
 from tf import transformations as tx
 from utils.vo_utils import add_p3d
 
+from filterpy.kalman import UnscentedKalmanFilter as UKF
+from filterpy.kalman import MerweScaledSigmaPoints, JulierSigmaPoints
+
+# ukf = (x,y,h,v,w)
+
+def ukf_fx(s, dt):
+    x,y,h,v,w = s
+
+    x += v * np.cos(h) * dt
+    y += v * np.sin(h) * dt
+    h += w * dt
+    #v *= 0.999
+    return np.asarray([x,y,h,v,w])
+
+def ukf_hx(s):
+    return s[:3].copy()
+
+def ukf_mean(xs, wm):
+    """
+    Runs circular mean for angular states, which is critical to preventing issues related to linear assumptions. 
+    WARNING : do not replace with the default mean function
+    """
+    # Important : SUM! not mean.
+    mx = np.sum(xs * np.expand_dims(wm, -1), axis=0)
+    ms = np.mean(np.sin(xs[:,2])*wm)
+    mc = np.mean(np.cos(xs[:,2])*wm)
+    mx[2] = np.arctan2(ms,mc)
+    return mx
+
+def ukf_residual(a,b):
+    """
+    Runs circular residual for angular states, which is critical to preventing issues related to linear assumptions.
+    WARNING : do not replace with the default residual function.
+    """
+    d = np.real(np.subtract(a,b))
+    # sometimes gets imag for some reason
+    d[2] = np.arctan2(np.sin(d[2]), np.cos(d[2]))
+    return d
+
 class ClassicalVO(object):
     def __init__(self):
         self.prv_ = None # previous image
@@ -13,7 +52,7 @@ class ClassicalVO(object):
         # build detector
         self.gftt_ = cv2.GFTTDetector.create()
         self.brisk_ = cv2.BRISK_create()
-        self.orb_ = cv2.ORB_create(nfeatures=1024, scaleFactor=1.2, WTA_K=2)
+        self.orb_ = cv2.ORB_create(nfeatures=512, scaleFactor=1.2, WTA_K=2)
 
         # build flann matcher
         FLANN_INDEX_KDTREE = 0
@@ -21,6 +60,7 @@ class ClassicalVO(object):
         search_params = dict(checks=50)   # or pass empty dictionary
         flann = cv2.FlannBasedMatcher(index_params,search_params)
         self.flann_ = flann
+
 
     def match_v1(self, des1, des2, thresh=150.0):
         # apply flann
@@ -83,9 +123,11 @@ class ClassicalVO(object):
     #    return cv2.findEssentialMat(p1, p2)[0]
 
     def __call__(self, img):
-        #kp2, des2 = self.orb_.detectAndCompute(img, None)
-        kp = self.gftt_.detect(img)
-        kp2, des2 = self.brisk_.compute(img, kp)
+
+        print('-detection-')
+        kp2, des2 = self.orb_.detectAndCompute(img, None)
+        #kp = self.gftt_.detect(img)
+        #kp2, des2 = self.brisk_.compute(img, kp)
 
         if des2 is None:
             # something is invalid about the image?
@@ -100,14 +142,14 @@ class ClassicalVO(object):
             return True, None
 
         kp1, des1, img1 = self.prv_
+        print('-match-')
         matches = self.match_v1(des1, des2)
+        #matches = self.match(des1, des2)
         if matches is None:
             self.prv_ = (kp2, des2, img2)
             return True, None
-        #matches = self.match(des1, des2)
 
         if len(matches) <= 5:
-            # skip frame without updating prv
             self.prv_ = (kp2, des2, img2)
             return True, None
 
@@ -122,12 +164,17 @@ class ClassicalVO(object):
         focal = 530.0 / 2.0
         pp    = (160,120)#(0,0)#(160,120)
 
+        print('-pose-')
         eres = cv2.findEssentialMat(p2, p1, focal=focal, pp=pp)
 
-        R1, R2, t = cv2.decomposeEssentialMat(eres[0])
+        #R1, R2, t = cv2.decomposeEssentialMat(eres[0])
 
         Emat, mask = eres[0], eres[1] # p2 w.r.t. p1
         _, R, t, _ = cv2.recoverPose(Emat, p2, p1, focal=focal, pp=pp, mask=mask)
+
+        # magnitude of t is always 1.0! can we do anything about this?/
+
+        t *= 0.1 # something about overall scale
 
         h = tx.euler_from_matrix(R)
         #h = np.round(np.rad2deg(tx.euler_from_matrix(R)), 2)
@@ -137,7 +184,7 @@ class ClassicalVO(object):
 
         h = -h[1]
         #print('dh', np.round(np.rad2deg(h), 2))
-        t = [t[2,0], -t[0,0]] # no-slip
+        t = [t[2,0], 0.0*-t[0,0]] # no-slip
         # TODO : why is t[0,0] so bad???
         #print('dt', t)
 
@@ -162,14 +209,32 @@ class ClassicalVO(object):
         mim = cv2.drawMatches(
                 img1,kp1,img2,kp2,
                 matches,None,**draw_params)
+        print('---')
 
         return True, (mim, h, t)
 
         #print 'm', m
 
+def Rmat(x):
+    c,s = np.cos(x), np.sin(x)
+    R = np.float32([c,-s,s,c]).reshape(2,2)
+    return R
+
 def main():
     idx = np.random.choice(14)
-    imgs = np.load('../data/train/{}/img.npy'.format(idx))
+
+    imgs   = np.load('../data/train/{}/img.npy'.format(idx))
+    stamps = np.load('../data/train/{}/stamp.npy'.format(idx))
+    odom   = np.load('../data/train/{}/odom.npy'.format(idx))
+    # odom = [Nx3]
+    # set odom @ t0= (0,0,0)
+    R0 = Rmat(odom[0,2])
+    odom -= odom[0]
+    odom[:,:2] = odom[:,:2].dot(R0)
+    print odom[0]
+
+    stamps -= stamps[0] # t0 = 0
+
     vo = ClassicalVO()
 
     fig, (ax0,ax1) = plt.subplots(1,2)
@@ -180,30 +245,69 @@ def main():
     ty = []
     th = []
 
-    for img in imgs:
+    # build ukf
+    Q = np.diag([0.01,0.01,0.01,0.01,0.01]) #xyhvw
+    R = np.diag([0.01,0.01,0.01]) # xyh
+    x0 = np.zeros(5)
+    P0 = np.diag([0.001, 0.001, 0.001, 0.01, 0.01])
+
+    #spts = MerweScaledSigmaPoints(5,1e-3,2,-2,subtract=ukf_residual)
+    spts = JulierSigmaPoints(5, 5-2, sqrt_method=np.linalg.cholesky, subtract=ukf_residual)
+
+    ukf = UKF(5, 3, (1.0 / 30.), # dt guess
+            ukf_hx, ukf_fx, spts,
+            x_mean_fn=ukf_mean,
+            z_mean_fn=ukf_mean,
+            residual_x=ukf_residual,
+            residual_z=ukf_residual)
+    ukf.x = x0.copy()
+    ukf.P = P0.copy()
+    ukf.Q = Q
+    ukf.R = R
+
+    n = len(stamps)
+    vo(imgs[0]) # initialize vo
+    for i in range(1, n):
+        print('-fetch-')
+        stamp = stamps[i]
+        img   = imgs[i]
+        dt    = (stamps[i] - stamps[i-1])
+        ukf.predict(dt=dt)
         suc, res = vo(img)
-        if suc:
-            if res is not None:
-                (img, dh, dt) = res
-                dps = np.float32([dt[0], dt[1], dh])
-                pos = add_p3d(pos, dps)
+        if not suc:
+            print('Visual Odometry Aborted!')
+            break
 
-                tx.append(pos[0])
-                ty.append(pos[1])
-                th.append(pos[2])
+        if res is None:
+            # skip filter updates
+            continue
 
-                ax0.imshow(img[...,::-1])
+        (img, dh, dt) = res
+        dps = np.float32([dt[0], dt[1], dh])
+        pos = add_p3d(ukf.x[:3], dps)
 
-                ax1.plot(tx, ty, '--')
-                ax1.quiver(tx, ty,
-                        np.cos(th), np.sin(th),
-                        scale_units='xy',
-                        angles='xy')
+        ukf.update(pos)
 
-                fig.canvas.draw()
-                plt.pause(0.001)
-        else:
-            return
+        tx.append( float(ukf.x[0]) )
+        ty.append( float(ukf.x[1]) )
+        th.append( float(ukf.x[2]) )
+
+        ax0.imshow(img[...,::-1])
+
+        ax1.plot(tx, ty, 'r--')
+        #ax1.quiver(tx, ty,
+        #        np.cos(th), np.sin(th),
+        #        scale_units='xy',
+        #        angles='xy')
+
+        ax1.plot(odom[:i,0], odom[:i,1], 'k--')
+        #ax1.quiver(tx, ty,
+        #        np.cos(th), np.sin(th),
+        #        scale_units='xy',
+        #        angles='xy')
+
+        fig.canvas.draw()
+        plt.pause(0.001)
 
 if __name__ == "__main__":
     main()
