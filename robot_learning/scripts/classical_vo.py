@@ -48,30 +48,65 @@ def ukf_residual(a, b):
     d[2] = np.arctan2(np.sin(d[2]), np.cos(d[2]))
     return d
 
-def recoverPoseWithPoints(E, p1, p2, fx, fy, cx, cy):
+def triangulatePoints(P1, P2, p1, p2):
+    """
+    Custom impl., as cv2.triangulatePoints resulted in memory Error.
+    """
+
+    pt = [p1, p2]
+    P = [P1,P2]
+
+    n = len(p1)
+
+    pt_4dh = np.empty((n, 4), dtype=np.float32)
+    for i in range(n):
+        A = np.empty((4,4), dtype=np.float32)
+        for j in range(2):
+            x, y = pt[j][i]
+            A[j*2+0] = x * P[j][2] - P[j][0]
+            A[j*2+1] = y * P[j][2] - P[j][1]
+        U,s,V = np.linalg.svd(A) # U.diag(S).V == A
+        pt_4dh[i] = V[3,:]
+    return pt_4dh[:,:3] / pt_4dh[:, 3:]
+
+def recoverPoseWithPoints(E, p1, p2,
+        fx, fy, cx, cy):
     # mostly based on cv2.recoverPose() implementation
-    c = np.reshape( (cx,cy), (1,2) )
-    f = np.reshape( (fx,fy), (1,2) )
+    c = np.reshape( (cx,cy), (1,2) ).astype(np.float32)
+    f = np.reshape( (fx,fy), (1,2) ).astype(np.float32)
 
     # normalize points
     p1_n = (p1 - c) / f
     p2_n = (p2 - c) / f
 
-    R1, R2, t = cv2.decomposeEssentialMat(eres[0])
-    #cv2.recoverPose()
+    R1, R2, t = cv2.decomposeEssentialMat(E)
+    # choose from argmin(R(z))
+
+    cmb = (
+            (R1, t),
+            (R2, t),
+            (R1, -t),
+            (R2, -t))
 
     P0 = np.eye(3, 4, dtype=np.float32)
+    max_det = None
+    R_res = None
+    t_res = None
 
-    # construct PMat candidates
-    P1,P2,P3,P4 = [P0.copy() for _ in range(4)]
-    P1[:3,:3] = R1
-    P1[:3,3 ] = t
-    P2[:3,:3] = R2
-    P2[:3,3 ] = t
-    P3[:3,:3] = R1
-    P3[:3,3 ] = -t
-    P4[:3,:3] = R2
-    P4[:3,3 ] = -t
+    for (cR,ct) in cmb:
+        cP = np.concatenate((cR, ct), axis=1)
+        Q  = triangulatePoints(P0, cP, p1, p2)
+
+        msk = np.logical_and(
+                np.greater(Q[:,:2], 0.0),
+                np.less(Q[:,:2], 50.0))
+        det = np.sum(msk)
+        if (max_det is None) or (det > max_det):
+            max_det = det
+            R_res = cR
+            t_res = ct
+
+    return max_det, R_res, t_res
 
 class ClassicalVO(object):
     def __init__(self):
@@ -199,7 +234,10 @@ class ClassicalVO(object):
         #R1, R2, t = cv2.decomposeEssentialMat(eres[0])
 
         Emat, mask = eres[0], eres[1] # p2 w.r.t. p1
+        n_in, R, t = recoverPoseWithPoints(Emat, p2, p1, focal, focal, pp[0], pp[1])
+        print R,t
         n_in, R, t, _ = cv2.recoverPose(Emat, p2, p1, focal=focal, pp=pp, mask=mask)
+        print R,t
 
         if n_in < in_thresh:
             # insufficient number of inliers to recover pose
