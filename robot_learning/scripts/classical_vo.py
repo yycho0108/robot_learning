@@ -4,7 +4,7 @@ from scipy.optimize import linear_sum_assignment
 from matplotlib import pyplot as plt
 
 from tf import transformations as tx
-from utils.vo_utils import add_p3d
+from utils.vo_utils import add_p3d, sub_p3d
 
 from filterpy.kalman import UnscentedKalmanFilter as UKF
 from filterpy.kalman import MerweScaledSigmaPoints, JulierSigmaPoints
@@ -14,9 +14,13 @@ from filterpy.kalman import MerweScaledSigmaPoints, JulierSigmaPoints
 def ukf_fx(s, dt):
     x,y,h,v,w = s
 
-    x += v * np.cos(h) * dt
-    y += v * np.sin(h) * dt
-    h += w * dt
+    dx = v * dt
+    dy = 0.0
+    dh = w * dt
+    x,y,h = add_p3d([x,y,h], [dx,dy,dh])
+    #x += v * np.cos(h) * dt
+    #y += v * np.sin(h) * dt
+    #h += w * dt
     #v *= 0.999
     return np.asarray([x,y,h,v,w])
 
@@ -35,15 +39,39 @@ def ukf_mean(xs, wm):
     mx[2] = np.arctan2(ms,mc)
     return mx
 
-def ukf_residual(a,b):
+def ukf_residual(a, b):
     """
     Runs circular residual for angular states, which is critical to preventing issues related to linear assumptions.
     WARNING : do not replace with the default residual function.
     """
-    d = np.real(np.subtract(a,b))
-    # sometimes gets imag for some reason
+    d = np.subtract(a, b)
     d[2] = np.arctan2(np.sin(d[2]), np.cos(d[2]))
     return d
+
+def recoverPoseWithPoints(E, p1, p2, fx, fy, cx, cy):
+    # mostly based on cv2.recoverPose() implementation
+    c = np.reshape( (cx,cy), (1,2) )
+    f = np.reshape( (fx,fy), (1,2) )
+
+    # normalize points
+    p1_n = (p1 - c) / f
+    p2_n = (p2 - c) / f
+
+    R1, R2, t = cv2.decomposeEssentialMat(eres[0])
+    #cv2.recoverPose()
+
+    P0 = np.eye(3, 4, dtype=np.float32)
+
+    # construct PMat candidates
+    P1,P2,P3,P4 = [P0.copy() for _ in range(4)]
+    P1[:3,:3] = R1
+    P1[:3,3 ] = t
+    P2[:3,:3] = R2
+    P2[:3,3 ] = t
+    P3[:3,:3] = R1
+    P3[:3,3 ] = -t
+    P4[:3,:3] = R2
+    P4[:3,3 ] = -t
 
 class ClassicalVO(object):
     def __init__(self):
@@ -122,9 +150,11 @@ class ClassicalVO(object):
     #def E(self, kp1, kp2, matches, focal=530.0):
     #    return cv2.findEssentialMat(p1, p2)[0]
 
-    def __call__(self, img):
+    def __call__(self, img,
+            in_thresh = 32,
+            s = 0.1
+            ):
 
-        print('-detection-')
         kp2, des2 = self.orb_.detectAndCompute(img, None)
         #kp = self.gftt_.detect(img)
         #kp2, des2 = self.brisk_.compute(img, kp)
@@ -141,16 +171,15 @@ class ClassicalVO(object):
             self.prv_ = (kp2, des2, img2)
             return True, None
 
+        # swap prv
         kp1, des1, img1 = self.prv_
-        print('-match-')
+        self.prv_ = (kp2, des2, img2)
+
         matches = self.match_v1(des1, des2)
         #matches = self.match(des1, des2)
-        if matches is None:
-            self.prv_ = (kp2, des2, img2)
-            return True, None
 
-        if len(matches) <= 5:
-            self.prv_ = (kp2, des2, img2)
+        if (matches is None) or (len(matches) <= 8):
+            # no matches or insufficient # of matches
             return True, None
 
         draw_params = dict(matchColor = (0,255,0),
@@ -161,20 +190,20 @@ class ClassicalVO(object):
         p1 = np.int32([e.pt for e in kp1[i1]])
         p2 = np.int32([e.pt for e in kp2[i2]])
 
+        # TODO : expose these parameters
         focal = 530.0 / 2.0
         pp    = (160,120)#(0,0)#(160,120)
 
-        print('-pose-')
         eres = cv2.findEssentialMat(p2, p1, focal=focal, pp=pp)
 
         #R1, R2, t = cv2.decomposeEssentialMat(eres[0])
 
         Emat, mask = eres[0], eres[1] # p2 w.r.t. p1
-        _, R, t, _ = cv2.recoverPose(Emat, p2, p1, focal=focal, pp=pp, mask=mask)
+        n_in, R, t, _ = cv2.recoverPose(Emat, p2, p1, focal=focal, pp=pp, mask=mask)
 
-        # magnitude of t is always 1.0! can we do anything about this?/
-
-        t *= 0.1 # something about overall scale
+        if n_in < in_thresh:
+            # insufficient number of inliers to recover pose
+            return True, None
 
         h = tx.euler_from_matrix(R)
         #h = np.round(np.rad2deg(tx.euler_from_matrix(R)), 2)
@@ -184,27 +213,15 @@ class ClassicalVO(object):
 
         h = -h[1]
         #print('dh', np.round(np.rad2deg(h), 2))
-        t = [t[2,0], 0.0*-t[0,0]] # no-slip
+
+        # no-slip
         # TODO : why is t[0,0] so bad???
-        #print('dt', t)
+        # TODO : relax the no-slip constraint by being better at triangulating or something
+        t = np.asarray([t[2,0], 0.0 * -t[0,0]])
 
-        ##kim1 = cv2.drawKeypoints(img1, kp1[m1], img1.copy() )
-        ##kim2 = cv2.drawKeypoints(img2, kp2[m2], img2.copy() )
-        #h, w = img1.shape[:2]
-        #mim  = np.concatenate([img1, img2], axis=1)
-        #color = np.random.randint(0,255,(len(m1),3))
-        #kp1_m = kp1[m1]
-        #kp2_m = kp2[m2]
-
-        #for i,(new,old) in enumerate(zip(kp1_m,kp2_m)):
-        #    a,b = np.int32(old.pt)
-        #    c,d = np.int32(new.pt)
-        #    cv2.line(mim, (a,b),(c+w,d), color[i].tolist(), 2)
-        #    cv2.circle(mim,(a,b),5,color[i].tolist(),-1)
-        #    cv2.circle(mim,(c+w,d),5,color[i].tolist(),-1)
-
-
-        self.prv_ = (kp2, des2, img2)
+        # magnitude of t is always 1.0! can we do anything about this?
+        # something about overall scale
+        t *= s
 
         mim = cv2.drawMatches(
                 img1,kp1,img2,kp2,
@@ -221,23 +238,29 @@ def Rmat(x):
     return R
 
 def main():
-    idx = np.random.choice(14)
+    #idx = np.random.choice(14)
+    idx = 14
+    print('idx', idx)
 
+    # load data
     imgs   = np.load('../data/train/{}/img.npy'.format(idx))
     stamps = np.load('../data/train/{}/stamp.npy'.format(idx))
     odom   = np.load('../data/train/{}/odom.npy'.format(idx))
-    # odom = [Nx3]
+
     # set odom @ t0= (0,0,0)
     R0 = Rmat(odom[0,2])
     odom -= odom[0]
     odom[:,:2] = odom[:,:2].dot(R0)
-    print odom[0]
 
-    stamps -= stamps[0] # t0 = 0
+    #stamps -= stamps[0] # t0 = 0
 
     vo = ClassicalVO()
 
-    fig, (ax0,ax1) = plt.subplots(1,2)
+    fig = plt.figure()
+
+    ax1 = fig.add_subplot(1,2,2)
+    ax0 = fig.add_subplot(2,2,1)
+    ax2 = fig.add_subplot(2,2,3)
 
     pos = np.zeros(shape=3, dtype=np.float32)
 
@@ -246,10 +269,10 @@ def main():
     th = []
 
     # build ukf
-    Q = np.diag([0.01,0.01,0.01,0.01,0.01]) #xyhvw
-    R = np.diag([0.01,0.01,0.01]) # xyh
+    Q = np.diag([1e-4, 1e-4, 1e-4, 1e-2, 1e-2]) #xyhvw
+    R = np.diag([1e-3, 1e-3, 1e-3]) # xyh
     x0 = np.zeros(5)
-    P0 = np.diag([0.001, 0.001, 0.001, 0.01, 0.01])
+    P0 = np.diag([1e-6,1e-6,1e-6, 1e-3, 1e-3])
 
     #spts = MerweScaledSigmaPoints(5,1e-3,2,-2,subtract=ukf_residual)
     spts = JulierSigmaPoints(5, 5-2, sqrt_method=np.linalg.cholesky, subtract=ukf_residual)
@@ -268,12 +291,23 @@ def main():
     n = len(stamps)
     vo(imgs[0]) # initialize vo
     for i in range(1, n):
-        print('-fetch-')
         stamp = stamps[i]
         img   = imgs[i]
+
+        # TODO : there was a bug in data_collector that corrupted all time-stamp data!
+        # very unfortunate.
         dt    = (stamps[i] - stamps[i-1])
+        #dt = 0.1
+
+        # experimental : pass in scale as a parameter
+        # TODO : estimate scale
+        dps_gt = sub_p3d(odom[i], odom[i-1])
+        s = np.linalg.norm(dps_gt[:2])
+
+        prv = ukf.x[:3].copy()
+
         ukf.predict(dt=dt)
-        suc, res = vo(img)
+        suc, res = vo(img, s=s)
         if not suc:
             print('Visual Odometry Aborted!')
             break
@@ -284,30 +318,38 @@ def main():
 
         (img, dh, dt) = res
         dps = np.float32([dt[0], dt[1], dh])
-        pos = add_p3d(ukf.x[:3], dps)
-
+        print('(pred-gt) {} vs {}'.format(dps, dps_gt) )
+        pos = add_p3d(prv, dps)
         ukf.update(pos)
 
         tx.append( float(ukf.x[0]) )
         ty.append( float(ukf.x[1]) )
         th.append( float(ukf.x[2]) )
 
+        ax0.cla()
+        ax1.cla()
+
         ax0.imshow(img[...,::-1])
+        ax0.axis('off')
+
+        # TODO : plot err in dps
+        #ax2.plot(dpss)
+        #ax2.axis('off')
 
         ax1.plot(tx, ty, 'r--')
-        #ax1.quiver(tx, ty,
-        #        np.cos(th), np.sin(th),
-        #        scale_units='xy',
-        #        angles='xy')
+        ax1.quiver(tx, ty,
+                np.cos(th), np.sin(th),
+                scale_units='xy',
+                angles='xy')
 
-        ax1.plot(odom[:i,0], odom[:i,1], 'k--')
+        ax1.plot(odom[:i+1,0], odom[:i+1,1], 'k--')
         #ax1.quiver(tx, ty,
         #        np.cos(th), np.sin(th),
         #        scale_units='xy',
         #        angles='xy')
 
         fig.canvas.draw()
-        plt.pause(0.001)
+        plt.waitforbuttonpress()
 
 if __name__ == "__main__":
     main()

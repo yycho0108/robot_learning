@@ -13,9 +13,15 @@ def sub_p3d(b,a):
     x0,y0,h0 = a
     x1,y1,h1 = b
 
+    c, s = np.cos(h0), np.sin(h0)
+    R = np.reshape([c,-s,s,c], [2,2]) # [2,2,N]
+
+    delta = np.reshape([x1-x0, y1-y0], (2,1))
+    dx, dy = R.T.dot(delta).reshape(2)
     dh = anorm(h1-h0)
-    dx = x1-x0
-    dy = y1-y0
+    #dx = x1-x0
+    #dy = y1-y0
+    return [dx,dy,dh]
 
 def add_p3d(a,b):
     # final p3d composition -- mostly for verification
@@ -28,6 +34,11 @@ def add_p3d(a,b):
     y1 = y0 + dp[1]
     h1 = anorm(h0 + dh)
     return [x1,y1,h1]
+
+#p0 = np.random.uniform(-np.pi, np.pi, size=3)
+#p1 = np.random.uniform(-np.pi, np.pi, size=3)
+#dp = sub_p3d(p1, p0)
+#print(add_p3d(p0, dp), p1)
 
 def add_p3d_batch(a, b):
     x0,y0,h0 = a.T

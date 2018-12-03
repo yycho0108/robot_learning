@@ -52,6 +52,7 @@ class DataCollector(object):
         self.min_dh_ = min_dh
 
         # Data
+        self.t0_   = None
         self.time_ = None
         self.img_  = None
         self.odom_ = None
@@ -85,7 +86,12 @@ class DataCollector(object):
 
     def data_cb(self, img_msg, odom_msg):
         """ store synced scan/odom msg """
-        self.time_ = odom_msg.header.stamp.to_sec()
+
+        time = odom_msg.header.stamp.to_sec()
+        if self.t0_ is None:
+            self.t0_ = time
+        # track relative time
+        self.time_ = (time - self.t0_)
         self.img_cb(img_msg)
         #self.scan_cb(scan_msg)
         self.odom_cb(odom_msg)
@@ -223,8 +229,12 @@ class DataCollector(object):
 
     def save(self, path='/tmp'):
         Path(path).mkdir(parents=True, exist_ok=True)
+        if len(self.dataset_) <= 0:
+            print('No Data To Save')
+            return
+
         data = zip(*self.dataset_) # reformat to [time, img, odom, scan]
-        dtypes = [np.float32, np.uint8, np.float32, np.float32]
+        dtypes = [np.float32, np.uint8, np.float32]
         data = [np.asarray(d, dtype=t) for (d,t) in zip(data, dtypes)]
         stamp, img, odom = data
 
