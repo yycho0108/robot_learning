@@ -82,17 +82,17 @@ def linear_LS_triangulation(P1, P2, u1, u2):
 
 
 def ukf_fx(s, dt):
-    x,y,h,v,w = s
+    x,y,h,vx,vy,w = s
 
-    dx = v * dt
-    dy = 0.0
+    dx = vx * dt
+    dy = vy * dt
     dh = w * dt
     x,y,h = add_p3d([x,y,h], [dx,dy,dh])
     #x += v * np.cos(h) * dt
     #y += v * np.sin(h) * dt
     #h += w * dt
     #v *= 0.999
-    return np.asarray([x,y,h,v,w])
+    return np.asarray([x,y,h,vx,vy,w])
 
 def ukf_hx(s):
     return s[:3].copy()
@@ -517,15 +517,15 @@ class CVORunner(object):
 
     def _build_ukf(self):
         # build ukf
-        Q = np.diag([1e-4, 1e-4, 1e-4, 1e-1, 1e-1]) #xyhvw
-        R = np.diag([1e-2, 1e-2, 1e-4]) # xyh
-        x0 = np.zeros(5)
-        P0 = np.diag([1e-6,1e-6,1e-6, 1e-1, 1e-1])
+        Q = np.diag([1e-4, 1e-4, 1e-4, 1e-1, 1e-1, 1e-1]) #xyhvw
+        R = np.diag([1e-2, 1e-2, 1e-6]) # xyh
+        x0 = np.zeros(6)
+        P0 = np.diag([1e-6,1e-6,1e-6, 1e-1, 1e-1, 1e-1])
 
         #spts = MerweScaledSigmaPoints(5,1e-3,2,-2,subtract=ukf_residual)
-        spts = JulierSigmaPoints(5, 5-2, sqrt_method=np.linalg.cholesky, subtract=ukf_residual)
+        spts = JulierSigmaPoints(6, 6-2, sqrt_method=np.linalg.cholesky, subtract=ukf_residual)
 
-        ukf = UKF(5, 3, (1.0 / 30.), # dt guess
+        ukf = UKF(6, 3, (1.0 / 30.), # dt guess
                 ukf_hx, ukf_fx, spts,
                 x_mean_fn=ukf_mean,
                 z_mean_fn=ukf_mean,
@@ -585,6 +585,7 @@ class CVORunner(object):
         # disable stamps dt for datasets with corrupted timestamps.
         # very unfortunate.
         dt    = (stamps[i] - stamps[i-1])
+        print('dt', dt)
         #dt = 0.2
 
         # experimental : pass in scale as a parameter
@@ -592,7 +593,7 @@ class CVORunner(object):
         dps_gt = sub_p3d(odom[i], odom[i-1])
         s = np.linalg.norm(dps_gt[:2])
         #print('s', s)
-        s = 0.03
+        #s = 0.2
 
         prv = ukf.x[:3].copy()
 
@@ -608,6 +609,7 @@ class CVORunner(object):
 
         (aimg, dh, dt, pts_r, pts3) = res
         dps = np.float32([dt[0], dt[1], dh])
+        print('dh', np.rad2deg(dh))
         print('(pred-gt) {} vs {}'.format(dps, dps_gt) )
         pos = add_p3d(prv, dps)
         ukf.update(pos)
@@ -707,9 +709,9 @@ def main():
     print('idx', idx)
 
     # load data
-    imgs   = np.load('../data/train/{}/img.npy'.format(idx))
-    stamps = np.load('../data/train/{}/stamp.npy'.format(idx))
-    odom   = np.load('../data/train/{}/odom.npy'.format(idx))
+    imgs   = np.load('../data/train/{}/img.npy'.format(idx))[1:]
+    stamps = np.load('../data/train/{}/stamp.npy'.format(idx))[1:]
+    odom   = np.load('../data/train/{}/odom.npy'.format(idx))[1:]
     #scan   = np.load('../data/train/{}/scan.npy'.format(idx))
     scan = None
 
