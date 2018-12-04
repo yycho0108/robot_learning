@@ -248,7 +248,8 @@ class ClassicalVO(object):
         # correct matches
         Fmat, mask = cv2.findFundamentalMat(p2, p1, method=cv2.FM_LMEDS,
                 param1=0.1, param2=0.999)
-        p2, p1 = cv2.correctMatches(Fmat, p2[None,...], p1[None,...])
+        mask = np.asarray(mask[:,0]).astype(np.bool)
+        p2, p1 = cv2.correctMatches(Fmat, p2[None,mask], p1[None, mask])
         p1 = p1[0, ...]
         p2 = p2[0, ...]
 
@@ -273,14 +274,15 @@ class ClassicalVO(object):
         #print 'EE', Emat, (Kmat.T).dot(Fmat).dot(Kmat)
         #cmat = np.float32([focal,0,pp[0], 0, focal, pp[1], 0,0,1]).reshape(3,3)
         n_in, R, t, msk, pts_h = cv2.recoverPose(Emat,
-                np.float64(p2),
-                np.float64(p1),
+                np.float32(p2),
+                np.float32(p1),
                 cameraMatrix=Kmat,
-                distanceThresh=200.0)
+                distanceThresh=200.0) # TODO : or something like 10.0/s ??
         # TODO : do the correct scale estimation
 
         # validate triangulation
-        #pts_h2 = cv2.triangulatePoints(Kmat.dot(np.eye(3,4)),
+
+        #pts_h = cv2.triangulatePoints(Kmat.dot(np.eye(3,4)),
         #        Kmat.dot(np.concatenate([R, t], axis=1)),
         #        p2[None,...], p1[None,...])
         #print np.max(pts_h - pts_h2)
@@ -289,11 +291,18 @@ class ClassicalVO(object):
         msk = np.logical_and(msk, np.all(np.isfinite(pts_h),axis=0)[:,None])
         pts_h = pts_h[:, (msk[:,0] > 0)]
         pts3 = pts_h[:3] / pts_h[3]
+        pts3 = s * np.stack([pts3[2], -pts3[0], -pts3[1]], axis=-1)
+
+        # opt2 : custom
+        #pts3 = triangulatePoints(
+        #        Kmat.dot(np.eye(3,4)),
+        #        Kmat.dot(np.concatenate([R, t], axis=1)),
+        #        p2, p1)
+        #pts3 = pts3[msk[:,0]>0]
+        #pts3 = s * np.stack([pts3[:,2], -pts3[:,0], -pts3[:,1]], axis=-1)
 
         # TODO : will this take care of scale?
-
         # convert to base_link coordinates
-        pts3 = s * np.stack([pts3[2], -pts3[0], -pts3[1]], axis=-1)
 
         #pts3 = pts3[:16] # select 16 points to draw
         #msk[np.where(msk)[0][16:]] = 0
@@ -363,9 +372,10 @@ class CVORunner(object):
         self.scan_ = scan
 
         self.fig_ = fig = plt.figure()
-        self.ax0_ = fig.add_subplot(2,2,1)
+        self.ax0_ = fig.add_subplot(3,2,1)
+        self.ax2_ = fig.add_subplot(3,2,3, projection='3d')
+        self.ax3_ = fig.add_subplot(3,2,5)
         self.ax1_ = fig.add_subplot(1,2,2)
-        self.ax2_ = fig.add_subplot(2,2,3, projection='3d')
 
         self.map_ = np.empty((0, 2), dtype=np.float32)
         self.vo_ = ClassicalVO()
@@ -437,7 +447,7 @@ class CVORunner(object):
         ukf   = self.ukf_
         vo    = self.vo_
         tx, ty, th = self.tx_, self.ty_, self.th_
-        ax0,ax1,ax2 = self.ax0_, self.ax1_, self.ax2_
+        ax0,ax1,ax2,ax3 = self.ax0_, self.ax1_, self.ax2_, self.ax3_
 
         # index
         stamp = stamps[i]
@@ -466,7 +476,7 @@ class CVORunner(object):
             # skip filter updates
             return
 
-        (img, dh, dt, pts, pts3) = res
+        (aimg, dh, dt, pts, pts3) = res
         dps = np.float32([dt[0], dt[1], dh])
         print('(pred-gt) {} vs {}'.format(dps, dps_gt) )
         pos = add_p3d(prv, dps)
@@ -486,8 +496,11 @@ class CVORunner(object):
         ax1.cla()
         ax2.cla()
 
-        ax0.imshow(img[...,::-1])
+        ax0.imshow(aimg[...,::-1])
         ax0.axis('off')
+
+        ax3.imshow(img[...,::-1])
+        ax3.axis('off')
 
         # TODO : plot err in dps
         #ax2.plot(dpss)
