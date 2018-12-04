@@ -225,6 +225,12 @@ class ClassicalVO(object):
         # TODO : expose these parameters
         #focal = 530.0 / 4.0
         #pp    = (160, 120)#(0,0)#(160,120)
+
+        Kmat_o = np.reshape([
+            499.114583, 0.000000, 325.589216,
+            0.000000, 498.996093, 238.001597,
+            0.000000, 0.000000, 1.000000], (3,3))
+
         Kmat = np.reshape([
             499.114583 / 2.0, 0.000000, 325.589216 / 2.0,
             0.000000, 498.996093 / 2.0, 238.001597 / 2.0,
@@ -234,8 +240,10 @@ class ClassicalVO(object):
         pp    = (Kmat[0,2], Kmat[1,2])
 
         # undistort
-        p1 = cv2.undistortPoints(2*p1[None,...], Kmat, distCoeffs, P=Kmat)[0]/2.0
-        p2 = cv2.undistortPoints(2*p2[None,...], Kmat, distCoeffs, P=Kmat)[0]/2.0
+        p1p = p1
+        p1 = cv2.undistortPoints(2.0*p1[None,...], Kmat_o, distCoeffs, P=Kmat_o)[0]/2.0
+        p2 = cv2.undistortPoints(2.0*p2[None,...], Kmat_o, distCoeffs, P=Kmat_o)[0]/2.0
+        #print('what?', np.max(np.abs(p1p - p1)))
 
         # correct matches
         Fmat, mask = cv2.findFundamentalMat(p2, p1, method=cv2.FM_LMEDS,
@@ -265,8 +273,8 @@ class ClassicalVO(object):
         #print 'EE', Emat, (Kmat.T).dot(Fmat).dot(Kmat)
         #cmat = np.float32([focal,0,pp[0], 0, focal, pp[1], 0,0,1]).reshape(3,3)
         n_in, R, t, msk, pts_h = cv2.recoverPose(Emat,
-                np.float32(p2),
-                np.float32(p1),
+                np.float64(p2),
+                np.float64(p1),
                 cameraMatrix=Kmat,
                 distanceThresh=200.0)
         # TODO : do the correct scale estimation
@@ -278,6 +286,7 @@ class ClassicalVO(object):
         #print np.max(pts_h - pts_h2)
 
         # points: homogeneous --> 3d coordinates
+        msk = np.logical_and(msk, np.all(np.isfinite(pts_h),axis=0)[:,None])
         pts_h = pts_h[:, (msk[:,0] > 0)]
         pts3 = pts_h[:3] / pts_h[3]
 
@@ -332,7 +341,7 @@ class ClassicalVO(object):
                 img1,kp1,img2,kp2,
                 matches,None,**draw_params)
         mim = cv2.addWeighted(np.concatenate([img1,img2],axis=1), 0.5, mim, 0.5, 0.0)
-        cv2.drawKeypoints(mim, kp1[i1][mskp[:,0]==255], mim, color=(0,0,255))
+        cv2.drawKeypoints(mim, kp1[i1][mskp[:,0]>0], mim, color=(0,0,255))
         print('---')
 
         return True, (mim, h, t, pts2, pts3)
@@ -371,7 +380,7 @@ class CVORunner(object):
     def _build_ukf(self):
         # build ukf
         Q = np.diag([1e-4, 1e-4, 1e-4, 1e-1, 1e-1]) #xyhvw
-        R = np.diag([1e-3, 1e-3, 1e-4]) # xyh
+        R = np.diag([1e-9, 1e-9, 1e-9]) # xyh
         x0 = np.zeros(5)
         P0 = np.diag([1e-6,1e-6,1e-6, 1e-1, 1e-1])
 
@@ -435,12 +444,13 @@ class CVORunner(object):
         img   = imgs[i]
 
         # TODO : there was a bug in data_collector that corrupted all time-stamp data!
+        # disable stamps dt for datasets with corrupted timestamps.
         # very unfortunate.
-        #dt    = (stamps[i] - stamps[i-1])
-        dt = 0.2
+        dt    = (stamps[i] - stamps[i-1])
+        #dt = 0.2
 
         # experimental : pass in scale as a parameter
-        # TODO : estimate scale
+        # TODO : estimate scale from points + camera height?
         dps_gt = sub_p3d(odom[i], odom[i-1])
         s = np.linalg.norm(dps_gt[:2])
 
@@ -466,6 +476,12 @@ class CVORunner(object):
         ty.append( float(ukf.x[1]) )
         th.append( float(ukf.x[2]) )
 
+        # pts2 in the proper coordinate system
+        pts_c = pts.dot(Rmat(odom[i,2]).T) + np.reshape(odom[i,:2], (1,2))
+        self.map_ = np.concatenate([self.map_, pts_c], axis=0)
+        #scan_c = self.scan_to_pt(scan[i]).dot(Rmat(odom[i,2]).T) + np.reshape(odom[i, :2], (1,2))
+
+        ### EVERYTHING FROM HERE IS PLOTTING + VIZ ###
         ax0.cla()
         ax1.cla()
         ax2.cla()
@@ -479,16 +495,11 @@ class CVORunner(object):
 
         ax1.plot(odom[:i+1,0], odom[:i+1,1], 'k--')
 
-        # pts2 in the proper coordinate system
-        pts_c = pts.dot(Rmat(odom[i,2]).T) + np.reshape(odom[i,:2], (1,2))
 
         ph = np.rad2deg(np.arctan2(pts[:,1], pts[:,0]))
         print 'fov', np.min(ph), np.max(ph)
 
-        self.map_ = np.concatenate([self.map_, pts_c], axis=0)
         ax1.plot(pts_c[:,0], pts_c[:,1], 'r.', label='visual')
-
-        #scan_c = self.scan_to_pt(scan[i]).dot(Rmat(odom[i,2]).T) + np.reshape(odom[i, :2], (1,2))
         #ax1.plot(scan_c[:,0], scan_c[:,1], 'b.', label='scan')
         ax1.plot([0],[0],'k+')
 
@@ -540,7 +551,7 @@ class CVORunner(object):
 
 def main():
     #idx = np.random.choice(8)
-    idx = 13
+    idx = 17
     print('idx', idx)
 
     # load data
@@ -558,7 +569,7 @@ def main():
     stamps -= stamps[0] # t0 = 0
 
     app = CVORunner(imgs, stamps, odom, scan)
-    app.run(auto=True)
+    app.run(auto=False)
 
 if __name__ == "__main__":
     main()
