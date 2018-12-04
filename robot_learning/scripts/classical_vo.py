@@ -190,9 +190,9 @@ class ClassicalVO(object):
             s = 0.1
             ):
 
-        kp2, des2 = self.orb_.detectAndCompute(img, None)
-        #kp = self.gftt_.detect(img)
-        #kp2, des2 = self.brisk_.compute(img, kp)
+        #kp2, des2 = self.orb_.detectAndCompute(img, None)
+        kp = self.gftt_.detect(img)
+        kp2, des2 = self.brisk_.compute(img, kp)
 
         if des2 is None:
             # something is invalid about the image?
@@ -211,39 +211,83 @@ class ClassicalVO(object):
         self.prv_ = (kp2, des2, img2)
 
         matches = self.match_v1(des1, des2)
-        matches = sorted(matches, key=lambda e:e.distance)
         #matches = self.match(des1, des2)
+        matches = sorted(matches, key=lambda e:e.distance)
 
         if (matches is None) or (len(matches) <= 8):
             # no matches or insufficient # of matches
             return True, None
 
         i1, i2 = np.int32([(m.queryIdx, m.trainIdx) for m in matches]).T
-        p1 = np.int32([e.pt for e in kp1[i1]])
-        p2 = np.int32([e.pt for e in kp2[i2]])
+        p1 = np.float32([e.pt for e in kp1[i1]])
+        p2 = np.float32([e.pt for e in kp2[i2]])
 
         # TODO : expose these parameters
-        focal = 530.0 / 4.0
-        pp    = (160,120)#(0,0)#(160,120)
+        #focal = 530.0 / 4.0
+        #pp    = (160, 120)#(0,0)#(160,120)
+        Kmat = np.reshape([
+            499.114583 / 2.0, 0.000000, 325.589216 / 2.0,
+            0.000000, 498.996093 / 2.0, 238.001597 / 2.0,
+            0.000000, 0.000000, 1.000000], (3,3))
+        distCoeffs = np.float32([0.158661, -0.249478, -0.000564, 0.000157, 0.000000])
+        focal = Kmat[0,0]
+        pp    = (Kmat[0,2], Kmat[1,2])
 
-        eres = cv2.findEssentialMat(p2, p1, focal=focal, pp=pp,
-                method=cv2.RANSAC, prob=0.9999, threshold=0.5
-                )
-        Emat, mask = eres[0], eres[1] # p2 w.r.t. p1
-        cmat = np.float32([focal,0,pp[0], 0, focal, pp[1], 0,0,1]).reshape(3,3)
+        # undistort
+        p1 = cv2.undistortPoints(2*p1[None,...], Kmat, distCoeffs, P=Kmat)[0]/2.0
+        p2 = cv2.undistortPoints(2*p2[None,...], Kmat, distCoeffs, P=Kmat)[0]/2.0
 
-        n_in, R, t, msk, pts = cv2.recoverPose(Emat, p2[:64], p1[:64], cameraMatrix=cmat, distanceThresh=50.0)
+        # correct matches
+        Fmat, mask = cv2.findFundamentalMat(p2, p1, method=cv2.FM_LMEDS,
+                param1=0.1, param2=0.999)
+        p2, p1 = cv2.correctMatches(Fmat, p2[None,...], p1[None,...])
+        p1 = p1[0, ...]
+        p2 = p2[0, ...]
 
+        # filter NaN
+        msk = np.logical_and(np.isfinite(p1), np.isfinite(p2))
+        msk = np.logical_and(msk[:,0], msk[:,1])
+        p1 = p1[msk].astype(np.float32)
+        p2 = p2[msk].astype(np.float32)
+
+        if len(p1) <= 8:
+            # ?? TODO : sideways translation??
+            return True, None
+
+        #Emat0 = (Kmat.T).dot(Fmat).dot(Kmat)
+        #print "emat", Emat0
+        Emat, mask = cv2.findEssentialMat(p2, p1, focal=focal, pp=pp,
+                method=cv2.FM_LMEDS, prob=0.999, threshold=0.1)
+        #Ki = np.linalg.inv(Kmat)
+        #Fmat = Ki.T.dot(Emat).dot(Ki)
+        #print 'emat2', Emat
+
+        #print 'EE', Emat, (Kmat.T).dot(Fmat).dot(Kmat)
+        #cmat = np.float32([focal,0,pp[0], 0, focal, pp[1], 0,0,1]).reshape(3,3)
+        n_in, R, t, msk, pts_h = cv2.recoverPose(Emat,
+                np.float32(p2),
+                np.float32(p1),
+                cameraMatrix=Kmat,
+                distanceThresh=200.0)
         # TODO : do the correct scale estimation
 
+        # validate triangulation
+        #pts_h2 = cv2.triangulatePoints(Kmat.dot(np.eye(3,4)),
+        #        Kmat.dot(np.concatenate([R, t], axis=1)),
+        #        p2[None,...], p1[None,...])
+        #print np.max(pts_h - pts_h2)
+
         # points: homogeneous --> 3d coordinates
-        pts = pts[:, (msk[:,0]==255)]
-        pts3 = pts[:3] / pts[3]
+        pts_h = pts_h[:, (msk[:,0] > 0)]
+        pts3 = pts_h[:3] / pts_h[3]
 
         # TODO : will this take care of scale?
 
         # convert to base_link coordinates
         pts3 = s * np.stack([pts3[2], -pts3[0], -pts3[1]], axis=-1)
+
+        #pts3 = pts3[:16] # select 16 points to draw
+        #msk[np.where(msk)[0][16:]] = 0
 
         pts2 = pts3[:, :2]
         # filter by large displacement
@@ -326,10 +370,10 @@ class CVORunner(object):
 
     def _build_ukf(self):
         # build ukf
-        Q = np.diag([1e-4, 1e-4, 1e-4, 1e-2, 1e-2]) #xyhvw
-        R = np.diag([1e-3, 1e-3, 1e-3]) # xyh
+        Q = np.diag([1e-4, 1e-4, 1e-4, 1e-1, 1e-1]) #xyhvw
+        R = np.diag([1e-3, 1e-3, 1e-4]) # xyh
         x0 = np.zeros(5)
-        P0 = np.diag([1e-6,1e-6,1e-6, 1e-3, 1e-3])
+        P0 = np.diag([1e-6,1e-6,1e-6, 1e-1, 1e-1])
 
         #spts = MerweScaledSigmaPoints(5,1e-3,2,-2,subtract=ukf_residual)
         spts = JulierSigmaPoints(5, 5-2, sqrt_method=np.linalg.cholesky, subtract=ukf_residual)
@@ -383,6 +427,7 @@ class CVORunner(object):
         imgs  = self.imgs_
         ukf   = self.ukf_
         vo    = self.vo_
+        tx, ty, th = self.tx_, self.ty_, self.th_
         ax0,ax1,ax2 = self.ax0_, self.ax1_, self.ax2_
 
         # index
@@ -392,7 +437,7 @@ class CVORunner(object):
         # TODO : there was a bug in data_collector that corrupted all time-stamp data!
         # very unfortunate.
         #dt    = (stamps[i] - stamps[i-1])
-        dt = 0.1
+        dt = 0.2
 
         # experimental : pass in scale as a parameter
         # TODO : estimate scale
@@ -417,9 +462,9 @@ class CVORunner(object):
         pos = add_p3d(prv, dps)
         ukf.update(pos)
 
-        self.tx_.append( float(ukf.x[0]) )
-        self.ty_.append( float(ukf.x[1]) )
-        self.th_.append( float(ukf.x[2]) )
+        tx.append( float(ukf.x[0]) )
+        ty.append( float(ukf.x[1]) )
+        th.append( float(ukf.x[2]) )
 
         ax0.cla()
         ax1.cla()
@@ -432,12 +477,6 @@ class CVORunner(object):
         #ax2.plot(dpss)
         #ax2.axis('off')
 
-        #ax1.plot(tx, ty, 'r--')
-        #ax1.quiver(tx, ty,
-        #        np.cos(th), np.sin(th),
-        #        scale_units='xy',
-        #        angles='xy')
-
         ax1.plot(odom[:i+1,0], odom[:i+1,1], 'k--')
 
         # pts2 in the proper coordinate system
@@ -449,18 +488,17 @@ class CVORunner(object):
         self.map_ = np.concatenate([self.map_, pts_c], axis=0)
         ax1.plot(pts_c[:,0], pts_c[:,1], 'r.', label='visual')
 
-        scan_c = self.scan_to_pt(scan[i]).dot(Rmat(odom[i,2]).T) + np.reshape(odom[i, :2], (1,2))
-
-        ax1.plot(scan_c[:,0], scan_c[:,1], 'b.', label='scan')
+        #scan_c = self.scan_to_pt(scan[i]).dot(Rmat(odom[i,2]).T) + np.reshape(odom[i, :2], (1,2))
+        #ax1.plot(scan_c[:,0], scan_c[:,1], 'b.', label='scan')
         ax1.plot([0],[0],'k+')
 
         lx = np.linspace(0, 5)
         lx = np.stack([lx,lx*0],axis=-1)
 
-        fov_l = lx.dot(Rmat(odom[i,2]-np.deg2rad(45)).T) + np.reshape(odom[i,:2], (1,2))
-        fov_r = lx.dot(Rmat(odom[i,2]+np.deg2rad(45)).T) + np.reshape(odom[i,:2], (1,2))
+        fov_l = lx.dot(Rmat(odom[i,2]-np.deg2rad(73/2.)).T) + np.reshape(odom[i,:2], (1,2))
+        fov_r = lx.dot(Rmat(odom[i,2]+np.deg2rad(73/2.)).T) + np.reshape(odom[i,:2], (1,2))
         h = np.linspace(-np.pi, np.pi)
-        radius = 5.0 * np.stack([np.cos(h),np.sin(h)], axis=-1)
+        radius = 5.0 * np.stack([np.cos(h),np.sin(h)], axis=-1) + np.reshape(odom[i,:2], (1,2))
 
         ax1.plot(fov_l[:,0], fov_l[:,1], 'g--')
         ax1.plot(fov_r[:,0], fov_r[:,1], 'g--')
@@ -470,18 +508,17 @@ class CVORunner(object):
         ax1.set_xlim(cx-5.0, cx+5.0)
         ax1.set_ylim(cy-5.0, cy+5.0)
 
-        ax2.scatter(pts3[:,0], pts3[:,1], pts3[:,2])
+        ax2.plot(pts3[:,0], pts3[:,1], pts3[:,2], '.')
         mx = np.abs(pts3).max(axis=0)
         ax2.set_xlabel('x')
-        #ax2.set_xlim(-mx[0],mx[0])
+        ax2.set_xlim(0.0, 5.0)
         ax2.set_ylabel('y')
-        #ax2.set_ylim(-mx[1],mx[1])
+        ax2.set_ylim(-5.0, 5.0)
         ax2.set_zlabel('z')
+        ax2.set_zlim(-1.0, 5.0)
         plt.legend()
 
-        #ax2.set_zlim(-mx[2],mx[2])
-        #ax2.set_aspect('equal')
-
+        ax1.plot(tx, ty, 'b--')
         #ax1.quiver(tx, ty,
         #        np.cos(th), np.sin(th),
         #        scale_units='xy',
@@ -502,15 +539,16 @@ class CVORunner(object):
             plt.show()
 
 def main():
-    idx = np.random.choice(8)
-    #idx = 13
+    #idx = np.random.choice(8)
+    idx = 13
     print('idx', idx)
 
     # load data
     imgs   = np.load('../data/train/{}/img.npy'.format(idx))
     stamps = np.load('../data/train/{}/stamp.npy'.format(idx))
     odom   = np.load('../data/train/{}/odom.npy'.format(idx))
-    scan   = np.load('../data/train/{}/scan.npy'.format(idx))
+    #scan   = np.load('../data/train/{}/scan.npy'.format(idx))
+    scan = None
 
     # set odom @ t0= (0,0,0)
     R0 = Rmat(odom[0,2])
@@ -520,134 +558,7 @@ def main():
     stamps -= stamps[0] # t0 = 0
 
     app = CVORunner(imgs, stamps, odom, scan)
-    app.run()
-
-    #vo = ClassicalVO()
-
-    #fig = plt.figure()
-    #ax0 = fig.add_subplot(2,2,1)
-    #ax1 = fig.add_subplot(1,2,2)
-    #ax2 = fig.add_subplot(2,2,3, projection='3d')
-
-    #pos = np.zeros(shape=3, dtype=np.float32)
-
-    #tx = []
-    #ty = []
-    #th = []
-
-    ## build ukf
-    #Q = np.diag([1e-4, 1e-4, 1e-4, 1e-2, 1e-2]) #xyhvw
-    #R = np.diag([1e-3, 1e-3, 1e-3]) # xyh
-    #x0 = np.zeros(5)
-    #P0 = np.diag([1e-6,1e-6,1e-6, 1e-3, 1e-3])
-
-    ##spts = MerweScaledSigmaPoints(5,1e-3,2,-2,subtract=ukf_residual)
-    #spts = JulierSigmaPoints(5, 5-2, sqrt_method=np.linalg.cholesky, subtract=ukf_residual)
-
-    #ukf = UKF(5, 3, (1.0 / 30.), # dt guess
-    #        ukf_hx, ukf_fx, spts,
-    #        x_mean_fn=ukf_mean,
-    #        z_mean_fn=ukf_mean,
-    #        residual_x=ukf_residual,
-    #        residual_z=ukf_residual)
-    #ukf.x = x0.copy()
-    #ukf.P = P0.copy()
-    #ukf.Q = Q
-    #ukf.R = R
-
-    #n = len(stamps)
-    #vo(imgs[0]) # initialize vo
-
-    #pt_map = np.empty((0, 2), dtype=np.float32)
-
-    #state = {'index' : 1, 'new' : True}
-    #def handle_key(event):
-    #    k = event.key
-    #    if k in ['n', ' ', 'enter']:
-    #        state['index'] += 1
-    #    if k in ['q', 'escape']:
-    #        sys.exit(0)
-
-    #fig.canvas.mpl_connect('key_press_event', handle_key)
-
-    #while True:
-    #    i = state['index']
-    #    if i >= n:
-    #        break
-    #    stamp = stamps[i]
-    #    img   = imgs[i]
-
-    #    # TODO : there was a bug in data_collector that corrupted all time-stamp data!
-    #    # very unfortunate.
-    #    #dt    = (stamps[i] - stamps[i-1])
-    #    dt = 0.1
-
-    #    # experimental : pass in scale as a parameter
-    #    # TODO : estimate scale
-    #    dps_gt = sub_p3d(odom[i], odom[i-1])
-    #    s = np.linalg.norm(dps_gt[:2])
-
-    #    prv = ukf.x[:3].copy()
-
-    #    ukf.predict(dt=dt)
-    #    suc, res = vo(img, s=s)
-    #    if not suc:
-    #        print('Visual Odometry Aborted!')
-    #        break
-
-    #    if res is None:
-    #        # skip filter updates
-    #        continue
-
-    #    (img, dh, dt, pts, pts3) = res
-    #    dps = np.float32([dt[0], dt[1], dh])
-    #    print('(pred-gt) {} vs {}'.format(dps, dps_gt) )
-    #    pos = add_p3d(prv, dps)
-    #    ukf.update(pos)
-
-    #    tx.append( float(ukf.x[0]) )
-    #    ty.append( float(ukf.x[1]) )
-    #    th.append( float(ukf.x[2]) )
-
-    #    ax0.cla()
-    #    ax1.cla()
-    #    ax2.cla()
-
-    #    ax0.imshow(img[...,::-1])
-    #    ax0.axis('off')
-
-    #    # TODO : plot err in dps
-    #    #ax2.plot(dpss)
-    #    #ax2.axis('off')
-
-    #    #ax1.plot(tx, ty, 'r--')
-    #    #ax1.quiver(tx, ty,
-    #    #        np.cos(th), np.sin(th),
-    #    #        scale_units='xy',
-    #    #        angles='xy')
-
-    #    ax1.plot(odom[:i+1,0], odom[:i+1,1], 'k--')
-
-    #    # pts2 in the proper coordinate system
-    #    pts_c = pts.dot(Rmat(odom[i,2]).T) + np.reshape(odom[i,:2], (1,2))
-
-    #    ph = np.rad2deg(np.arctan2(pts[:,1], pts[:,0]))
-    #    print 'fov', np.min(ph), np.max(ph)
-
-    #    pt_map = np.concatenate([pt_map, pts_c], axis=0)
-    #    ax1.plot(pts_c[:,0], pts_c[:,1], '.')
-
-    #    ax2.scatter(pts3[:,0], pts3[:,1], pts3[:,2])
-    #    ax2.set_xlabel('x')
-    #    ax2.set_ylabel('y')
-    #    ax2.set_zlabel('z')
-
-    #    #ax1.quiver(tx, ty,
-    #    #        np.cos(th), np.sin(th),
-    #    #        scale_units='xy',
-    #    #        angles='xy')
-
-    #    fig.canvas.draw()
+    app.run(auto=True)
 
 if __name__ == "__main__":
     main()
