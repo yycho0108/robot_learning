@@ -13,6 +13,74 @@ from filterpy.kalman import MerweScaledSigmaPoints, JulierSigmaPoints
 
 # ukf = (x,y,h,v,w)
 
+def linear_LS_triangulation(P1, P2, u1, u2):
+    """
+    Linear Least Squares based triangulation.
+    Relative speed: 0.1
+    
+    (u1, P1) is the reference pair containing normalized image coordinates (x, y) and the corresponding camera matrix.
+    (u2, P2) is the second pair.
+    
+    u1 and u2 are matrices: amount of points equals #rows and should be equal for u1 and u2.
+    
+    The status-vector will be True for all points.
+
+    from https://github.com/Eliasvan/Multiple-Quadrotor-SLAM/blob/master/Work/python_libs/triangulation.py
+    """
+    A = np.zeros((4, 3))
+    b = np.zeros((4, 1))
+    
+    # Create array of triangulated points
+    x = np.zeros((3, len(u1)))
+    
+    # Initialize C matrices
+    C1 = -np.eye(2,3)
+    C2 = -np.eye(2,3)
+    
+    for i in range(len(u1)):
+        # Derivation of matrices A and b:
+        # for each camera following equations hold in case of perfect point matches:
+        #     u.x * (P[2,:] * x)     =     P[0,:] * x
+        #     u.y * (P[2,:] * x)     =     P[1,:] * x
+        # and imposing the constraint:
+        #     x = [x.x, x.y, x.z, 1]^T
+        # yields:
+        #     (u.x * P[2, 0:3] - P[0, 0:3]) * [x.x, x.y, x.z]^T     +     (u.x * P[2, 3] - P[0, 3]) * 1     =     0
+        #     (u.y * P[2, 0:3] - P[1, 0:3]) * [x.x, x.y, x.z]^T     +     (u.y * P[2, 3] - P[1, 3]) * 1     =     0
+        # and since we have to do this for 2 cameras, and since we imposed the constraint,
+        # we have to solve 4 equations in 3 unknowns (in LS sense).
+
+        # Build C matrices, to construct A and b in a concise way
+        C1[:, 2] = u1[i, :]
+        C2[:, 2] = u2[i, :]
+        
+        # Build A matrix:
+        # [
+        #     [ u1.x * P1[2,0] - P1[0,0],    u1.x * P1[2,1] - P1[0,1],    u1.x * P1[2,2] - P1[0,2] ],
+        #     [ u1.y * P1[2,0] - P1[1,0],    u1.y * P1[2,1] - P1[1,1],    u1.y * P1[2,2] - P1[1,2] ],
+        #     [ u2.x * P2[2,0] - P2[0,0],    u2.x * P2[2,1] - P2[0,1],    u2.x * P2[2,2] - P2[0,2] ],
+        #     [ u2.y * P2[2,0] - P2[1,0],    u2.y * P2[2,1] - P2[1,1],    u2.y * P2[2,2] - P2[1,2] ]
+        # ]
+        A[0:2, :] = C1.dot(P1[0:3, 0:3])    # C1 * R1
+        A[2:4, :] = C2.dot(P2[0:3, 0:3])    # C2 * R2
+        
+        # Build b vector:
+        # [
+        #     [ -(u1.x * P1[2,3] - P1[0,3]) ],
+        #     [ -(u1.y * P1[2,3] - P1[1,3]) ],
+        #     [ -(u2.x * P2[2,3] - P2[0,3]) ],
+        #     [ -(u2.y * P2[2,3] - P2[1,3]) ]
+        # ]
+        b[0:2, :] = C1.dot(P1[0:3, 3:4])    # C1 * t1
+        b[2:4, :] = C2.dot(P2[0:3, 3:4])    # C2 * t2
+        b *= -1
+        
+        # Solve for x vector
+        cv2.solve(A, b, x[:, i:i+1], cv2.DECOMP_SVD)
+    
+    return x.T.astype(np.float32)#, np.ones(len(u1), dtype=bool)
+
+
 def ukf_fx(s, dt):
     x,y,h,v,w = s
 
@@ -127,6 +195,16 @@ class ClassicalVO(object):
         flann = cv2.FlannBasedMatcher(index_params,search_params)
         self.flann_ = flann
 
+    def match_v2(img1, img2, kp1):
+        lk_params = dict( winSize  = (15,15),
+                maxLevel = 20,
+                criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
+        img1_gray = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+        img2_gray = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+
+        # p0 = cv2.goodFeaturesToTrack(src_gray, mask = None, **feature_params)
+        # calculate optical flow
+        p1, st, err = cv2.calcOpticalFlowPyrLK(img1_gray, img2_gray, p0, None, **lk_params)
 
     def match_v1(self, des1, des2, thresh=150.0):
         # apply flann
@@ -223,19 +301,18 @@ class ClassicalVO(object):
         p2 = np.float32([e.pt for e in kp2[i2]])
 
         # TODO : expose these parameters
-        #focal = 530.0 / 4.0
-        #pp    = (160, 120)#(0,0)#(160,120)
-
         Kmat_o = np.reshape([
             499.114583, 0.000000, 325.589216,
             0.000000, 498.996093, 238.001597,
-            0.000000, 0.000000, 1.000000], (3,3))
-
+            0.000000, 0.000000, 1.000000], (3,3)) # orig. scale
         Kmat = np.reshape([
             499.114583 / 2.0, 0.000000, 325.589216 / 2.0,
             0.000000, 498.996093 / 2.0, 238.001597 / 2.0,
-            0.000000, 0.000000, 1.000000], (3,3))
+            0.000000, 0.000000, 1.000000], (3,3)) # half scale
+        print np.round(Kmat)
+
         distCoeffs = np.float32([0.158661, -0.249478, -0.000564, 0.000157, 0.000000])
+
         focal = Kmat[0,0]
         pp    = (Kmat[0,2], Kmat[1,2])
 
@@ -265,7 +342,7 @@ class ClassicalVO(object):
 
         #Emat0 = (Kmat.T).dot(Fmat).dot(Kmat)
         #print "emat", Emat0
-        Emat, mask = cv2.findEssentialMat(p2, p1, focal=focal, pp=pp,
+        Emat, mask = cv2.findEssentialMat(p2, p1, Kmat,
                 method=cv2.FM_LMEDS, prob=0.999, threshold=0.1)
         #Ki = np.linalg.inv(Kmat)
         #Fmat = Ki.T.dot(Emat).dot(Ki)
@@ -278,20 +355,26 @@ class ClassicalVO(object):
                 np.float32(p1),
                 cameraMatrix=Kmat,
                 distanceThresh=200.0) # TODO : or something like 10.0/s ??
+
         # TODO : do the correct scale estimation
 
         # validate triangulation
-
         #pts_h = cv2.triangulatePoints(Kmat.dot(np.eye(3,4)),
         #        Kmat.dot(np.concatenate([R, t], axis=1)),
         #        p2[None,...], p1[None,...])
         #print np.max(pts_h - pts_h2)
 
         # points: homogeneous --> 3d coordinates
-        msk = np.logical_and(msk, np.all(np.isfinite(pts_h),axis=0)[:,None])
-        pts_h = pts_h[:, (msk[:,0] > 0)]
-        pts3 = pts_h[:3] / pts_h[3]
-        pts3 = s * np.stack([pts3[2], -pts3[0], -pts3[1]], axis=-1)
+        # msk = np.logical_and(msk, np.all(np.isfinite(pts_h),axis=0)[:,None])
+        # pts_h = pts_h[:, (msk[:,0] > 0)]
+        #pts3 = pts_h[:3] / pts_h[3]
+        #pts3 = s * np.stack([pts3[2], -pts3[0], -pts3[1]], axis=-1)
+
+        pts3 = linear_LS_triangulation(
+                Kmat.dot(np.eye(3,4)),
+                Kmat.dot(np.concatenate([R, t], axis=1)),
+                p2, p1)
+        pts3 = s * np.stack([pts3[:,2], -pts3[:,0], -pts3[:,1]], axis=-1)
 
         # opt2 : custom
         #pts3 = triangulatePoints(
@@ -390,7 +473,7 @@ class CVORunner(object):
     def _build_ukf(self):
         # build ukf
         Q = np.diag([1e-4, 1e-4, 1e-4, 1e-1, 1e-1]) #xyhvw
-        R = np.diag([1e-9, 1e-9, 1e-9]) # xyh
+        R = np.diag([1e-2, 1e-2, 1e-4]) # xyh
         x0 = np.zeros(5)
         P0 = np.diag([1e-6,1e-6,1e-6, 1e-1, 1e-1])
 
@@ -463,6 +546,7 @@ class CVORunner(object):
         # TODO : estimate scale from points + camera height?
         dps_gt = sub_p3d(odom[i], odom[i-1])
         s = np.linalg.norm(dps_gt[:2])
+        #s = 0.03
 
         prv = ukf.x[:3].copy()
 
@@ -535,11 +619,11 @@ class CVORunner(object):
         ax2.plot(pts3[:,0], pts3[:,1], pts3[:,2], '.')
         mx = np.abs(pts3).max(axis=0)
         ax2.set_xlabel('x')
-        ax2.set_xlim(0.0, 5.0)
+        #ax2.set_xlim(0.0, 5.0)
         ax2.set_ylabel('y')
-        ax2.set_ylim(-5.0, 5.0)
+        #ax2.set_ylim(-5.0, 5.0)
         ax2.set_zlabel('z')
-        ax2.set_zlim(-1.0, 5.0)
+        #ax2.set_zlim(-1.0, 5.0)
         plt.legend()
 
         ax1.plot(tx, ty, 'b--')
