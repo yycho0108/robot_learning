@@ -179,6 +179,11 @@ def recoverPoseWithPoints(E, p1, p2,
 
     return max_det, R_res, t_res
 
+def normalize_points(pts, cMat):
+    pc = np.reshape([cMat[2,0], cMat[2,1]], [1,2])
+    pf = np.reshape([cMat[0,0], cMat[1,1]], [1,2])
+    return (pts - pc) / pf
+
 class ClassicalVO(object):
     def __init__(self):
         self.prv_ = None # previous image
@@ -194,6 +199,19 @@ class ClassicalVO(object):
         search_params = dict(checks=50)   # or pass empty dictionary
         flann = cv2.FlannBasedMatcher(index_params,search_params)
         self.flann_ = flann
+
+        # camera matrix parameters
+        # orig scale camera matrix (from calibration)
+        self.K_ = np.reshape([
+            499.114583, 0.000000, 325.589216,
+            0.000000, 498.996093, 238.001597,
+            0.000000, 0.000000, 1.000000], (3,3))
+        # half scale camera matrix (data)
+        self.K2_ = np.reshape([
+            499.114583 / 2.0, 0.000000, 325.589216 / 2.0,
+            0.000000, 498.996093 / 2.0, 238.001597 / 2.0,
+            0.000000, 0.000000, 1.000000], (3,3))
+        self.dC_ = np.float32([0.158661, -0.249478, -0.000564, 0.000157, 0.000000])
 
     def match_v2(img1, img2, kp1):
         lk_params = dict( winSize  = (15,15),
@@ -268,6 +286,13 @@ class ClassicalVO(object):
             s = 0.1
             ):
 
+        # == 0 :  unroll parameters ==
+        Kmat_o = self.K_
+        Kmat = self.K2_
+        distCoeffs = self.dC_
+        # ============================
+
+        # ==  1 : detect feature points ==
         #kp2, des2 = self.orb_.detectAndCompute(img, None)
         kp = self.gftt_.detect(img)
         kp2, des2 = self.brisk_.compute(img, kp)
@@ -283,11 +308,14 @@ class ClassicalVO(object):
         if self.prv_ is None:
             self.prv_ = (kp2, des2, img2)
             return True, None
+        # =================================
 
-        # swap prv
+        # == 2 : swap prv ==
         kp1, des1, img1 = self.prv_
         self.prv_ = (kp2, des2, img2)
+        # ==============
 
+        # == 3 : match ==
         matches = self.match_v1(des1, des2)
         #matches = self.match(des1, des2)
         matches = sorted(matches, key=lambda e:e.distance)
@@ -296,45 +324,43 @@ class ClassicalVO(object):
             # no matches or insufficient # of matches
             return True, None
 
+        # extract points from match
         i1, i2 = np.int32([(m.queryIdx, m.trainIdx) for m in matches]).T
         p1 = np.float32([e.pt for e in kp1[i1]])
         p2 = np.float32([e.pt for e in kp2[i2]])
+        midx = np.arange(len(p1))
+        # ============
 
         # TODO : expose these parameters
-        Kmat_o = np.reshape([
-            499.114583, 0.000000, 325.589216,
-            0.000000, 498.996093, 238.001597,
-            0.000000, 0.000000, 1.000000], (3,3)) # orig. scale
-        Kmat = np.reshape([
-            499.114583 / 2.0, 0.000000, 325.589216 / 2.0,
-            0.000000, 498.996093 / 2.0, 238.001597 / 2.0,
-            0.000000, 0.000000, 1.000000], (3,3)) # half scale
-        print np.round(Kmat)
 
-        distCoeffs = np.float32([0.158661, -0.249478, -0.000564, 0.000157, 0.000000])
-
-        focal = Kmat[0,0]
-        pp    = (Kmat[0,2], Kmat[1,2])
+        # == 4 : undistort + correct matches ==
 
         # undistort
-        p1p = p1
         p1 = cv2.undistortPoints(2.0*p1[None,...], Kmat_o, distCoeffs, P=Kmat_o)[0]/2.0
         p2 = cv2.undistortPoints(2.0*p2[None,...], Kmat_o, distCoeffs, P=Kmat_o)[0]/2.0
-        #print('what?', np.max(np.abs(p1p - p1)))
 
         # correct matches
         Fmat, mask = cv2.findFundamentalMat(p2, p1, method=cv2.FM_LMEDS,
                 param1=0.1, param2=0.999)
         mask = np.asarray(mask[:,0]).astype(np.bool)
-        p2, p1 = cv2.correctMatches(Fmat, p2[None,mask], p1[None, mask])
+
+        # filter p1 + bookkeeping mask
+        p1 = p1[None, mask]
+        p2 = p2[None, mask]
+        midx = midx[np.where(mask)[0]]
+
+        p2, p1 = cv2.correctMatches(Fmat, p2, p1)
         p1 = p1[0, ...]
         p2 = p2[0, ...]
 
         # filter NaN
         msk = np.logical_and(np.isfinite(p1), np.isfinite(p2))
-        msk = np.logical_and(msk[:,0], msk[:,1])
+        msk = np.all(msk, axis=-1)
+
+        # filter p1 + bookkeeping mask
         p1 = p1[msk].astype(np.float32)
         p2 = p2[msk].astype(np.float32)
+        midx = midx[np.where(msk)[0]]
 
         if len(p1) <= 8:
             # ?? TODO : sideways translation??
@@ -350,7 +376,7 @@ class ClassicalVO(object):
 
         #print 'EE', Emat, (Kmat.T).dot(Fmat).dot(Kmat)
         #cmat = np.float32([focal,0,pp[0], 0, focal, pp[1], 0,0,1]).reshape(3,3)
-        n_in, R, t, msk, pts_h = cv2.recoverPose(Emat,
+        n_in, R, t, msk, _ = cv2.recoverPose(Emat,
                 np.float32(p2),
                 np.float32(p1),
                 cameraMatrix=Kmat,
@@ -359,22 +385,42 @@ class ClassicalVO(object):
         # TODO : do the correct scale estimation
 
         # validate triangulation
-        #pts_h = cv2.triangulatePoints(Kmat.dot(np.eye(3,4)),
-        #        Kmat.dot(np.concatenate([R, t], axis=1)),
-        #        p2[None,...], p1[None,...])
-        #print np.max(pts_h - pts_h2)
-
-        # points: homogeneous --> 3d coordinates
-        # msk = np.logical_and(msk, np.all(np.isfinite(pts_h),axis=0)[:,None])
-        # pts_h = pts_h[:, (msk[:,0] > 0)]
-        #pts3 = pts_h[:3] / pts_h[3]
-        #pts3 = s * np.stack([pts3[2], -pts3[0], -pts3[1]], axis=-1)
-
-        pts3 = linear_LS_triangulation(
+        pts_h = cv2.triangulatePoints(
                 Kmat.dot(np.eye(3,4)),
                 Kmat.dot(np.concatenate([R, t], axis=1)),
-                p2, p1)
-        pts3 = s * np.stack([pts3[:,2], -pts3[:,0], -pts3[:,1]], axis=-1)
+                p2[None,...],
+                p1[None,...]).astype(np.float32)
+
+        # apply mask
+        msk = np.logical_and(msk, np.all(np.isfinite(pts_h),axis=0)[:,None])
+        midx = midx[np.where(msk)[0]]
+
+        pts_h = pts_h[:, msk[:,0]]
+        # homogeneous --> 3d
+        pts3 = pts_h[:3] / pts_h[3:]
+
+        # compute reprojection
+        pts2_rec, _ = cv2.projectPoints(
+                pts3.T[...,None],
+                rvec=cv2.Rodrigues(R)[0],
+                tvec=t.ravel(),
+                #rvec=np.zeros(3),
+                #tvec=np.zeros(3),
+                cameraMatrix=Kmat,
+                distCoeffs=distCoeffs,
+                )
+        pts2_rec = np.squeeze(pts2_rec, axis=1)
+
+        # points: homogeneous --> 3d coordinates
+
+        # apply scale factor and re-orient to align with base coord
+        pts3 = s * np.stack([pts3[2], -pts3[0], -pts3[1]], axis=-1)
+
+        #pts3 = linear_LS_triangulation(
+        #        Kmat.dot(np.eye(3,4)),
+        #        Kmat.dot(np.concatenate([R, t], axis=1)),
+        #        p2, p1)
+        #pts3 = s * np.stack([pts3[:,2], -pts3[:,0], -pts3[:,1]], axis=-1)
 
         # opt2 : custom
         #pts3 = triangulatePoints(
@@ -390,7 +436,7 @@ class ClassicalVO(object):
         #pts3 = pts3[:16] # select 16 points to draw
         #msk[np.where(msk)[0][16:]] = 0
 
-        pts2 = pts3[:, :2]
+        #pts2 = pts3[:, :2]
         # filter by large displacement
         #pts2 = pts2[np.linalg.norm(pts2, axis=-1) < 10.0] #filter by radius=10.0m
         #pts2 = pts2[np.sign(pts2[:,0]) == 1]
@@ -417,26 +463,25 @@ class ClassicalVO(object):
         # something about overall scale
         t *= s
 
-        print len(kp1)
-        print len(msk)
-        mskp = np.pad(msk, [[0, len(matches)-len(msk)], [0,0]], mode='constant')
-
-        print len(matches), msk.shape
+        matchesMask = np.zeros(len(matches), dtype=np.bool)
+        matchesMask[midx] = 1
 
         draw_params = dict(
                 matchColor = (0,255,0),
                 singlePointColor = (255,0,0),
                 flags = 0,
-                matchesMask=mskp.ravel().tolist()
+                matchesMask=matchesMask.ravel().tolist()
                 )
+
         mim = cv2.drawMatches(
                 img1,kp1,img2,kp2,
                 matches,None,**draw_params)
         mim = cv2.addWeighted(np.concatenate([img1,img2],axis=1), 0.5, mim, 0.5, 0.0)
-        cv2.drawKeypoints(mim, kp1[i1][mskp[:,0]>0], mim, color=(0,0,255))
+        cv2.drawKeypoints(mim, kp1[i1][matchesMask], mim, color=(0,0,255))
+        cv2.drawKeypoints(mim[:,320:], kp2[i2][matchesMask], mim[:,320:], color=(0,0,255))
         print('---')
 
-        return True, (mim, h, t, pts2, pts3)
+        return True, (mim, h, t, pts2_rec, pts3)
 
         #print 'm', m
 
@@ -546,7 +591,8 @@ class CVORunner(object):
         # TODO : estimate scale from points + camera height?
         dps_gt = sub_p3d(odom[i], odom[i-1])
         s = np.linalg.norm(dps_gt[:2])
-        #s = 0.03
+        #print('s', s)
+        s = 0.03
 
         prv = ukf.x[:3].copy()
 
@@ -560,7 +606,7 @@ class CVORunner(object):
             # skip filter updates
             return
 
-        (aimg, dh, dt, pts, pts3) = res
+        (aimg, dh, dt, pts_r, pts3) = res
         dps = np.float32([dt[0], dt[1], dh])
         print('(pred-gt) {} vs {}'.format(dps, dps_gt) )
         pos = add_p3d(prv, dps)
@@ -571,6 +617,7 @@ class CVORunner(object):
         th.append( float(ukf.x[2]) )
 
         # pts2 in the proper coordinate system
+        pts = pts3[:,:2]
         pts_c = pts.dot(Rmat(odom[i,2]).T) + np.reshape(odom[i,:2], (1,2))
         self.map_ = np.concatenate([self.map_, pts_c], axis=0)
         #scan_c = self.scan_to_pt(scan[i]).dot(Rmat(odom[i,2]).T) + np.reshape(odom[i, :2], (1,2))
@@ -583,8 +630,17 @@ class CVORunner(object):
         ax0.imshow(aimg[...,::-1])
         ax0.axis('off')
 
-        ax3.imshow(img[...,::-1])
-        ax3.axis('off')
+        ax3.cla()
+        ax3.imshow(imgs[i-1, ..., ::-1])
+        ax3.plot(pts_r[:,0], pts_r[:,1], '.')
+        ax3.set_xlim(0, 320)
+        ax3.set_ylim(0, 240)
+        ax3.set_aspect('equal')
+        if not ax3.yaxis_inverted():
+            ax3.invert_yaxis()
+
+        #ax3.imshow(img[...,::-1])
+        #ax3.axis('off')
 
         # TODO : plot err in dps
         #ax2.plot(dpss)
@@ -594,7 +650,6 @@ class CVORunner(object):
 
 
         ph = np.rad2deg(np.arctan2(pts[:,1], pts[:,0]))
-        print 'fov', np.min(ph), np.max(ph)
 
         ax1.plot(pts_c[:,0], pts_c[:,1], 'r.', label='visual')
         #ax1.plot(scan_c[:,0], scan_c[:,1], 'b.', label='scan')
