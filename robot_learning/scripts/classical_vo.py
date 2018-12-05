@@ -10,6 +10,7 @@ from utils.vo_utils import add_p3d, sub_p3d
 
 from filterpy.kalman import UnscentedKalmanFilter as UKF
 from filterpy.kalman import MerweScaledSigmaPoints, JulierSigmaPoints
+from collections import deque
 
 # ukf = (x,y,h,v,w)
 
@@ -186,7 +187,7 @@ def normalize_points(pts, cMat):
 
 class ClassicalVO(object):
     def __init__(self):
-        self.prv_ = None # previous image
+        self.hist_ = deque(maxlen=100)
 
         # build detector
         self.gftt_ = cv2.GFTTDetector.create()
@@ -213,16 +214,52 @@ class ClassicalVO(object):
             0.000000, 0.000000, 1.000000], (3,3))
         self.dC_ = np.float32([0.158661, -0.249478, -0.000564, 0.000157, 0.000000])
 
-    def match_v2(img1, img2, kp1):
-        lk_params = dict( winSize  = (15,15),
+    def match_v2(self, img1, img2, kp1):
+        lk_params = dict( winSize  = (47,3),
                 maxLevel = 20,
-                criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
+                criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 100, 0.001))
         img1_gray = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
         img2_gray = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
 
         # p0 = cv2.goodFeaturesToTrack(src_gray, mask = None, **feature_params)
         # calculate optical flow
-        p1, st, err = cv2.calcOpticalFlowPyrLK(img1_gray, img2_gray, p0, None, **lk_params)
+
+        #print kp1[0], kp1[0].angle, kp1[0].octave, kp1[0].overlap, kp1[0].response, kp1[0].size
+        p1 = np.float32([k.pt for k in kp1])
+        p2, st, err = cv2.calcOpticalFlowPyrLK(
+                img1_gray, img2_gray, p1,
+                None, **lk_params)
+
+        #kp1 = [cv2.KeyPoint(pt=p,size=3) for p in p1]
+        #p1_ = cv2.KeyPoint_convert(kp1)#, size=3.0)
+        print p2.shape
+        kp2 = [cv2.KeyPoint(x=p[0],y=p[1],_size=3.0) for p in p2]#, size=3.0)
+        kp2 = np.asarray(kp2, dtype=cv2.KeyPoint)
+
+        h, w = img1.shape[:2]
+
+        msk_in = np.all(np.logical_and(
+                np.greater_equal(p1, [0,0]),
+                np.less(p1, [w,h])), axis=-1)
+
+        st = st[:,0].astype(np.bool)
+
+        #print st.shape, msk_in.shape
+        print msk_in.shape, msk_in.dtype
+        print st.shape, st.dtype
+        ef = np.isfinite(err[:,0])
+        ec = np.less(err[:,0], 10.0)
+
+        st = np.logical_and.reduce([msk_in, st, ef, ec])
+        
+        p1, p2 = np.float32(p1[st]), np.float32(p2[st])
+        kp1, kp2 = kp1[st], kp2[st]
+        matches = [cv2.DMatch(_queryIdx=i, _trainIdx=i, _distance=e)
+                for i,e in enumerate(err[st])]
+
+        n = len(p1)
+
+        return matches, p1, p2, kp1, kp2
 
     def match_v1(self, des1, des2, thresh=150.0):
         # apply flann
@@ -281,8 +318,37 @@ class ClassicalVO(object):
         #mask = np.cast(mask, np.bool)
         #return good[mask]
 
+    def detect(self, img):
+        """ detect feature points """
+
+        kp = self.gftt_.detect(img)
+        #kp = self.orb_.detect(img)
+
+        crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 100, 0.01)
+
+        # -- refine keypoint corners --
+        p_in = cv2.KeyPoint.convert(kp)
+        img_g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        kp_spt = cv2.cornerSubPix(img_g, p_in, (3,3), (-1,-1),
+                criteria = crit)
+        for k, pt in zip(kp, kp_spt):
+            k.pt = tuple(pt)
+
+        # -- extract descriptors --
+        kp2, des2 = self.brisk_.compute(img, kp)
+        #kp2, des2 = self.orb_.compute(img, kp)
+
+        if des2 is None:
+            return None
+
+        kp2 = np.array(kp2)
+        des2 = np.float32(des2)
+        img2 = img
+
+        return (kp2, des2, img2)
+
     def __call__(self, img,
-            in_thresh = 32,
+            in_thresh = 16,
             s = 0.1
             ):
 
@@ -292,43 +358,38 @@ class ClassicalVO(object):
         distCoeffs = self.dC_
         # ============================
 
-        # ==  1 : detect feature points ==
-        #kp2, des2 = self.orb_.detectAndCompute(img, None)
-        kp = self.gftt_.detect(img)
-        kp2, des2 = self.brisk_.compute(img, kp)
-
-        if des2 is None:
-            # something is invalid about the image?
+        # detect features + query/update history
+        kp2, des2, img2 = self.detect(img)
+        if len(self.hist_) <= 0:
+            self.hist_.append( (kp2, des2, img2) )
             return True, None
-
-        kp2 = np.array(kp2)
-        img2 = img
-
-        des2 = np.float32(des2)
-        if self.prv_ is None:
-            self.prv_ = (kp2, des2, img2)
-            return True, None
-        # =================================
-
-        # == 2 : swap prv ==
-        kp1, des1, img1 = self.prv_
-        self.prv_ = (kp2, des2, img2)
+        kp1, des1, img1 = self.hist_[-1]
+        self.hist_.append((kp2, des2, img2))
         # ==============
 
         # == 3 : match ==
-        matches = self.match_v1(des1, des2)
         #matches = self.match(des1, des2)
-        matches = sorted(matches, key=lambda e:e.distance)
 
+        # v1 proc
+        matches = self.match_v1(des1, des2)
+        #matches = sorted(matches, key=lambda e:e.distance)
         if (matches is None) or (len(matches) <= 8):
             # no matches or insufficient # of matches
             return True, None
-
-        # extract points from match
+        # extract points
         i1, i2 = np.int32([(m.queryIdx, m.trainIdx) for m in matches]).T
-        p1 = np.float32([e.pt for e in kp1[i1]])
-        p2 = np.float32([e.pt for e in kp2[i2]])
-        midx = np.arange(len(p1))
+        p1 = np.float32(cv2.KeyPoint.convert(kp1[i1]))
+        p2 = np.float32(cv2.KeyPoint.convert(kp2[i2]))
+        midx = np.arange(len(matches))
+        # -----------
+        # v2 proc
+        #matches, p1, p2, kp1, kp2 = self.match_v2(img1, img2, kp1)
+        #if (matches is None) or (len(matches) <= 8):
+        #    # no matches or insufficient # of matches
+        #    return True, None
+        #i1 = np.arange(len(p1))
+        #i2 = np.arange(len(p1))
+        #midx = np.arange(len(matches))
         # ============
 
         # TODO : expose these parameters
@@ -380,7 +441,7 @@ class ClassicalVO(object):
                 np.float32(p2),
                 np.float32(p1),
                 cameraMatrix=Kmat,
-                distanceThresh=200.0) # TODO : or something like 10.0/s ??
+                distanceThresh=100.0) # TODO : or something like 10.0/s ??
 
         # TODO : do the correct scale estimation
 
@@ -472,7 +533,6 @@ class ClassicalVO(object):
                 flags = 0,
                 matchesMask=matchesMask.ravel().tolist()
                 )
-
         mim = cv2.drawMatches(
                 img1,kp1,img2,kp2,
                 matches,None,**draw_params)
@@ -522,8 +582,8 @@ class CVORunner(object):
         x0 = np.zeros(6)
         P0 = np.diag([1e-6,1e-6,1e-6, 1e-1, 1e-1, 1e-1])
 
-        #spts = MerweScaledSigmaPoints(5,1e-3,2,-2,subtract=ukf_residual)
-        spts = JulierSigmaPoints(6, 6-2, sqrt_method=np.linalg.cholesky, subtract=ukf_residual)
+        spts = MerweScaledSigmaPoints(6, 1e-3, 2, 3-6, subtract=ukf_residual)
+        #spts = JulierSigmaPoints(6, 6-2, sqrt_method=np.linalg.cholesky, subtract=ukf_residual)
 
         ukf = UKF(6, 3, (1.0 / 30.), # dt guess
                 ukf_hx, ukf_fx, spts,
@@ -584,9 +644,9 @@ class CVORunner(object):
         # TODO : there was a bug in data_collector that corrupted all time-stamp data!
         # disable stamps dt for datasets with corrupted timestamps.
         # very unfortunate.
-        dt    = (stamps[i] - stamps[i-1])
+        #dt    = (stamps[i] - stamps[i-1])
+        dt = 0.2
         print('dt', dt)
-        #dt = 0.2
 
         # experimental : pass in scale as a parameter
         # TODO : estimate scale from points + camera height?
@@ -622,7 +682,7 @@ class CVORunner(object):
         pts = pts3[:,:2]
         pts_c = pts.dot(Rmat(odom[i,2]).T) + np.reshape(odom[i,:2], (1,2))
         self.map_ = np.concatenate([self.map_, pts_c], axis=0)
-        #scan_c = self.scan_to_pt(scan[i]).dot(Rmat(odom[i,2]).T) + np.reshape(odom[i, :2], (1,2))
+        scan_c = self.scan_to_pt(scan[i]).dot(Rmat(odom[i,2]).T) + np.reshape(odom[i, :2], (1,2))
 
         ### EVERYTHING FROM HERE IS PLOTTING + VIZ ###
         ax0.cla()
@@ -654,7 +714,7 @@ class CVORunner(object):
         ph = np.rad2deg(np.arctan2(pts[:,1], pts[:,0]))
 
         ax1.plot(pts_c[:,0], pts_c[:,1], 'r.', label='visual')
-        #ax1.plot(scan_c[:,0], scan_c[:,1], 'b.', label='scan')
+        ax1.plot(scan_c[:,0], scan_c[:,1], 'b.', label='scan')
         ax1.plot([0],[0],'k+')
 
         lx = np.linspace(0, 5)
@@ -681,7 +741,7 @@ class CVORunner(object):
         #ax2.set_ylim(-5.0, 5.0)
         ax2.set_zlabel('z')
         #ax2.set_zlim(-1.0, 5.0)
-        plt.legend()
+        #plt.legend()
 
         ax1.plot(tx, ty, 'b--')
         #ax1.quiver(tx, ty,
@@ -704,16 +764,16 @@ class CVORunner(object):
             plt.show()
 
 def main():
-    #idx = np.random.choice(8)
-    idx = 17
+    idx = np.random.choice(8)
+    #idx = 17
     print('idx', idx)
 
     # load data
     imgs   = np.load('../data/train/{}/img.npy'.format(idx))[1:]
     stamps = np.load('../data/train/{}/stamp.npy'.format(idx))[1:]
     odom   = np.load('../data/train/{}/odom.npy'.format(idx))[1:]
-    #scan   = np.load('../data/train/{}/scan.npy'.format(idx))
-    scan = None
+    scan   = np.load('../data/train/{}/scan.npy'.format(idx))
+    #scan = None
 
     # set odom @ t0= (0,0,0)
     R0 = Rmat(odom[0,2])
