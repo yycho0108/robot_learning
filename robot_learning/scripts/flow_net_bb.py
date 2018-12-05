@@ -266,22 +266,20 @@ class FlowNetBB(object):
             ks = ['err_8x6', 'err_16x12','err_32x24', 'err_64x48', 'err_128x96', 'err_256x192']
 
             # decay weight per size of flow-image
+            err_scale = tf.train.exponential_decay(cfg.FN_ERR_SCALE,
+                self.step_, cfg.FN_ERR_SCALE_DECAY_STEPS, cfg.FN_ERR_SCALE_DECAY_FACTOR, staircase=False)
 
             # opt1 : dynamic error weight scaling (over step)
-            # using exp so that err_scale is always >= 1
-            err_scale = tf.exp(tf.train.exponential_decay(tf.log(cfg.FN_ERR_SCALE),
-                self.step_, cfg.FN_ERR_SCALE_DECAY_STEPS, cfg.FN_ERR_SCALE_DECAY_FACTOR, staircase=False))
-            ws = tf.pow(err_scale, -tf.to_float(tf.range(len(ks))) )
-            ws = ws / tf.reduce_sum(ws) # normalize weights
+
+            ## using exp so that err_scale is always >= 1
+            #err_scale = tf.exp(err_scale)
+            #ws = tf.pow(err_scale, -tf.to_float(tf.range(len(ks))) )
+            #ws = ws / tf.reduce_sum(ws) # normalize weights
 
             # opt1.2 : dynamic error with possible final "topple"
             # (numerically stable)
             ws = -tf.log(err_scale) * tf.to_float(tf.range(len(ks)))
-            #ws = ws - np.max(ws)
-            #ws = np.exp(ws)
-            #ws = ws / tf.reduce_sum(ws)
             ws = tf.nn.softmax(ws)
-            # TODO : verify equivalent ^^^
 
             # opt2 : static error weight scaling
             # ws = np.float32([cfg.FN_ERR_DECAY**-e for e in range(len(ks))])

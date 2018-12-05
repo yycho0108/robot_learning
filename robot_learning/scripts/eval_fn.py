@@ -9,6 +9,7 @@ import sys
 import time
 
 from utils.fchair_utils import load_chair, load_ilsvrc
+from utils.tf_utils import latest_checkpoint
 from utils.opt_utils import apply_opt, flow_to_image, FlowShow
 from utils import mkdir, proc_img
 from flow_net_bb import FlowNetBB
@@ -61,8 +62,9 @@ def main():
         net._build()
 
     #ckpt_file = os.path.expanduser('~/fn/37/ckpt/model.ckpt-12700')
-    ckpt_file = os.path.expanduser('~/fnckpt/model.ckpt-281000')
+    #ckpt_file = os.path.expanduser('~/fnckpt/model.ckpt-281000')
     #ckpt_file = os.path.expanduser('~/fn/10/ckpt/model.ckpt-43100')
+    ckpt_file = latest_checkpoint('~/fn')
 
     #gpu_options = tf.GPUOptions(allow_growth=True, per_process_gpu_memory_fraction=0.95)
     #config = tf.ConfigProto(log_device_placement=False, gpu_options=gpu_options)
