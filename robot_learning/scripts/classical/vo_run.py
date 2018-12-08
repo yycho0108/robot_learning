@@ -47,7 +47,7 @@ class CVORunner(object):
         self.map_ = np.empty((0, 2), dtype=np.float32)
         self.vo_ = ClassicalVO()
         self.ukf_ = build_ukf()
-        self.vo_( imgs[0] ) # initialize GUI
+        self.vo_(imgs[0], [0,0,0]) # initialize GUI
 
         self.tx_ = []
         self.ty_ = []
@@ -145,7 +145,8 @@ class CVORunner(object):
         prv = ukf.x[:3].copy()
 
         ukf.predict(dt=dt)
-        suc, res = vo(img, s=s)
+        # TODO : currently passing 'ground-truth' position
+        suc, res = vo(img, odom[i])
         if not suc:
             print('Visual Odometry Aborted!')
             return

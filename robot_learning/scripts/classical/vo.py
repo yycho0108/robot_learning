@@ -8,7 +8,9 @@ from collections import deque
 class ClassicalVO(object):
     def __init__(self):
         self.hist_ = deque(maxlen=100)
-        self.landmark_ = []
+        self.landmark_ = [] # structure: [ pt3, des ]
+        self.lm_msk_   = None # previous landmark keypoints mask
+        self.lm_des_   = None # landmark descriptors
 
         # build detector
         self.gftt_ = cv2.GFTTDetector.create()
@@ -36,7 +38,7 @@ class ClassicalVO(object):
         # distortion coefficient
         self.dC_ = np.float32([0.158661, -0.249478, -0.000564, 0.000157, 0.000000])
 
-    def match_v2(self, img1, img2, kp1):
+    def track(self, img1, img2, kp1):
         lk_params = dict( winSize  = (47,3),
                 maxLevel = 20,
                 criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 100, 0.001))
@@ -52,36 +54,63 @@ class ClassicalVO(object):
                 img1_gray, img2_gray, p1,
                 None, **lk_params)
 
-        #kp1 = [cv2.KeyPoint(pt=p,size=3) for p in p1]
-        #p1_ = cv2.KeyPoint_convert(kp1)#, size=3.0)
-        print p2.shape
-        kp2 = [cv2.KeyPoint(x=p[0],y=p[1],_size=3.0) for p in p2]#, size=3.0)
-        kp2 = np.asarray(kp2, dtype=cv2.KeyPoint)
-
-        h, w = img1.shape[:2]
-
+        # apply mask
         msk_in = np.all(np.logical_and(
                 np.greater_equal(p1, [0,0]),
                 np.less(p1, [w,h])), axis=-1)
+        msk_st = st[:,0].astype(np.bool)
+        msk_ef = np.isfinite(err[:,0])
+        #ec = np.less(err[:,0], 10.0)
+        msk = np.logical_and.reduce([msk_in, msk_st, msk_ef])
 
-        st = st[:,0].astype(np.bool)
+        return p2, msk
 
-        #print st.shape, msk_in.shape
-        print msk_in.shape, msk_in.dtype
-        print st.shape, st.dtype
-        ef = np.isfinite(err[:,0])
-        ec = np.less(err[:,0], 10.0)
+    #def match_v2(self, img1, img2, kp1):
+    #    lk_params = dict( winSize  = (47,3),
+    #            maxLevel = 20,
+    #            criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 100, 0.001))
+    #    img1_gray = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+    #    img2_gray = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
 
-        st = np.logical_and.reduce([msk_in, st, ef, ec])
-        
-        p1, p2 = np.float32(p1[st]), np.float32(p2[st])
-        kp1, kp2 = kp1[st], kp2[st]
-        matches = [cv2.DMatch(_queryIdx=i, _trainIdx=i, _distance=e)
-                for i,e in enumerate(err[st])]
+    #    # p0 = cv2.goodFeaturesToTrack(src_gray, mask = None, **feature_params)
+    #    # calculate optical flow
 
-        n = len(p1)
+    #    #print kp1[0], kp1[0].angle, kp1[0].octave, kp1[0].overlap, kp1[0].response, kp1[0].size
+    #    p1 = np.float32([k.pt for k in kp1])
+    #    p2, st, err = cv2.calcOpticalFlowPyrLK(
+    #            img1_gray, img2_gray, p1,
+    #            None, **lk_params)
 
-        return matches, p1, p2, kp1, kp2
+    #    #kp1 = [cv2.KeyPoint(pt=p,size=3) for p in p1]
+    #    #p1_ = cv2.KeyPoint_convert(kp1)#, size=3.0)
+    #    print p2.shape
+    #    kp2 = [cv2.KeyPoint(x=p[0],y=p[1],_size=3.0) for p in p2]#, size=3.0)
+    #    kp2 = np.asarray(kp2, dtype=cv2.KeyPoint)
+
+    #    h, w = img1.shape[:2]
+
+    #    msk_in = np.all(np.logical_and(
+    #            np.greater_equal(p1, [0,0]),
+    #            np.less(p1, [w,h])), axis=-1)
+
+    #    st = st[:,0].astype(np.bool)
+
+    #    #print st.shape, msk_in.shape
+    #    print msk_in.shape, msk_in.dtype
+    #    print st.shape, st.dtype
+    #    ef = np.isfinite(err[:,0])
+    #    ec = np.less(err[:,0], 10.0)
+
+    #    st = np.logical_and.reduce([msk_in, st, ef, ec])
+    #    
+    #    p1, p2 = np.float32(p1[st]), np.float32(p2[st])
+    #    kp1, kp2 = kp1[st], kp2[st]
+    #    matches = [cv2.DMatch(_queryIdx=i, _trainIdx=i, _distance=e)
+    #            for i,e in enumerate(err[st])]
+
+    #    n = len(p1)
+
+    #    return matches, p1, p2, kp1, kp2
 
     def match_v1(self, des1, des2, thresh=150.0):
         # apply flann
@@ -170,7 +199,86 @@ class ClassicalVO(object):
 
         return (kp2, des2, img2)
 
-    def __call__(self, img,
+    def getPoseAndPoints(self, pt1, pt2, midx, method):
+
+        # == 0 :  unroll parameters ==
+        Kmat_o = self.K_
+        Kmat = self.K2_
+        distCoeffs = self.dC_
+
+        # rectify input
+        pt1 = np.float32(pt1)
+        pt2 = np.float32(pt2)
+
+        # find fundamental matrix
+        Fmat, msk = cv2.findFundamentalMat(pt2, pt1,
+                method=method,
+                param1=0.1, param2=0.999) # TODO : expose these thresholds
+        msk = np.asarray(msk[:,0]).astype(np.bool)
+
+        # filter points + bookkeeping mask
+        pt1 = pt1[msk]
+        pt2 = pt2[msk]
+        midx = midx[msk]
+
+        # correct matches
+        pt1 = pt1[None, ...] # add axis 0
+        pt2 = pt2[None, ...]
+        pt2, pt1 = cv2.correctMatches(Fmat, pt2, pt1) # TODO : not sure if this is necessary
+        pt1 = pt1[0, ...] # remove axis 0
+        pt2 = pt2[0, ...]
+
+        # filter NaN
+        msk = np.logical_and(np.isfinite(pt1), np.isfinite(pt2))
+        msk = np.all(msk, axis=-1)
+
+        # filter points + bookkeeping mask
+        pt1 = pt1[msk]
+        pt2 = pt2[msk]
+        midx = midx[msk]
+
+        if len(pt1) <= 8:
+            # Insufficient # of points
+            # TODO : expose this threshold
+            return None
+
+        # TODO : expose these thresholds
+        Emat, msk = cv2.findEssentialMat(pt2, pt1, Kmat,
+                method=method, prob=0.999, threshold=0.1)
+        msk = np.asarray(msk[:,0]).astype(np.bool)
+
+        # filter points + bookkeeping mask
+        pt1 = pt1[msk]
+        pt2 = pt2[msk]
+        midx = midx[msk]
+
+        n_in, R, t, msk, _ = cv2.recoverPose(Emat,
+                pt2,
+                pt1,
+                cameraMatrix=Kmat,
+                distanceThresh=100.0) # TODO : or something like 10.0/s ??
+        msk = np.asarray(msk[:,0]).astype(np.bool)
+
+        # filter points + bookkeeping mask
+        pt1 = pt1[msk]
+        pt2 = pt2[msk]
+        midx = midx[msk]
+
+        # validate triangulation
+        pts_h = cv2.triangulatePoints(
+                Kmat.dot(np.eye(3,4)),
+                Kmat.dot(np.concatenate([R, t], axis=1)),
+                pt2[None,...],
+                pt1[None,...]).astype(np.float32)
+        
+        msk = np.all(np.isfinite(pts_h),axis=0)
+        pt1 = pt1[msk]
+        pt2 = pt2[msk]
+        midx = midx[msk]
+
+        return [R, t, pt1, pt2, midx, pts_h]
+
+    def __call__(self, img, pose,
             in_thresh = 16,
             s = 0.1
             ):
@@ -179,107 +287,77 @@ class ClassicalVO(object):
         Kmat_o = self.K_
         Kmat = self.K2_
         distCoeffs = self.dC_
+        method = cv2.FM_LMEDS # TODO : configure
         # ============================
 
         # detect features + query/update history
-        kp2, des2, img2 = self.detect(img)
+        kpt2, des2, img2 = self.detect(img)
         if len(self.hist_) <= 0:
-            self.hist_.append( (kp2, des2, img2) )
+            self.lm_msk_ = np.zeros(len(kpt2), dtype=np.bool)
+            self.hist_.append( (kpt2, des2, img2) )
             return True, None
-        kp1, des1, img1 = self.hist_[-1]
-        self.hist_.append((kp2, des2, img2))
+        kpt1, des1, img1 = self.hist_[-1]
+        self.hist_.append((kpt2, des2, img2))
         # ==============
 
-        # == 3 : match ==
-        #matches = self.match(des1, des2)
+        if False:
+            # track existing landmarks
+            p2, msk = self.track(img1, img2, self.landmark_)
+            self.landmark_ = self.landmark_[msk] # filter landmark by current match
 
-        # v1 proc
-        matches = self.match_v1(des1, des2)
-        #matches = sorted(matches, key=lambda e:e.distance)
-        if (matches is None) or (len(matches) <= 8):
-            # no matches or insufficient # of matches
-            return True, None
-        # extract points
-        i1, i2 = np.int32([(m.queryIdx, m.trainIdx) for m in matches]).T
-        p1 = np.float32(cv2.KeyPoint.convert(kp1[i1]))
-        p2 = np.float32(cv2.KeyPoint.convert(kp2[i2]))
-        midx = np.arange(len(matches))
-        # -----------
-        # v2 proc
-        #matches, p1, p2, kp1, kp2 = self.match_v2(img1, img2, kp1)
-        #if (matches is None) or (len(matches) <= 8):
-        #    # no matches or insufficient # of matches
-        #    return True, None
-        #i1 = np.arange(len(p1))
-        #i2 = np.arange(len(p1))
-        #midx = np.arange(len(matches))
-        # ============
+            # also match descriptor with landmarks
+            # TODO : not sure if this is necessary at all.
+            if self.lm_des_ is not None:
+                lm_match = self.match_v1(self.lm_des_, des2) # match with landmarks
+                unsel_msk = np.ones(len(des2), dtype=np.bool) # un-selected
+                i1, i2 = np.int32([(m.queryIdx, m.trainIdx) for m in lm_match]).T
+                self.lm_des_[i1] = des2[i2] # update landmark descriptors            # TODO : handle this more intelligently?
+                unsel_msk[i2] = 0
 
-        # TODO : expose these parameters
+                kpt2_n = kpt2[unsel_msk]
+                des2_n = des2[unsel_msk] # now, only select points that do not match with landmarks
+            else:
+                kpt2_n = kpt2
+                des2_n = des2
 
-        # == 4 : undistort + correct matches ==
+            # keypoints from previous frame
+            # that are not part of current landmarks
+            msk_n  = np.logical_not(self.lm_msk_)
+            kpt1_n = kpt1[msk_n]
+            des1_n = des1[msk_n]
+
+            # compute matches with current frame
+            matches = self.match_v1(des1_n, des2_n)
+            i1, i2 = np.int32([(m.queryIdx, m.trainIdx) for m in matches]).T
+
+            # grab relevant keypoints + points
+            kpt1_nlm = kpt1_n[i1]
+            kpt2_nlm = kpt2_n[i2]
+            pt1 = np.float32(cv2.KeyPoint.convert(kpt1_nlm))
+            pt2 = np.float32(cv2.KeyPoint.convert(kpt2_nlm))
+            midx = np.arange(len(matches)) # track match indices
+        else:
+            matches = self.match_v1(des1, des2)
+            i1, i2 = np.int32([(m.queryIdx, m.trainIdx) for m in matches]).T
+            # grab relevant keypoints + points
+            kpt1_n = kpt1[i1]
+            kpt2_n = kpt2[i2]
+            pt1 = np.float32(cv2.KeyPoint.convert(kpt1_n))
+            pt2 = np.float32(cv2.KeyPoint.convert(kpt2_n))
+            midx = np.arange(len(matches)) # track match indices
+
 
         # undistort
-        p1 = cv2.undistortPoints(2.0*p1[None,...], Kmat_o, distCoeffs, P=Kmat_o)[0]/2.0
-        p2 = cv2.undistortPoints(2.0*p2[None,...], Kmat_o, distCoeffs, P=Kmat_o)[0]/2.0
-
-        # correct matches
-        Fmat, mask = cv2.findFundamentalMat(p2, p1, method=cv2.FM_LMEDS,
-                param1=0.1, param2=0.999)
-        mask = np.asarray(mask[:,0]).astype(np.bool)
-
-        # filter p1 + bookkeeping mask
-        p1 = p1[None, mask]
-        p2 = p2[None, mask]
-        midx = midx[np.where(mask)[0]]
-
-        p2, p1 = cv2.correctMatches(Fmat, p2, p1)
-        p1 = p1[0, ...]
-        p2 = p2[0, ...]
-
-        # filter NaN
-        msk = np.logical_and(np.isfinite(p1), np.isfinite(p2))
-        msk = np.all(msk, axis=-1)
-
-        # filter p1 + bookkeeping mask
-        p1 = p1[msk].astype(np.float32)
-        p2 = p2[msk].astype(np.float32)
-        midx = midx[np.where(msk)[0]]
-
-        if len(p1) <= 8:
-            # ?? TODO : sideways translation??
+        pt1 = cv2.undistortPoints(2.0*pt1[None,...], Kmat_o, distCoeffs, P=Kmat_o)[0]/2.0
+        pt2 = cv2.undistortPoints(2.0*pt2[None,...], Kmat_o, distCoeffs, P=Kmat_o)[0]/2.0
+        
+        res = self.getPoseAndPoints(pt1, pt2, midx, method)
+        if res is None:
             return True, None
 
-        #Emat0 = (Kmat.T).dot(Fmat).dot(Kmat)
-        #print "emat", Emat0
-        Emat, mask = cv2.findEssentialMat(p2, p1, Kmat,
-                method=cv2.FM_LMEDS, prob=0.999, threshold=0.1)
-        #Ki = np.linalg.inv(Kmat)
-        #Fmat = Ki.T.dot(Emat).dot(Ki)
-        #print 'emat2', Emat
+        # unroll result
+        [R, t, pt1, pt2, midx, pts_h] = res
 
-        #print 'EE', Emat, (Kmat.T).dot(Fmat).dot(Kmat)
-        #cmat = np.float32([focal,0,pp[0], 0, focal, pp[1], 0,0,1]).reshape(3,3)
-        n_in, R, t, msk, _ = cv2.recoverPose(Emat,
-                np.float32(p2),
-                np.float32(p1),
-                cameraMatrix=Kmat,
-                distanceThresh=100.0) # TODO : or something like 10.0/s ??
-
-        # TODO : do the correct scale estimation
-
-        # validate triangulation
-        pts_h = cv2.triangulatePoints(
-                Kmat.dot(np.eye(3,4)),
-                Kmat.dot(np.concatenate([R, t], axis=1)),
-                p2[None,...],
-                p1[None,...]).astype(np.float32)
-
-        # apply mask
-        msk = np.logical_and(msk, np.all(np.isfinite(pts_h),axis=0)[:,None])
-        midx = midx[np.where(msk)[0]]
-
-        pts_h = pts_h[:, msk[:,0]]
         # homogeneous --> 3d
         pts3 = pts_h[:3] / pts_h[3:]
 
@@ -295,55 +373,24 @@ class ClassicalVO(object):
                 )
         pts2_rec = np.squeeze(pts2_rec, axis=1)
 
-        # points: homogeneous --> 3d coordinates
+        # TODO : compute relative scale factor
 
-        # apply scale factor and re-orient to align with base coord
+
+        # apply scale factor and re-orient to align with base coordinates
         pts3 = s * np.stack([pts3[2], -pts3[0], -pts3[1]], axis=-1)
 
-        #pts3 = linear_LS_triangulation(
-        #        Kmat.dot(np.eye(3,4)),
-        #        Kmat.dot(np.concatenate([R, t], axis=1)),
-        #        p2, p1)
-        #pts3 = s * np.stack([pts3[:,2], -pts3[:,0], -pts3[:,1]], axis=-1)
-
-        # opt2 : custom
-        #pts3 = triangulatePoints(
-        #        Kmat.dot(np.eye(3,4)),
-        #        Kmat.dot(np.concatenate([R, t], axis=1)),
-        #        p2, p1)
-        #pts3 = pts3[msk[:,0]>0]
-        #pts3 = s * np.stack([pts3[:,2], -pts3[:,0], -pts3[:,1]], axis=-1)
-
-        # TODO : will this take care of scale?
-        # convert to base_link coordinates
-
-        #pts3 = pts3[:16] # select 16 points to draw
-        #msk[np.where(msk)[0][16:]] = 0
-
-        #pts2 = pts3[:, :2]
-        # filter by large displacement
-        #pts2 = pts2[np.linalg.norm(pts2, axis=-1) < 10.0] #filter by radius=10.0m
-        #pts2 = pts2[np.sign(pts2[:,0]) == 1]
-
-        if n_in < in_thresh:
+        if len(pts3) < in_thresh:
             # insufficient number of inliers to recover pose
             return True, None
 
-        h = tx.euler_from_matrix(R)
-        #h = np.round(np.rad2deg(tx.euler_from_matrix(R)), 2)
-        #t = np.round(t, 2)
-        #print ('h-z', -h[1])
-        #print ('t-xy', t[2,0], -t[0,0])
-
-        h = -h[1]
-        #print('dh', np.round(np.rad2deg(h), 2))
+        rpy_cam = tx.euler_from_matrix(R)
+        h = -rpy_cam[1] # base_link angular displacement
 
         # no-slip
         # TODO : why is t[0,0] so bad???
         # TODO : relax the no-slip constraint by being better at triangulating or something
         t = np.asarray([t[2,0], 0.0 * -t[0,0]])
 
-        # magnitude of t is always 1.0! can we do anything about this?
         # something about overall scale
         t *= s
 
@@ -357,11 +404,11 @@ class ClassicalVO(object):
                 matchesMask=matchesMask.ravel().tolist()
                 )
         mim = cv2.drawMatches(
-                img1,kp1,img2,kp2,
+                img1,kpt1,img2,kpt2,
                 matches,None,**draw_params)
         mim = cv2.addWeighted(np.concatenate([img1,img2],axis=1), 0.5, mim, 0.5, 0.0)
-        cv2.drawKeypoints(mim, kp1[i1][matchesMask], mim, color=(0,0,255))
-        cv2.drawKeypoints(mim[:,320:], kp2[i2][matchesMask], mim[:,320:], color=(0,0,255))
+        cv2.drawKeypoints(mim, kpt1[i1][matchesMask], mim, color=(0,0,255))
+        cv2.drawKeypoints(mim[:,320:], kpt2[i2][matchesMask], mim[:,320:], color=(0,0,255))
         print('---')
 
         return True, (mim, h, t, pts2_rec, pts3)
