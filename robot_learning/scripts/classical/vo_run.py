@@ -146,7 +146,7 @@ class CVORunner(object):
 
         ukf.predict(dt=dt)
         # TODO : currently passing 'ground-truth' position
-        suc, res = vo(img, odom[i])
+        suc, res = vo(img, odom[i], s=s)
         if not suc:
             print('Visual Odometry Aborted!')
             return
@@ -194,9 +194,9 @@ class CVORunner(object):
             plt.show()
 
 def main():
-    #idx = np.random.choice(8)
+    idx = np.random.choice(8)
     #idx = 7
-    idx = 15
+    #idx = 15
     print('idx', idx)
 
 
