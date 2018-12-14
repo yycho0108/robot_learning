@@ -194,9 +194,10 @@ class CVORunner(object):
             plt.show()
 
 def main():
-    idx = np.random.choice(8)
+    #idx = np.random.choice(8)
     #idx = 7
     #idx = 15
+    idx = 20
     print('idx', idx)
 
 

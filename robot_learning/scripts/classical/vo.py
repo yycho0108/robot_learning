@@ -324,7 +324,7 @@ class ClassicalVO(object):
                     self.lm_pt3_, self.lm_pt2_, self.K2_, self.dC_,
                     useExtrinsicGuess=False,
                     iterationsCount=1000,
-                    reprojectionError=2.0
+                    reprojectionError=5.0
                     )
 
             # construct transformation matrix from PnP results

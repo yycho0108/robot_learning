@@ -50,7 +50,7 @@
 		<sensor type="camera" name="camera1">
 			<update_rate>30.0</update_rate>
 			<camera name="head">
-                <horizontal_fov>1.085</horizontal_fov> <!-- 62.2' -->
+                <horizontal_fov>1.14</horizontal_fov> <!-- 65.3' -->
 				<image>
 					<width>640</width>
 					<height>480</height>
@@ -69,11 +69,11 @@
 				<cameraInfoTopicName>camera_info</cameraInfoTopicName>
 				<frameName>camera_optical</frameName>
                 <!--<hackBaseline>0.07</hackBaseline>-->
-				<distortionK1>0.0</distortionK1>
-				<distortionK2>0.0</distortionK2>
+				<distortionK1>0.158661</distortionK1>
+				<distortionK2>-0.249478</distortionK2>
+				<distortionT1>-0.000564</distortionT1>
+				<distortionT2>0.000157</distortionT2>
 				<distortionK3>0.0</distortionK3>
-				<distortionT1>0.0</distortionT1>
-				<distortionT2>0.0</distortionT2>
 			</plugin>
 		</sensor>
 	</gazebo>
