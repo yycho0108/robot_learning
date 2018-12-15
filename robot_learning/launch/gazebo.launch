@@ -18,6 +18,8 @@
     <include file="$(find robot_learning)/launch/urdf.launch"/>
     <node name="spawn_neato_model" pkg="gazebo_ros" type="spawn_model"
         args="-urdf -param robot_description -model neato -unpause $(arg pose)"/>
+	<node name="scan_relay" pkg="topic_tools" type="relay"
+		args="scan stable_scan"/>
 
     <!--
     <node pkg="robot_state_publisher" type="robot_state_publisher" name="robot_state_publisher">

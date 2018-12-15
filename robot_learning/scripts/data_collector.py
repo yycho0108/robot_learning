@@ -37,7 +37,8 @@ class DataCollector(object):
     """
     def __init__(self, start=True,
             use_tf=True, sync=True, slop=0.05,
-            min_dr=0.01, min_dh=np.deg2rad(1.0)
+            min_dr=0.01, min_dh=np.deg2rad(1.0),
+            collect_scan=True
             ):
         """
         Args:
@@ -50,6 +51,7 @@ class DataCollector(object):
         self.slop_   = slop
         self.min_dr_ = min_dr
         self.min_dh_ = min_dh
+        self.collect_scan_ = collect_scan
 
         # Data
         self.t0_   = None
@@ -84,8 +86,12 @@ class DataCollector(object):
         """ store odom msg """
         self.odom_ = msg
 
-    def data_cb(self, img_msg, odom_msg):
+    def data_cb(self, *args):
         """ store synced scan/odom msg """
+        if self.collect_scan_:
+            img_msg, odom_msg, scan_msg = args
+        else:
+            img_msg, odom_msg = args
 
         time = odom_msg.header.stamp.to_sec()
         if self.t0_ is None:
@@ -93,19 +99,23 @@ class DataCollector(object):
         # track relative time
         self.time_ = (time - self.t0_)
         self.img_cb(img_msg)
-        #self.scan_cb(scan_msg)
+        if self.collect_scan_:
+            self.scan_cb(scan_msg)
         self.odom_cb(odom_msg)
         self.new_data_ = True
 
     def start(self):
         """ register ROS handles and subscribe to all incoming topics """
         if self.sync_:
-            #scan_sub = message_filters.Subscriber('/stable_scan', LaserScan) # TODO: might work well?
+            if self.collect_scan_:
+                scan_sub = message_filters.Subscriber('/stable_scan', LaserScan) # TODO: might work well?
             odom_sub = message_filters.Subscriber('/odom', Odometry) 
             img_sub  = message_filters.Subscriber('/camera/image_raw', Image) 
-
+            subs = [img_sub, odom_sub]
+            if self.collect_scan_:
+                subs.append(scan_sub)
             self.sync_sub_ = message_filters.ApproximateTimeSynchronizer(
-                    [img_sub, odom_sub], 10, self.slop_, allow_headerless=False)
+                    subs, 10, self.slop_, allow_headerless=False)
             self.sync_sub_.registerCallback(self.data_cb)
         else:
             self.scan_sub_ = rospy.Subscriber('scan', LaserScan, self.scan_cb)
@@ -204,7 +214,10 @@ class DataCollector(object):
         Returns:
             odom,scan : refer to DataCollector.odom() and DataCollector.scan().
         """
-        return (self.time_, self.img, self.odom)#, self.scan)
+        if self.collect_scan_:
+            return (self.time_, self.img, self.odom, self.scan)
+        else:
+            return (self.time_, self.img, self.odom)
 
     def append(self, data):
         check = [(e is not None) for e in data]
@@ -235,14 +248,19 @@ class DataCollector(object):
 
         data = zip(*self.dataset_) # reformat to [time, img, odom, scan]
         dtypes = [np.float32, np.uint8, np.float32]
+        if self.collect_scan_:
+            dtypes.append( np.float32 )
         data = [np.asarray(d, dtype=t) for (d,t) in zip(data, dtypes)]
-        stamp, img, odom = data
+        stamp, img, odom = data[:3]
+        if self.collect_scan_:
+            scan = data[-1]
 
         # cannot call .savez due to bug (https://stackoverflow.com/questions/25552741/python-numpy-not-saving-array)
         np.save(os.path.join(path,'stamp.npy'), stamp)
         np.save(os.path.join(path,'img.npy'), img)
         np.save(os.path.join(path,'odom.npy'), odom)
-        #np.save(os.path.join(path,'scan.npy'), scan)
+        if self.collect_scan_:
+            np.save(os.path.join(path,'scan.npy'), scan)
 
 def main():
     rospy.init_node('data_collector')

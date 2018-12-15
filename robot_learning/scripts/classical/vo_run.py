@@ -81,7 +81,6 @@ class CVORunner(object):
             aimg,
             pts3,
             pts2,
-            pts2_c,
             scan_c,
             pts_r,
             ):
@@ -101,7 +100,7 @@ class CVORunner(object):
         rec_path = np.stack([tx,ty], axis=-1)
 
         VoGUI.draw_img(ax0, aimg[..., ::-1])
-        VoGUI.draw_top(ax1, rec_path, pts2_c, odom[:i+1], scan_c)
+        VoGUI.draw_top(ax1, rec_path, pts2, odom[:i+1], scan_c)
         VoGUI.draw_3d(ax2, pts3)
         VoGUI.draw_2d_proj(ax3, imgs[i-1, ..., ::-1], pts_r)
 
@@ -155,28 +154,27 @@ class CVORunner(object):
             # skip filter updates
             return
 
-        (aimg, dh, dt, pts_r, pts3) = res
-        dps = np.float32([dt[0], dt[1], dh])
-        print('dh', np.rad2deg(dh))
-        print('(pred-gt) {} vs {}'.format(dps, dps_gt) )
-        pos = add_p3d(prv, dps)
+        (aimg, vo_h, vo_t, pts_r, pts3) = res
+        #dps = np.float32([dt[0], dt[1], dh])
+        #print('dh', np.rad2deg(dh))
+        #print('(pred-gt) {} vs {}'.format(dps, dps_gt) )
+        #pos = add_p3d(prv, dps)
+        pos = [vo_t[0], vo_t[1], vo_h]
         ukf.update(pos)
 
         tx.append( float(ukf.x[0]) )
         ty.append( float(ukf.x[1]) )
         th.append( float(ukf.x[2]) )
 
-        # pts2 in the proper coordinate system
         pts2 = pts3[:,:2]
-        pts2_c = pts2.dot(Rmat(odom[i,2]).T) + np.reshape(odom[i,:2], (1,2))
-        self.map_ = np.concatenate([self.map_, pts2_c], axis=0)
+        self.map_ = np.concatenate([self.map_, pts2], axis=0)
         if scan is not None:
             scan_c = self.scan_to_pt(scan[i]).dot(Rmat(odom[i,2]).T) + np.reshape(odom[i, :2], (1,2))
         else:
             scan_c = None
 
         ### EVERYTHING FROM HERE IS PLOTTING + VIZ ###
-        self.show(aimg, pts3, pts2, pts2_c, scan_c, pts_r)
+        self.show(aimg, pts3, pts2, scan_c, pts_r)
 
     def quit(self):
         self.quit_ = True
@@ -197,7 +195,7 @@ def main():
     #idx = np.random.choice(8)
     #idx = 7
     #idx = 15
-    idx = 20
+    idx = 16
     print('idx', idx)
 
 

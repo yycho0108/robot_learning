@@ -56,8 +56,8 @@ def build_ukf(x0=None, P0=None,
     if R is None:
         R = np.diag([1e-2, 1e-2, 1e-6]) # xyh
 
-    spts = MerweScaledSigmaPoints(6, 1e-3, 2, 3-6, subtract=ukf_residual)
-    #spts = JulierSigmaPoints(6, 6-2, sqrt_method=np.linalg.cholesky, subtract=ukf_residual)
+    #spts = MerweScaledSigmaPoints(6, 1e-3, 2, 3-6, subtract=ukf_residual)
+    spts = JulierSigmaPoints(6, 6-2, sqrt_method=np.linalg.cholesky, subtract=ukf_residual)
 
     ukf = UKF(6, 3, (1.0 / 30.), # dt guess
             ukf_hx, ukf_fx, spts,

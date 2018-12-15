@@ -39,6 +39,12 @@ class ClassicalVO(object):
         # distortion coefficient
         self.dC_ = np.float32([0.158661, -0.249478, -0.000564, 0.000157, 0.000000])
 
+        # base_link<->camera transforms cache
+        self.T_c2b_ = tx.compose_matrix(
+                angles=[-np.pi/2,0.0,-np.pi/2],
+                translate=[0.15,0,0.1])
+        self.T_b2c_ = tx.inverse_matrix(self.T_c2b_)
+
     def track(self, img1, img2, pt1):
         lk_params = dict( winSize  = (47,3),
                 maxLevel = 20,
@@ -268,11 +274,13 @@ class ClassicalVO(object):
                 Kmat.dot(np.concatenate([R, t], axis=1)),
                 pt2[None,...],
                 pt1[None,...]).astype(np.float32)
-        
+
+        # Apply NaN/Inf Check
         msk = np.all(np.isfinite(pts_h),axis=0)
         pt1 = pt1[msk]
         pt2 = pt2[msk]
         midx = midx[msk]
+        pts_h = pts_h[:, msk]
 
         return [R, t, pt1, pt2, midx, pts_h]
 
@@ -280,11 +288,59 @@ class ClassicalVO(object):
         pt_u = cv2.undistortPoints(2.0*pt[None,...], self.K2_, self.dC_, P=self.K2_)[0]/2.0
         return pt_u
 
+    def add_keyframe(self,
+            des1, des2,
+            kpt1, kpt2
+            ):
+        # == 0 :  unroll parameters ==
+        Kmat_o = self.K_
+        Kmat = self.K2_
+        distCoeffs = self.dC_
+        method = cv2.FM_LMEDS # TODO : configure
+        # ============================
+
+        # match descriptors
+        matches = self.match_v1(des1, des2)
+        i1, i2 = np.int32([(m.queryIdx, m.trainIdx) for m in matches]).T
+
+        # grab relevant keypoints + points
+        kpt1_n = kpt1[i1]
+        kpt2_n = kpt2[i2]
+        pt1 = np.float32(cv2.KeyPoint.convert(kpt1_n))
+        pt2 = np.float32(cv2.KeyPoint.convert(kpt2_n))
+        midx = np.arange(len(matches)) # track match indices
+
+        # undistort
+        pt1_u = self.undistort(pt1)
+        pt2_u = self.undistort(pt2)
+        
+        res = self.getPoseAndPoints(pt1_u, pt2_u, midx, method)
+        if res is None:
+            return None
+
+        # unroll result
+        [R, t, pt1_r, pt2_r, midx, pts_h] = res
+        t = t.ravel()
+
+        # homogeneous --> 3d
+        pts3 = pts_h[:3] / pts_h[3:]
+
+        # format results
+        lm_pt2 = pt2[midx] # 2d Landmark Image Coordinates
+        lm_des = des2[i2[midx]] # Landmark Feature Descriptor
+        lm_pt3 = pts3.T.copy() # 3D Landmark Coordinates
+        lm_msk = np.zeros(len(kpt2), dtype=np.bool)
+        lm_msk[i2[midx]] = True # P@(t=2) Keypoint Mask
+
+        pp_res = [R, t, midx, matches]
+        lm_res = [lm_pt2, lm_des, lm_pt3, lm_msk]
+
+        return pp_res, lm_res
+
     def __call__(self, img, pose,
             in_thresh = 16,
             s = 0.1
             ):
-
         # == 0 :  unroll parameters ==
         Kmat_o = self.K_
         Kmat = self.K2_
@@ -302,7 +358,18 @@ class ClassicalVO(object):
         self.hist_.append((kpt2, des2, img2))
         # ==============
 
-        if (self.lm_pt3_ is not None):
+        # construct current camera pose transformation matrices
+        b_x, b_y, b_h = pose
+        T_o2b = tx.compose_matrix(
+                angles=[0.0, 0.0, b_h],
+                translate=[b_x, b_y, 0.0]) # origin -> base_link
+        T_b2o = np.linalg.inv(T_o2b) # base_link -> origin
+        # lm_pt3 right now = w.r.t. current camera
+        T_b2c = self.T_b2c_
+        T_c2b = self.T_c2b_
+        T_c = T_b2c.dot(T_b2o).dot(T_c2b)
+
+        if False:#(self.lm_pt3_ is not None):
             print(' # Landmarks Tracking : {}'.format(len(self.lm_pt3_)))
             # update + track existing landmark positions
             pt2, msk = self.track(img1, img2, self.lm_pt2_)
@@ -324,14 +391,14 @@ class ClassicalVO(object):
                     self.lm_pt3_, self.lm_pt2_, self.K2_, self.dC_,
                     useExtrinsicGuess=False,
                     iterationsCount=1000,
-                    reprojectionError=5.0
+                    reprojectionError=2.0
                     )
 
             # construct transformation matrix from PnP results
             T_m2i = np.eye(4, 4) # pt3 -> pt2
             R, _ = cv2.Rodrigues(rvec)
             t    = tvec.ravel()
-            print('R-t', R, t)
+            print('R-t', R, t) # -- represents current camera pose
             T_m2i[:3,:3] = R
             T_m2i[:3,3]  = t
 
@@ -360,11 +427,15 @@ class ClassicalVO(object):
             # keypoints from previous frame
             # that are not part of existing landmarks
             msk_n  = np.logical_not(self.lm_msk_)
+            #msk_n  = np.full_like(msk_n, 0)
             kpt1_n = kpt1[msk_n]
             des1_n = des1[msk_n]
 
             # compute matches with current frame
             matches = self.match_v1(des1_n, des2_n)
+            if len(matches) <= 0:
+                print('no match')
+                return True, None
             i1, i2 = np.int32([(m.queryIdx, m.trainIdx) for m in matches]).T
 
             # grab relevant keypoints + points
@@ -380,10 +451,9 @@ class ClassicalVO(object):
             pt2_u = self.undistort(pt2)
 
             res = self.getPoseAndPoints(pt1_u, pt2_u, midx, method)
-
-            if res is None:
+            if True:#res is None:
                 # no new landmarks to add
-                pass
+                self.lm_msk_ = np.zeros(len(kpt2), dtype=np.bool)
             else:
                 # add new landmarks with rel. scale
                 [_, _, pt1_r, pt2_r, midx, pts_h] = res
@@ -394,10 +464,6 @@ class ClassicalVO(object):
                 pts3[:3] *= s # multiply points norm by s # ... 4xN
                 #pts3 = np.dot(T_i2m[:3], pts3) # 3x4 * 4xN --> 3xN
                 pts3 = pts3[:3]
-                # bring lm_pt3 to coord frame of most recent observation
-                self.lm_pt3_ = np.dot(
-                        self.lm_pt3_, T_m2i[:3,:3].T
-                        ) + T_m2i[:3,3:].T
 
                 # extend landmarks
                 self.lm_pt2_ = np.concatenate((self.lm_pt2_, pt2[midx]), axis=0) # undistorted!
@@ -407,45 +473,56 @@ class ClassicalVO(object):
                 self.lm_msk_ = np.zeros(len(kpt2), dtype=np.bool)
                 self.lm_msk_[i2[midx]] = True
         else:
-            # initialize landmarks
-            matches = self.match_v1(des1, des2)
-            i1, i2 = np.int32([(m.queryIdx, m.trainIdx) for m in matches]).T
-            # grab relevant keypoints + points
-            kpt1_n = kpt1[i1]
-            kpt2_n = kpt2[i2]
-            pt1 = np.float32(cv2.KeyPoint.convert(kpt1_n))
-            pt2 = np.float32(cv2.KeyPoint.convert(kpt2_n))
-            midx = np.arange(len(matches)) # track match indices
+            # requires re-initialization of landmarks
+            pp_res, lm_res = self.add_keyframe(
+                    des1, des2, kpt1, kpt2)
 
-            # undistort
-            pt1_u = cv2.undistortPoints(2.0*pt1[None,...], Kmat_o, distCoeffs, P=Kmat_o)[0]/2.0
-            pt2_u = cv2.undistortPoints(2.0*pt2[None,...], Kmat_o, distCoeffs, P=Kmat_o)[0]/2.0
-            
-            res = self.getPoseAndPoints(pt1_u, pt2_u, midx, method)
-            if res is None:
-                return True, None
+            # unroll results : w.r.t. current camera
+            [R, t, midx, matches] = pp_res
+            [lm_pt2, lm_des, lm_pt3, lm_msk] = lm_res
 
-            # unroll result
-            [R, t, pt1_r, pt2_r, midx, pts_h] = res
-            t = t.ravel()
-            t = s * t # use input scale
+            # apply current scale
+            t *= s
+            lm_pt3 *= s
 
-            # homogeneous --> 3d
-            pts3 = pts_h[:3] / pts_h[3:]
-            pts3 = s * pts3 # use input scale
+            # apply initial parts
+            T0 = T_b2c.dot(T_o2b).dot(T_c2b)
 
-            # initialize landmarks
-            self.lm_pt2_ = pt2[midx]
-            # TODO : should compute offsets and such
-            print 'R-t init', R, t
-            self.lm_pt3_ = np.copy(pts3.T)
-            self.lm_msk_ = np.zeros(len(kpt2), dtype=np.bool)
-            self.lm_msk_[i2[midx]] = True
-            self.lm_des_ = des2[i2[midx]] # landmark descriptors
+            T1 = np.eye(4, dtype=np.float32)
+            T1[:3,:3] = R
+            T1[:3,3]  = t
+
+            T = T0.dot(T1)
+
+            # re-extract R,t
+            # TODO : ????????
+            R = np.eye(3)#T[:3, :3]
+            t = np.zeros(3)#T[:3, 3]
+
+            lm_pt3 = lm_pt3.dot(T_c[:3,:3].T) + T_c[:3,3]
+            # lm_pt3 w.r.t camera origin
+
+            # save results
+            self.lm_pt2_ = lm_pt2
+            self.lm_des_ = lm_des
+            self.lm_pt3_ = lm_pt3
+            self.lm_msk_ = lm_msk
+        
+        ## == extract map and pose data ==
+        pts3 = self.lm_pt3_
+        pts3 = pts3.dot(self.T_c2b_[:3,:3].T) + self.T_c2b_[:3,3]
+        rpy_cam = tx.euler_from_matrix(R)
+        base_h1 = -rpy_cam[1] # base_link angular position
+        base_t1 = T_b2o.dot(T_c2b).dot([t[0], t[1], t[2], 1.0 ])
+        #base_t1 = np.asarray([t[2], -t[1]]) # base link linear position
+        ## ===============================
+
+        # from here, visualization + validation
 
         # compute reprojection
         pts2_rec, _ = cv2.projectPoints(
-                pts3.T[...,None],
+                #pts3[...,None],
+                self.lm_pt3_[...,None],
                 rvec=cv2.Rodrigues(R)[0],
                 tvec=t,
                 #rvec=np.zeros(3),
@@ -454,23 +531,15 @@ class ClassicalVO(object):
                 distCoeffs=distCoeffs,
                 )
         pts2_rec = np.squeeze(pts2_rec, axis=1)
-
         # TODO : compute relative scale factor
-
-        # apply scale factor and re-orient to align with base coordinates
-        pts3 = np.stack([pts3[2], -pts3[0], -pts3[1]], axis=-1)
 
         if len(pts3) < in_thresh:
             # insufficient number of inliers to recover pose
             return True, None
 
-        rpy_cam = tx.euler_from_matrix(R)
-        h = -rpy_cam[1] # base_link angular displacement
-
         # no-slip
         # TODO : why is t[0,0] so bad???
         # TODO : relax the no-slip constraint by being better at triangulating or something
-        t = np.asarray([t[2], 0.0 * -t[0]])
 
         matchesMask = np.zeros(len(matches), dtype=np.bool)
         matchesMask[midx] = 1
@@ -485,10 +554,10 @@ class ClassicalVO(object):
                 img1,kpt1,img2,kpt2,
                 matches,None,**draw_params)
         mim = cv2.addWeighted(np.concatenate([img1,img2],axis=1), 0.5, mim, 0.5, 0.0)
-        cv2.drawKeypoints(mim, kpt1[i1][matchesMask], mim, color=(0,0,255))
-        cv2.drawKeypoints(mim[:,320:], kpt2[i2][matchesMask], mim[:,320:], color=(0,0,255))
+        #cv2.drawKeypoints(mim, kpt1[i1][matchesMask], mim, color=(0,0,255))
+        #cv2.drawKeypoints(mim[:,320:], kpt2[i2][matchesMask], mim[:,320:], color=(0,0,255))
         print('---')
 
-        return True, (mim, h, t, pts2_rec, pts3)
+        return True, (mim, base_h1, base_t1, pts2_rec, pts3)
 
         #print 'm', m
