@@ -175,7 +175,7 @@ class DataCollector(object):
         if msg is not None:
             try:
                 img = self.br_.imgmsg_to_cv2(self.img_, desired_encoding='bgr8')
-                img = cv2.resize(img, (320,240)) # produce half-size image
+                #img = cv2.resize(img, (320,240)) # produce half-size image
                 return img
             except CvBridgeError as e:
                 rospy.loginfo_throttle(1.0, 'Image Conversion Failed : {}'.format(e))

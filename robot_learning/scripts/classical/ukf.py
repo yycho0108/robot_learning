@@ -52,9 +52,9 @@ def build_ukf(x0=None, P0=None,
     if P0 is None:
         P0 = np.diag([1e-6,1e-6,1e-6, 1e-1, 1e-1, 1e-1])
     if Q is None:
-        Q = np.diag([1e-4, 1e-4, 1e-4, 1e-1, 1e-1, 1e-1]) #xyhvw
+        Q = np.diag([1e-4, 1e-4, 1e-2, 1e-1, 1e-1, 1e-1]) #xyhvw
     if R is None:
-        R = np.diag([1e-2, 1e-2, 1e-6]) # xyh
+        R = np.diag([1e-2, 1e-2, 1e-2]) # xyh
 
     #spts = MerweScaledSigmaPoints(6, 1e-3, 2, 3-6, subtract=ukf_residual)
     spts = JulierSigmaPoints(6, 6-2, sqrt_method=np.linalg.cholesky, subtract=ukf_residual)

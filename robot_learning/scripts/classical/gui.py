@@ -27,10 +27,12 @@ class VoGUI(object):
         # origin
         ax.plot([0],[0],'k+')
 
-        ax.plot(path0[:,0], path0[:,1], 'b--')
+        ax.plot(path0[:,0], path0[:,1], 'b:')
+        ax.plot(path0[-1:,0], path0[-1:,1], 'bo', markersize=5)
 
         # trajectory (ground truth)
         ax.plot(path1[:,0], path1[:,1], 'k--')
+        ax.plot(path1[-1:,0], path1[-1:,1], 'ko', markersize=5)
 
         # reconstruction
         ax.plot(pts[:,0], pts[:,1], 'r.', label='visual')

@@ -133,7 +133,7 @@ class CVORunner(object):
         # very unfortunate.
         dt  = (stamps[i] - stamps[i-1])
         #dt = 0.2
-        #print('dt', dt)
+        print('dt', dt)
 
         # experimental : pass in scale as a parameter
         # TODO : estimate scale from points + camera height?
@@ -146,8 +146,8 @@ class CVORunner(object):
 
         ukf.predict(dt=dt)
         # TODO : currently passing 'ground-truth' position
-        suc, res = vo(img, odom[i], s=s)
-        #suc, res = vo(img, ukf.x[:3].copy(), s=s)
+        #suc, res = vo(img, odom[i], s=s)
+        suc, res = vo(img, ukf.x[:3].copy(), s=s)
         if not suc:
             print('Visual Odometry Aborted!')
             return
@@ -164,12 +164,12 @@ class CVORunner(object):
         pos = [vo_t[0], vo_t[1], vo_h]
         ukf.update(pos)
 
-        #tx.append( float(ukf.x[0]) )
-        #ty.append( float(ukf.x[1]) )
-        #th.append( float(ukf.x[2]) )
-        tx.append( vo_t[0] )
-        ty.append( vo_t[1] )
-        th.append( vo_h    )
+        tx.append( float(ukf.x[0]) )
+        ty.append( float(ukf.x[1]) )
+        th.append( float(ukf.x[2]) )
+        #tx.append( vo_t[0] )
+        #ty.append( vo_t[1] )
+        #th.append( vo_h    )
 
         pts2 = pts3[:,:2]
         self.map_ = np.concatenate([self.map_, pts2], axis=0)
@@ -199,14 +199,11 @@ class CVORunner(object):
 
 def main():
     #idx = np.random.choice(8)
-    #idx = 6
-    #idx = 7
-    #idx = 15
-    idx = 21
+    idx = 23
     print('idx', idx)
 
     # load data
-    i0 = 1
+    i0 = 130
     imgs   = np.load('../../data/train/{}/img.npy'.format(idx))[i0:]
     stamps = np.load('../../data/train/{}/stamp.npy'.format(idx))[i0:]
     odom   = np.load('../../data/train/{}/odom.npy'.format(idx))[i0:]
@@ -224,7 +221,7 @@ def main():
     stamps -= stamps[0] # t0 = 0
 
     app = CVORunner(imgs, stamps, odom, scan)
-    app.run(auto=False)
+    app.run(auto=True)
 
 if __name__ == "__main__":
     main()
