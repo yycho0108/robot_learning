@@ -204,25 +204,29 @@ def main():
 
     dm = DataManager(dirs=dirs, log=print)
 
-    img, dps = dm.get(batch_size=32, time_steps=16,
-            as_path=as_path,
-            target_size=target_size)
+    #img, dps = dm.get(batch_size=32, time_steps=16,
+    #        as_path=as_path,
+    #        target_size=target_size)
 
-    data = zip(img, dps)
-    disp = VoShow(data, as_path=as_path)
-    disp.show()
+    #data = zip(img, dps)
+    #disp = VoShow(data, as_path=as_path)
+    #disp.show()
 
     # opt 2.0 : data augmentation observation
-    #s = np.random.randint(65536)
-    #np.random.seed(s)
+    s = np.random.randint(65536)
+    np.random.seed(s)
     #img1, lab1 = dm.get_1(dm.data_[0],4,flip=False)
-    #np.random.seed(s)
-    #img2, lab2 = dm.get_1(dm.data_[0],4,flip=True)
+    img1, lab1 = dm.get(1, 4, aug=False)
+    img1, lab1 = img1[0], lab1[0]
 
-    #fig, ((ax0, ax2), (ax1, ax3)) = plt.subplots(2,2)
-    #dm.show(img1, lab1, fig, ax0, ax1, draw=False,  label='orig', color='k')
-    #dm.show(img2, lab2, fig, ax2, ax3, clear=False, label='flip', color='k')
-    #plt.show()
+    np.random.seed(s)
+    img2, lab2 = dm.get(1, 4)
+    img2, lab2 = img2[0], lab2[0]
+
+    fig, ((ax0, ax2), (ax1, ax3)) = plt.subplots(2,2)
+    dm.show(img1, lab1, fig, ax0, ax1, draw=False,  label='orig', color='k')
+    dm.show(img2, lab2, fig, ax2, ax3, clear=False, label='aug', color='k')
+    plt.show()
 
     # opt 2.1 : overall inspection
     #dm.inspect()
