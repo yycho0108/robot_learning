@@ -18,6 +18,24 @@ class VoGUI(object):
         self.parent_ = parent
 
     @staticmethod
+    def draw_hud(ax, origin,
+            fov, rad, style):
+        h  = origin[-1]
+        pos = np.reshape(origin[:2], (1,2))
+
+        lx = np.linspace(0, rad)
+        lx = np.stack([lx,lx*0],axis=-1)
+        lh = np.linspace(h-fov/2, h+fov/2)
+
+        fov_l = lx.dot(Rmat(h - fov/2).T) + pos
+        fov_r = lx.dot(Rmat(h + fov/2).T) + pos
+
+        s_range = rad * np.stack([np.cos(lh),np.sin(lh)], axis=-1) + pos
+        ax.plot(fov_l[:,0], fov_l[:,1], style)
+        ax.plot(fov_r[:,0], fov_r[:,1], style)
+        ax.plot(s_range[:,0], s_range[:,1], style)
+
+    @staticmethod
     def draw_top(ax,
             path0, pts,
             path1=None, scan=None
@@ -28,38 +46,33 @@ class VoGUI(object):
         ax.plot([0],[0],'k+')
 
         ax.plot(path0[:,0], path0[:,1], 'b:')
-        ax.plot(path0[-1:,0], path0[-1:,1], 'bo', markersize=5)
+        ax.plot(path0[-1:,0], path0[-1:,1], 'bo', markersize=5, label='visual odometry')
 
         # trajectory (ground truth)
         ax.plot(path1[:,0], path1[:,1], 'k--')
-        ax.plot(path1[-1:,0], path1[-1:,1], 'ko', markersize=5)
+        ax.plot(path1[-1:,0], path1[-1:,1], 'ko', markersize=5, label='ground truth')
 
         # reconstruction
-        ax.plot(pts[:,0], pts[:,1], 'r.', label='visual')
+        ax.plot(pts[:,0], pts[:,1], 'r.', label='points')
+
+        ax.set_title('VO Status Overview')
+        ax.legend()
 
         # in a way, reconstruction "ground truth"
         if scan is not None:
             ax.plot(scan[:,0], scan[:,1], 'b.', label='scan')
 
-        # hud : visual field + sensing radius
-        lx = np.linspace(0, 5)
-        lx = np.stack([lx,lx*0],axis=-1)
+        # ground-truth HUD
+        fov = 1.14 # ~ 65.3'
+        VoGUI.draw_hud(ax, path0[-1], fov, 5.0, 'b:')
+        VoGUI.draw_hud(ax, path1[-1], fov, 5.0, 'k--')
 
-        h0  = path1[-1, 2]
-        pos = np.reshape(path1[-1,:2], (1,2))
-        fov = np.deg2rad(73.0)
-
-        fov_l = lx.dot(Rmat(h0 - fov/2).T) + pos
-        fov_r = lx.dot(Rmat(h0 + fov/2).T) + pos
-        h = np.linspace(-np.pi, np.pi)
-        radius = 5.0 * np.stack([np.cos(h),np.sin(h)], axis=-1) + pos
-        ax.plot(fov_l[:,0], fov_l[:,1], 'g--')
-        ax.plot(fov_r[:,0], fov_r[:,1], 'g--')
-        ax.plot(radius[:,0], radius[:,1], 'g--')
-
-        cx, cy = pos[0]
+        cx, cy = path1[-1, :2]
         ax.set_xlim(cx-5.0, cx+5.0)
         ax.set_ylim(cy-5.0, cy+5.0)
+        ax.grid()
+        ax.set_axisbelow(True)
+        ax.set_aspect('equal', 'datalim')
 
     @staticmethod
     def draw_3d(ax, pts):
@@ -69,6 +82,7 @@ class VoGUI(object):
         ax.set_xlabel('x')
         ax.set_ylabel('y')
         ax.set_zlabel('z')
+        ax.set_title('Point Cloud Reconstruction')
 
     @staticmethod
     def draw_2d_proj(ax, img, pts, color=None):
@@ -82,6 +96,7 @@ class VoGUI(object):
         ax.set_aspect('equal')
         if not ax.yaxis_inverted():
             ax.invert_yaxis()
+        ax.set_title('Current Landmark Projection')
 
     @staticmethod
     def draw_img(ax, img):

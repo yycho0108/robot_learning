@@ -8,6 +8,8 @@ from collections import deque
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib import pyplot as plt
 
+from sklearn.neighbors import NearestNeighbors
+
 def drawMatches(img1, img2, pt1, pt2, msk,
         radius = 3
         ):
@@ -41,6 +43,9 @@ class ClassicalVO(object):
         # params
         self.method_ = cv2.FM_RANSAC
 
+        # global flags
+        self.tracking_ = False
+
         # global data cache
         self.hist_ = deque(maxlen=100)
         self.lm_pt2_ = np.empty(shape=(0,2), dtype=np.float32)
@@ -59,7 +64,7 @@ class ClassicalVO(object):
         #        ) # keypoints detector
         #self.des_ = cv2.BRISK_create() # descriptor
         orb = cv2.ORB_create(
-                nfeatures=1024,
+                nfeatures=8192,
                 #scaleFactor=1.1,
                 #edgeThreshold=15,
                 #patchSize=15,
@@ -70,23 +75,30 @@ class ClassicalVO(object):
 
         # build flann matcher
         FLANN_INDEX_KDTREE = 0
-        index_params = dict(algorithm = FLANN_INDEX_KDTREE, trees = 5)
+        FLANN_INDEX_LSH = 6
+        #index_params = dict(
+        #        algorithm = FLANN_INDEX_KDTREE,
+        #        trees = 5)
+        index_params= dict(algorithm = FLANN_INDEX_LSH,
+                   table_number = 6, # 12
+                   key_size = 12,     # 20
+                   multi_probe_level = 1) #2
         search_params = dict(checks=50)   # or pass empty dictionary
         flann = cv2.FlannBasedMatcher(index_params,search_params)
         self.flann_ = flann
 
         # camera matrix parameters
         # orig scale camera matrix (from calibration)
-        K_full = np.reshape([
+        self.K_full_ = np.reshape([
             499.114583, 0.000000, 325.589216,
             0.000000, 498.996093, 238.001597,
             0.000000, 0.000000, 1.000000], (3,3))
         # half scale camera matrix (data)
-        K_half = np.reshape([
+        self.K_half_ = np.reshape([
             499.114583 / 2.0, 0.000000, 325.589216 / 2.0,
             0.000000, 498.996093 / 2.0, 238.001597 / 2.0,
             0.000000, 0.000000, 1.000000], (3,3))
-        self.K_ = K_full # select K based on incoming data.
+        self.K_ = self.K_full_ # select K based on incoming data.
         # distortion coefficient
         self.dC_ = np.float32([0.158661, -0.249478, -0.000564, 0.000157, 0.000000])
 
@@ -97,7 +109,7 @@ class ClassicalVO(object):
                 translate=[0.15,0,0.1]) # camera frame to base_link frame
         self.T_b2c_ = tx.inverse_matrix(self.T_c2b_) # base_link frame to camera frame
 
-    def track(self, img1, img2, pt1):
+    def track(self, img1, img2, pt1, pt2=None):
         """
         Track points from source img to destination img.
 
@@ -110,22 +122,24 @@ class ClassicalVO(object):
             pt2(np.ndarray): Tracked Points in Target Image, [N,2]
             msk(np.ndarray): Boolean mask array of valid track points.
         """
+        flags = cv2.OPTFLOW_LK_GET_MIN_EIGENVALS
+        if pt2 is not None:
+            flags += cv2.OPTFLOW_USE_INITIAL_FLOW
+
         lk_params = dict( winSize  = (51,13),
                 maxLevel = 100,
                 criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 1000, 0.001),
-                flags = cv2.OPTFLOW_LK_GET_MIN_EIGENVALS,
-                minEigThreshold = 1e-4
+                flags = flags,
+                minEigThreshold = 1e-2
                 )
         img1_gray = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
         img2_gray = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
 
         # calculate optical flow
         pt2, st, err = cv2.calcOpticalFlowPyrLK(
-                img1_gray, img2_gray, pt1,
-                None, **lk_params)
-        #print pt2[:5]
-        #print 'std', (pt2 - pt1)[:,1].std()
-        print 'err stats : ', err.min(), err.max(), err.std(), err.mean()
+                img1_gray, img2_gray, pt1, pt2,
+                **lk_params)
+        #print 'err stats : ', err.min(), err.max(), err.std(), err.mean()
 
         h, w = np.shape(img2)[:2]
 
@@ -135,14 +149,14 @@ class ClassicalVO(object):
                 np.less(pt2, [w,h])), axis=-1)
         msk_st = st[:,0].astype(np.bool)
         #msk_ef = np.isfinite(err[:,0])
-        msk_ef = np.less(err[:,0], 0.1)
+        #msk_ef = np.less(err[:,0], 1.0)
         #msk_hu = np.less(np.abs(pt2[:,1]-pt1[:,1]), 5.0) # heuristic
         #msk_ef = np.less(err[:,0], 10.0)
-        msk = np.logical_and.reduce([msk_in, msk_st, msk_ef])
+        msk = np.logical_and.reduce([msk_in, msk_st])#, msk_ef])
 
         return pt2, msk
 
-    def match(self, des1, des2, thresh=150.0):
+    def match(self, des1, des2, lowe_ratio=0.75, thresh=64.0):
         """
         Compute plausible match between two descriptors.
 
@@ -160,19 +174,28 @@ class ClassicalVO(object):
             return None
 
         try:
-            matches = flann.knnMatch(des1, des2, k=2)
+            if isinstance(self.des_, cv2.ORB):
+                # Hamming Distance
+                matches = flann.knnMatch(des1.astype(np.uint8), des2.astype(np.uint8), k=2)
+            else:
+                # Regular Euclidean Distance
+                matches = flann.knnMatch(des1, des2, k=2)
         except Exception as e:
             print 'Exception during match : {}'.format(e)
             print np.shape(des1)
             print np.shape(des2)
             return None
 
-        # lowe filter
+        #good = matches
+        ## lowe filter
         good = []
-        for i, (m,n) in enumerate(matches):
+        for i, e in enumerate(matches):
+            if not len(e) == 2:
+                continue
+            (m,n) = e
             # TODO : set threshold for lowe's filter
-            if m.distance < 0.75*n.distance:
-                # and m.distance < thresh
+            if (m.distance < lowe_ratio*n.distance) and \
+                    m.distance < thresh: # TODO : default distance only valid for ORB
                 good.append(m)
         good = np.asarray(good, dtype=cv2.DMatch)
 
@@ -233,6 +256,8 @@ class ClassicalVO(object):
         Fmat, msk = cv2.findFundamentalMat(pt1, pt2,
                 method=method,
                 param1=0.1, param2=0.999) # TODO : expose these thresholds
+        if msk is None:
+            return None
         msk = np.asarray(msk[:,0]).astype(np.bool)
 
         # filter points + bookkeeping mask
@@ -278,17 +303,26 @@ class ClassicalVO(object):
                 distanceThresh=1000.0)#np.inf) # TODO : or something like 10.0/s ??
         msk = np.asarray(msk[:,0]).astype(np.bool)
 
+        if msk.sum() <= 0:
+            return None
+
         # filter points + bookkeeping mask
         pt1 = pt1[msk]
         pt2 = pt2[msk]
         midx = midx[msk]
 
         # validate triangulation
-        pts_h = cv2.triangulatePoints(
-                Kmat.dot(np.eye(3,4)),
-                Kmat.dot(np.concatenate([R, t], axis=1)),
-                pt1[None,...],
-                pt2[None,...]).astype(np.float32)
+        try:
+            pts_h = cv2.triangulatePoints(
+                    Kmat.dot(np.eye(3,4)),
+                    Kmat.dot(np.concatenate([R, t], axis=1)),
+                    pt1[None,...],
+                    pt2[None,...]).astype(np.float32)
+        except Exception as e:
+            print R
+            print t
+            print pt1.shape, pt1.dtype
+            print pt2.shape, pt2.dtype
 
         # PnP Validation
         #pts3 = (pts_h[:3] / pts_h[3:]).T
@@ -396,6 +430,7 @@ class ClassicalVO(object):
             s = 0.1
             ):
         # == 0 :  unroll parameters ==
+        self.K_ = self.K_full_ if (img.shape[0] == 480) else self.K_half_
         Kmat = self.K_
         distCoeffs = self.dC_
         method = self.method_ # TODO : configure
@@ -412,6 +447,7 @@ class ClassicalVO(object):
         self.hist_.append((kpt2, des2, img2, pose))
         # ==============
 
+        msg = ''
         reinit_thresh = 100
 
         # TODO : potentially incorporate descriptors match information at some point.
@@ -423,70 +459,148 @@ class ClassicalVO(object):
 
             track_ratio = float(msk.sum()) / msk.size
             print 'track status : {}%'.format(track_ratio * 100)
+            msg += ('track : %.2f' % (track_ratio * 100))
+            msg += '% | '
 
-            if track_ratio > 0.6:
+            if track_ratio > 0.85:
                 self.lm_pt3_ = self.lm_pt3_[msk]
                 self.lm_des_ = self.lm_des_[msk]
                 self.lm_pt2_ = pt2[msk] # update tracking point
 
-                ## # update landmark positions
-                #res = self.getPoseAndPoints(
-                #        self.undistort(pt2[msk]),
-                #        self.undistort(pt1[msk]),
-                #        np.arange(msk.sum()), method)
-                #R, t, _, _, midx, pt3_h = res
+                # # update landmark positions
+                res = self.getPoseAndPoints(
+                        self.undistort(pt2[msk]),
+                        self.undistort(pt1[msk]),
+                        np.arange(msk.sum()), method)
 
-                ## pt3_h w.r.t pose
+                if res is not None:
+                    R, t, _, _, midx, pt3_h = res
 
-                #lm_pt3_c0 = self.lm_pt3_[midx] # landmark w.r.t c0
-                ## to estimate scale, c0 -> c1 required
-                #lm_pt3_c0_h = cv2.convertPointsToHomogeneous(lm_pt3_c0)
-                #lm_pt3_c0_h = np.squeeze(lm_pt3_c0_h, axis=1)
-                #lm_pt3_c1 = np.linalg.multi_dot([
-                #    lm_pt3_c0_h,
-                #    self.T_c2b_.T, # now base0 coordinates
-                #    tx.inverse_matrix(self.T_b2o(pose)).T, # now base1 coordinates
-                #    self.T_b2c_.T # now cam1 coordinates
-                #    ])
+                    # pt3_h w.r.t pose
 
-                #prv = cv2.convertPointsFromHomogeneous(lm_pt3_c1)
-                #prv = np.squeeze(prv, axis=1)
-                #cur = cv2.convertPointsFromHomogeneous(pt3_h.T)
-                #cur = np.squeeze(cur, axis=1)
+                    lm_pt3_c0 = self.lm_pt3_[midx] # landmark w.r.t c0
+                    # to estimate scale, c0 -> c1 required
+                    lm_pt3_c0_h = cv2.convertPointsToHomogeneous(lm_pt3_c0)
+                    lm_pt3_c0_h = np.squeeze(lm_pt3_c0_h, axis=1)
+                    lm_pt3_c1 = np.linalg.multi_dot([
+                        lm_pt3_c0_h,
+                        self.T_c2b_.T, # now base0 coordinates
+                        tx.inverse_matrix(self.T_b2o(pose)).T, # now base1 coordinates
+                        self.T_b2c_.T # now cam1 coordinates
+                        ])
 
-                #d_prv = np.linalg.norm(prv, axis=-1)
-                #d_cur = np.linalg.norm(cur, axis=-1)
+                    prv = cv2.convertPointsFromHomogeneous(lm_pt3_c1)
+                    prv = np.squeeze(prv, axis=1)
+                    cur = cv2.convertPointsFromHomogeneous(pt3_h.T)
+                    cur = np.squeeze(cur, axis=1)
 
-                ## override input scale information
-                #ss = d_prv / d_cur
-                ##print('scale estimates : {}'.format(ss))
-                #print('input scale : {}'.format(s))
-                #s = np.median(ss)
-                #print('computed scale : {}'.format(s))
-                #cur *= s
+                    d_prv = np.linalg.norm(prv, axis=-1)
+                    d_cur = np.linalg.norm(cur, axis=-1)
 
-                #cur_h = cv2.convertPointsToHomogeneous(cur)
-                #cur_h = np.squeeze(cur_h, axis=1)
+                    # override input scale information
+                    ss = d_prv / d_cur
+                    #print('scale estimates : {}'.format(ss))
+                    print('input scale : {}'.format(s))
+                    s = np.median(ss)
+                    print('computed scale : {}'.format(s))
+                    cur *= s
 
-                #lm_pt3 = np.linalg.multi_dot([
-                #    cur_h,
-                #    self.T_c2b_.T, # now base1 coordinates
-                #    self.T_b2o(pose).T, # now base0 coordinates
-                #    self.T_b2c_.T # now cam0 coordinates
-                #])[:,:3]
+                    cur_h = cv2.convertPointsToHomogeneous(cur)
+                    cur_h = np.squeeze(cur_h, axis=1)
 
-                #print 'update landmark position'
-                #alpha = 0.95
-                #self.lm_pt3_[midx] = (
-                #        alpha * self.lm_pt3_[midx] + (1.0-alpha) * lm_pt3)
+                    lm_pt3 = np.linalg.multi_dot([
+                        cur_h,
+                        self.T_c2b_.T, # now base1 coordinates
+                        self.T_b2o(pose).T, # now base0 coordinates
+                        self.T_b2c_.T # now cam0 coordinates
+                    ])[:,:3]
 
+                    print 'update landmark position'
+                    alpha = 0.9
+                    self.lm_pt3_[midx] = (
+                            alpha * self.lm_pt3_[midx] + (1.0-alpha) * lm_pt3)
+
+                    # == dynamically add points ==
+                    # TODO : currently super unstable
+                    # augment landmark points while we're at it
+
+                    if True:#False: # make this "True" to try dynamically adding points
+                        match_f2m = self.match(des1, self.lm_des_,
+                                lowe_ratio=1.0,
+                                thresh = 128.0
+                                )
+
+                        i1_f2m, i2_f2m = np.int32([
+                            (m.queryIdx, m.trainIdx)
+                            for m in match_f2m]).T
+
+                        # select points from frame 1
+                        # that are not already in landmarks
+                        msk1 = np.ones(len(des1), dtype=np.bool)
+                        msk1[i1_f2m] = False
+                        print 'points to use : {}'.format(msk1.sum())
+
+                        # not near any of currently tracking points either
+                        neigh = NearestNeighbors(n_neighbors=1)
+                        neigh.fit(self.lm_pt2_)
+                        d, i = neigh.kneighbors(cv2.KeyPoint.convert(kpt1), return_distance=True)
+                        msk1[(d < 20.0)[:,0]] = False
+
+                        if msk1.sum() > 10:
+
+                            #p1_n = cv2.KeyPoint.convert(kpt1[msk1])
+                            #p2_n, msk_f2f = self.track(img1, img2, p1_n)
+                            match_f2f = self.match(des1[msk1], des2)
+                            i1_f2f, i2_f2f = np.int32([
+                                (m.queryIdx, m.trainIdx)
+                                for m in match_f2f]).T
+
+                            p1_n = cv2.KeyPoint.convert(kpt1[msk1][i1_f2f])
+                            p2_n, msk_f2f = self.track(img1, img2, p1_n,
+                                    pt2 = cv2.KeyPoint.convert(kpt2[i2_f2f])
+                                    )
+                            #p2_n = cv2.KeyPoint.convert(kpt2[i2_f2f])
+                            #msk_f2f = np.ones(len(p1_n), dtype=np.bool)
+                            try:
+                                res_f2f = self.getPoseAndPoints(
+                                        self.undistort(p1_n[msk_f2f]),
+                                        self.undistort(p2_n[msk_f2f]),
+                                        np.arange(msk_f2f.sum()), method)
+
+                                if res_f2f is not None:
+                                    midx_f2f, pt3_h_f2f = res_f2f[-2:]
+
+                                    pts_n = cv2.convertPointsFromHomogeneous(pt3_h_f2f.T)
+                                    pts_n = np.squeeze(pts_n, axis=1)
+                                    pts_n *= s
+                                    pts_n_h = cv2.convertPointsToHomogeneous(pts_n)
+                                    pts_n_h = np.squeeze(pts_n_h, axis=1)
+
+                                    lm_pt3_n = np.linalg.multi_dot([
+                                        pts_n_h,
+                                        self.T_c2b_.T, # now base1 coordinates
+                                        self.T_b2o(pose1).T, # now base0 coordinates
+                                        self.T_b2c_.T # now cam0 coordinates
+                                    ])[:,:3]
+
+                                    print 'adding {} points'.format(len(lm_pt3_n))
+                                    msg += ('+p=%d ' % len(lm_pt3_n))
+
+                                    self.lm_pt2_ = np.concatenate(
+                                            [self.lm_pt2_, p1_n[msk_f2f][midx_f2f]], axis=0)
+                                    self.lm_pt3_ = np.concatenate(
+                                            [self.lm_pt3_, lm_pt3_n], axis=0)
+                                    self.lm_des_ = np.concatenate(
+                                            [self.lm_des_, des1[msk1][i1_f2f][msk_f2f][midx_f2f]])
+                            except Exception as e:
+                                print 'Adding Landmarks Failed : {}'.format(e)
             else:
                 # force landmarks re-initialization
                 print('Force Reinitialization')
-                self.lm_pt2_ = np.empty((0,2), dtype=np.float32)
+                self.tracking_ = False
 
-        if len(self.lm_pt2_) < reinit_thresh:
-
+        if (self.tracking_ is False) or len(self.lm_pt2_) < reinit_thresh:
+            self.tracking_ = True # TODO : figure out if tracking is really true
             print('re-initializing landmarks')
             # requires 3D landmarks initialization
 
@@ -529,8 +643,7 @@ class ClassicalVO(object):
                 # estimate scale from prior landmark matches
                 match_lm = self.match(self.lm_des_, des1[msk][midx])
                 print('prv landmarks match : {}'.format( len(match_lm) ))
-                if len(match_lm) > 10: 
-
+                if len(match_lm) >= 1: # TODO : adjust this parameter
                     i1, i2 = np.int32([(m.queryIdx, m.trainIdx) for m in match_lm]).T
                     # sufficient landmark matches are required to apply scale
 
@@ -596,16 +709,32 @@ class ClassicalVO(object):
         # compute cam2 pose
         res = cv2.solvePnPRansac(
             self.lm_pt3_, self.lm_pt2_, self.K_, self.dC_,
-            useExtrinsicGuess=False,
-            #useExtrinsicGuess=True,
-            #rvec = rvec0,
-            #tvec = tvec0,
+            #useExtrinsicGuess=False,
+            useExtrinsicGuess=True,
+            rvec = rvec0,
+            tvec = tvec0,
             iterationsCount=1000,
-            reprojectionError=2.0, # TODO : tune these params
-            confidence=0.9999
+            reprojectionError=10.0, # TODO : tune these params
+            confidence=0.9999,
+            #flags = cv2.SOLVEPNP_EPNP
+            flags = cv2.SOLVEPNP_DLS # << WORKS PRETTY WELL (SLOW?)
+            #flags = cv2.SOLVEPNP_AP3P
+            #flags = cv2.SOLVEPNP_ITERATIVE # << default
+            #flags = cv2.SOLVEPNP_P3P
+            #flags = cv2.SOLVEPNP_UPNP
             )
         dbg, rvec, tvec, inliers = res
-        print 'inliers : {}/{}'.format( len(inliers), len(self.lm_pt2_) )
+        print 'PnP inliers : {}/{}'.format( len(inliers), len(self.lm_pt2_) )
+        msg += 'pnp {}/{} '.format( len(inliers), len(self.lm_pt2_))
+
+        # apply PnP inliers and see how well that goes
+        inliers = inliers[:,0]
+        self.lm_pt3_ = self.lm_pt3_[inliers]
+        self.lm_pt2_ = self.lm_pt2_[inliers]
+        self.lm_des_ = self.lm_des_[inliers]
+
+        if len(inliers) < 50:
+            self.tracking_ = False
         # TODO : filter by inliers
 
         # T_c0c2 transforms points in camera origin coordinates
@@ -674,6 +803,6 @@ class ClassicalVO(object):
         #cv2.drawKeypoints(mim[:,320:], kpt2[i2][matchesMask], mim[:,320:], color=(0,0,255))
         print('---')
 
-        return True, (mim, base_h1, base_t1, pts2_rec, pts3)
+        return True, (mim, base_h1, base_t1, pts2_rec, pts3, msg)
 
         #print 'm', m

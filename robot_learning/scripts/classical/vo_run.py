@@ -38,7 +38,7 @@ class CVORunner(object):
         self.odom_ = odom
         self.scan_ = scan
 
-        self.fig_ = fig = plt.figure()
+        self.fig_ = fig = plt.figure()#figsize=(16,12), dpi=80)
         self.ax0_ = fig.add_subplot(3,2,1)
         self.ax2_ = fig.add_subplot(3,2,3, projection='3d')
         self.ax3_ = fig.add_subplot(3,2,5)
@@ -83,6 +83,7 @@ class CVORunner(object):
             pts2,
             scan_c,
             pts_r,
+            msg='title'
             ):
         # unroll
         i = self.index_
@@ -97,15 +98,17 @@ class CVORunner(object):
         vo    = self.vo_
         tx, ty, th = self.tx_, self.ty_, self.th_
 
-        rec_path = np.stack([tx,ty], axis=-1)
+        rec_path = np.stack([tx,ty,th], axis=-1)
 
         VoGUI.draw_img(ax0, aimg[..., ::-1])
+        ax0.set_title('Tracking Visualization')
         VoGUI.draw_top(ax1, rec_path, pts2, odom[:i+1], scan_c)
         #VoGUI.draw_top(ax1, rec_path, pts2, np.stack([tx,ty,th], axis=-1), scan_c)
         VoGUI.draw_3d(ax2, pts3)
         VoGUI.draw_2d_proj(ax3, imgs[i, ..., ::-1], pts_r)
 
         self.fig_.canvas.draw()
+        self.fig_.suptitle(msg)
 
     def step(self):
         i = self.index_
@@ -156,7 +159,7 @@ class CVORunner(object):
             # skip filter updates
             return
 
-        (aimg, vo_h, vo_t, pts_r, pts3) = res
+        (aimg, vo_h, vo_t, pts_r, pts3, msg) = res
         #dps = np.float32([dt[0], dt[1], dh])
         #print('dh', np.rad2deg(dh))
         #print('(pred-gt) {} vs {}'.format(dps, dps_gt) )
@@ -179,7 +182,7 @@ class CVORunner(object):
             scan_c = None
 
         ### EVERYTHING FROM HERE IS PLOTTING + VIZ ###
-        self.show(aimg, pts3, pts2, scan_c, pts_r)
+        self.show(aimg, pts3, pts2, scan_c, pts_r, ('[%d/%d] '%(i,n)) + msg)
 
     def quit(self):
         self.quit_ = True
@@ -194,6 +197,7 @@ class CVORunner(object):
                     self.index_ += 1
                     self.step()
                 plt.pause(0.001)
+                #plt.savefig('/tmp/{}.png'.format(self.index_))
         else:
             plt.show()
 
@@ -203,10 +207,12 @@ def main():
     print('idx', idx)
 
     # load data
-    i0 = 130
-    imgs   = np.load('../../data/train/{}/img.npy'.format(idx))[i0:]
-    stamps = np.load('../../data/train/{}/stamp.npy'.format(idx))[i0:]
-    odom   = np.load('../../data/train/{}/odom.npy'.format(idx))[i0:]
+    i0 = 0
+    di = 1
+
+    imgs   = np.load('../../data/train/{}/img.npy'.format(idx))[i0::di]
+    stamps = np.load('../../data/train/{}/stamp.npy'.format(idx))[i0::di]
+    odom   = np.load('../../data/train/{}/odom.npy'.format(idx))[i0::di]
     try:
         scan   = np.load('../../data/train/{}/scan.npy'.format(idx))
     except Exception as e:
