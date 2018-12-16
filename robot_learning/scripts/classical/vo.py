@@ -215,7 +215,7 @@ class ClassicalVO(object):
         pt2 = np.float32(pt2)
 
         # find fundamental matrix
-        Fmat, msk = cv2.findFundamentalMat(pt2, pt1,
+        Fmat, msk = cv2.findFundamentalMat(pt1, pt2,
                 method=method,
                 param1=0.1, param2=0.999) # TODO : expose these thresholds
         msk = np.asarray(msk[:,0]).astype(np.bool)
@@ -228,7 +228,7 @@ class ClassicalVO(object):
         # correct matches
         pt1 = pt1[None, ...] # add axis 0
         pt2 = pt2[None, ...]
-        pt2, pt1 = cv2.correctMatches(Fmat, pt2, pt1) # TODO : not sure if this is necessary
+        pt2, pt1 = cv2.correctMatches(Fmat, pt1, pt2) # TODO : not sure if this is necessary
         pt1 = pt1[0, ...] # remove axis 0
         pt2 = pt2[0, ...]
 
@@ -247,7 +247,7 @@ class ClassicalVO(object):
             return None
 
         # TODO : expose these thresholds
-        Emat, msk = cv2.findEssentialMat(pt2, pt1, Kmat,
+        Emat, msk = cv2.findEssentialMat(pt1, pt2, Kmat,
                 method=method, prob=0.999, threshold=0.1)
         msk = np.asarray(msk[:,0]).astype(np.bool)
 
@@ -257,10 +257,10 @@ class ClassicalVO(object):
         midx = midx[msk]
 
         n_in, R, t, msk, _ = cv2.recoverPose(Emat,
-                pt2,
                 pt1,
+                pt2,
                 cameraMatrix=Kmat,
-                distanceThresh=100.0) # TODO : or something like 10.0/s ??
+                distanceThresh=np.inf) # TODO : or something like 10.0/s ??
         msk = np.asarray(msk[:,0]).astype(np.bool)
 
         # filter points + bookkeeping mask
@@ -272,8 +272,20 @@ class ClassicalVO(object):
         pts_h = cv2.triangulatePoints(
                 Kmat.dot(np.eye(3,4)),
                 Kmat.dot(np.concatenate([R, t], axis=1)),
-                pt2[None,...],
-                pt1[None,...]).astype(np.float32)
+                pt1[None,...],
+                pt2[None,...]).astype(np.float32)
+
+        # PnP Validation
+        pts3 = (pts_h[:3] / pts_h[3:]).T
+        _, rvec, tvec, inliers = res = cv2.solvePnPRansac(
+                pts3, pt2, self.K2_, self.dC_,
+                useExtrinsicGuess=False,
+                iterationsCount=1000,
+                reprojectionError=2.0
+                )
+        print 'PnP Validation'
+        print tx.euler_from_matrix(R), t
+        print rvec, tvec
 
         # Apply NaN/Inf Check
         msk = np.all(np.isfinite(pts_h),axis=0)
@@ -289,6 +301,7 @@ class ClassicalVO(object):
         return pt_u
 
     def add_keyframe(self,
+            img1, img2,
             des1, des2,
             kpt1, kpt2
             ):
@@ -475,7 +488,9 @@ class ClassicalVO(object):
         else:
             # requires re-initialization of landmarks
             pp_res, lm_res = self.add_keyframe(
-                    des1, des2, kpt1, kpt2)
+                    img1, img2,
+                    des1, des2,
+                    kpt1, kpt2)
 
             # unroll results : w.r.t. current camera
             [R, t, midx, matches] = pp_res

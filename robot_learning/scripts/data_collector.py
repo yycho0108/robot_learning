@@ -38,7 +38,7 @@ class DataCollector(object):
     def __init__(self, start=True,
             use_tf=True, sync=True, slop=0.05,
             min_dr=0.01, min_dh=np.deg2rad(1.0),
-            collect_scan=True
+            collect_scan=False
             ):
         """
         Args:

@@ -17,7 +17,7 @@ try:
 except ImportError:
   from pathlib2 import Path  # python 2 backport
 
-from vo import ClassicalVO
+from vo2 import ClassicalVO
 from ukf import build_ukf
 from gui import VoGUI
 
@@ -101,8 +101,9 @@ class CVORunner(object):
 
         VoGUI.draw_img(ax0, aimg[..., ::-1])
         VoGUI.draw_top(ax1, rec_path, pts2, odom[:i+1], scan_c)
+        #VoGUI.draw_top(ax1, rec_path, pts2, np.stack([tx,ty,th], axis=-1), scan_c)
         VoGUI.draw_3d(ax2, pts3)
-        VoGUI.draw_2d_proj(ax3, imgs[i-1, ..., ::-1], pts_r)
+        VoGUI.draw_2d_proj(ax3, imgs[i, ..., ::-1], pts_r)
 
         self.fig_.canvas.draw()
 
@@ -130,9 +131,9 @@ class CVORunner(object):
         # TODO : there was a bug in data_collector that corrupted all time-stamp data!
         # disable stamps dt for datasets with corrupted timestamps.
         # very unfortunate.
-        #dt    = (stamps[i] - stamps[i-1])
-        dt = 0.2
-        print('dt', dt)
+        dt  = (stamps[i] - stamps[i-1])
+        #dt = 0.2
+        #print('dt', dt)
 
         # experimental : pass in scale as a parameter
         # TODO : estimate scale from points + camera height?
@@ -146,6 +147,7 @@ class CVORunner(object):
         ukf.predict(dt=dt)
         # TODO : currently passing 'ground-truth' position
         suc, res = vo(img, odom[i], s=s)
+        #suc, res = vo(img, ukf.x[:3].copy(), s=s)
         if not suc:
             print('Visual Odometry Aborted!')
             return
@@ -162,9 +164,12 @@ class CVORunner(object):
         pos = [vo_t[0], vo_t[1], vo_h]
         ukf.update(pos)
 
-        tx.append( float(ukf.x[0]) )
-        ty.append( float(ukf.x[1]) )
-        th.append( float(ukf.x[2]) )
+        #tx.append( float(ukf.x[0]) )
+        #ty.append( float(ukf.x[1]) )
+        #th.append( float(ukf.x[2]) )
+        tx.append( vo_t[0] )
+        ty.append( vo_t[1] )
+        th.append( vo_h    )
 
         pts2 = pts3[:,:2]
         self.map_ = np.concatenate([self.map_, pts2], axis=0)
@@ -182,6 +187,7 @@ class CVORunner(object):
     def run(self, auto=False):
         #self.gui_.run()
         self.fig_.canvas.mpl_connect('key_press_event', self.handle_key)
+        self.fig_.canvas.mpl_connect('close_event', sys.exit)
         if auto:
             while not self.quit_:
                 if self.index_ < self.n_:
@@ -193,16 +199,17 @@ class CVORunner(object):
 
 def main():
     #idx = np.random.choice(8)
+    #idx = 6
     #idx = 7
     #idx = 15
-    idx = 16
+    idx = 21
     print('idx', idx)
 
-
     # load data
-    imgs   = np.load('../../data/train/{}/img.npy'.format(idx))[1:]
-    stamps = np.load('../../data/train/{}/stamp.npy'.format(idx))[1:]
-    odom   = np.load('../../data/train/{}/odom.npy'.format(idx))[1:]
+    i0 = 1
+    imgs   = np.load('../../data/train/{}/img.npy'.format(idx))[i0:]
+    stamps = np.load('../../data/train/{}/stamp.npy'.format(idx))[i0:]
+    odom   = np.load('../../data/train/{}/odom.npy'.format(idx))[i0:]
     try:
         scan   = np.load('../../data/train/{}/scan.npy'.format(idx))
     except Exception as e:
