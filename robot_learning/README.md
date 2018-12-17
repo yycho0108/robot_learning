@@ -70,13 +70,48 @@ The persistent tracking of landmarks allow for scale tranfer from an old to new 
 
 |![cla_demo](figs/vo/classical_demo.gif)|
 |:---:|
-| Fig.x. Classical Optical Flow Demo |
+| Fig.x. Classical Visual Odometry Demo |
 
+In the animated demo, it is quite apparent that solving the PnP problem introduces errors in y-axis motion in case of rotation, which makes intuitively sense: if the detected landmarks are significantly and consistently far, then no relative displacement information will be available to estimate rotation.
+
+The performance of the algorithm was highly sensitive to the input data and the parameters, which will be discussed more in depth in the following section.
 
 #### Design Decisions
 
 - UKF Parameter Tuning
-- Opt Flow filtering / detecting failures
+
+In order to account for scenarios where the visaul odometry will abort due to insufficient number of features, the intermediate motion was smoothed and estimated through the Unscented Kalman Filter. The parameters have been determined in a somewhat arbitrary manner, where I just determined the scale based on qualitative observation of the VO algorithm itself, and how I wanted to scale between beliefs in motion versus the *"measurements"* that would be coming from the pipeline. Specifically:
+
+|Param|x|y|&theta;|vx|vy|&omega;|
+|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+|P0|1e-6|1e-6|1e-6|1e-1|1e-1|1e-1|
+|Q |1e-4|1e-4|1e-2|1e-1|1e-1|1e-1|
+|R |1e-1|1e-1|1e-1|-   |-   |-   |
+
+The relative scale and magnitude of these parameters represent the intuitive belief on the accuracy of the parameter.
+
+For instance, the initial velocity is not known well, so the covariance starts with a large value in the velocity fields.
+
+Similarly, it is expected that the vehicle may experience sudden change in its velocity during the course of its navigation;
+
+the large variance matrix for measurement (R) represents the fact that visual odometry had not been very accurate throughout the experiments.
+
+- Optical Flow filtering / detecting failures
+
+Currently, the optical flow in computed through the sparse Lukas-Kanade algorithm on the feature points.
+
+At "large" rotations that introduce large displacement in the image coordinates, the algorithm would fail on many of the correspondences.
+
+In the current pipeline, such failures are filtered through the minimum eigenvalue computed at the corners, although the validity of this is questionable.
+
+Moreover, the computed correspondences are likely to lie on approximately the same horizontal area, a constraint that is not reflected in the current algorithm.
+
+While no significant efforts have been undertaken to solve this problem, a simple heuristic, as mentioned above, proved to be sufficiently accurate for the time being --
+
+While it is unclear whether or not a higher quality optical flow estimates would improve the quality of visual odometry,
+
+it is anticipated that the RANSAC filtering process down the pipeline would be robust enough against such outliers in the correspondences.
+
 - Flann Tuning / Parameters
 - Corner Sub-Pixel Alignment
 - Landmark PnP Coordinate Frame - Oldest vs Newest
@@ -85,16 +120,50 @@ The persistent tracking of landmarks allow for scale tranfer from an old to new 
 - Frame-by-frame landmark registration
 - Using Extrinsic Guess for RANSAC from UKF
 - Choice of PnP Algorithm
+- Image Resolution
 
 TODO : fill
 
 #### Challenges and Next Steps
 
-- Feature Points Uniform Distribution
-- Groundplane scale estimation?
+Scale Estimation
+
+|![classical_scale](figs/vo/classical_with_scale.gif)|![classical_noscale_fail](figs/vo/classical_without_scale_fail.gif)|
+|:---:|:---:|
+|(a) Optical Flow Training Plot | (b) Optical Flow Sample Result|
+
+As anticipated, robust scale estimation and the drift across time turned out to be the most challenging portion of monocular VO.
+
+As seen on the above figure, the performance difference is dramatic when only the ground-truth scale information is supplied to the algorithm:
+
+The computed pose is a lot more robust, and the estimated landmark points are a lot more stable.
+
+(Note that the demo in the [results](#Results) section was taken without ground truth scale information, showcasing the algorithm may achieve moderate success in the case where landmark scale drift is not significant.)
+
+As such, some of the options that are considered next steps are:
+
+- Groundplane scale estimation
+    
+    This was not attempted in this development cycle, as neither the AC nor the Gazebo datasets produced rich feature points on the ground-image for robust and reliable tracking to serve as landmarks; however, it is entirely possible that this would be a compelling solution for general use-case scenarios.
+    
 - Parallax scale estimation
+
+    Relative z-directional distance of landmarks may be estimated with the use of vanishing points and parallax features, which may help rectify the landmarks scaling problem in a frame-to-frame manner.
+
+- Visual-Inertial Odometry
+
+    In order to parallel the conditions of the DL-approach, the algorithm did not take advantage of the onboard accelerometer, which may help mitigate the scale drift.
+
+Other next steps include the following improvements:
+
+- Feature Points Uniform Distribution
+
+    Currently, the feature points are concentrated in regions of "high interest" for the keypoint detector. However, the algorithm would certainly benefit from a smooth incremental change in the tracked feature-points, as well as a more uniform distribution of landmarks throughout the view image in order to enforce constraints on all axes. As such, it is desirable to employ some heuristic in order to have the feature points distribute throughout the image, rather than few regions of interest.
+     
 - Graph Optimization / Bundle Adjustment Steps
 
+    At some point, the robust and reliable pose estimation across time would require bundle adjustment -- simultaneously optimizing for the camera pose transforms and the landmark locations. The current strategy is simplistic in that the landmarks would be updated with the interpolated position across time, which is highly unstable, and no real effort has been done to incorporate the confidence estimates (represented either as the covariance matrix or the fisher information) of each tracked feature: whether it be the landmarks or the camera pose.
+    
 ### Deep-Learning
 
 The *deep-learning* algorithm was heavily inspired by the [DeepVo](https://arxiv.org/abs/1709.08429) paper, although no "working" implementation was available online as far as I was aware of. Many of the network hyper-parameters and the training configurations were modified to suit for the particular use-case: the images were heavily downsized, and the network made heavy use of Separable Convolution and Batch Normalization where appropriate, unlike the original architecture.

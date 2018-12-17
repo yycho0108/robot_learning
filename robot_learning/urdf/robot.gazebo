@@ -41,7 +41,7 @@
 			<publishWheelJointState>true</publishWheelJointState>
 			<wheelAcceleration>1.8</wheelAcceleration>
 			<wheelTorque>1000</wheelTorque>
-			<odometrySource>encoder</odometrySource>
+			<odometrySource>world</odometrySource>
 		</plugin>
 	</gazebo>
 

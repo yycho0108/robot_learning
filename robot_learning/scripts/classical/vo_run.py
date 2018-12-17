@@ -5,6 +5,7 @@ import sys
 import cv2
 from scipy.optimize import linear_sum_assignment
 from matplotlib import pyplot as plt
+from matplotlib import gridspec
 from mpl_toolkits.mplot3d import Axes3D
 
 from tf import transformations as tx
@@ -38,11 +39,14 @@ class CVORunner(object):
         self.odom_ = odom
         self.scan_ = scan
 
-        self.fig_ = fig = plt.figure()#figsize=(16,12), dpi=80)
-        self.ax0_ = fig.add_subplot(3,2,1)
-        self.ax2_ = fig.add_subplot(3,2,3, projection='3d')
-        self.ax3_ = fig.add_subplot(3,2,5)
-        self.ax1_ = fig.add_subplot(1,2,2)
+        self.fig_ = fig = plt.figure(figsize=(16,12), dpi=60)
+        gridspec.GridSpec(3,3)
+
+        self.ax0_ = fig.add_subplot(3,3,1)
+        self.ax2_ = fig.add_subplot(3,3,4, projection='3d')
+        self.ax3_ = fig.add_subplot(3,3,7)
+        self.ax1_ = plt.subplot2grid((3,3), (0,1), colspan=2, rowspan=2)
+        self.ax4_ = plt.subplot2grid((3,3), (2,1), colspan=2)
 
         self.map_ = np.empty((0, 2), dtype=np.float32)
         self.vo_ = ClassicalVO()
@@ -88,7 +92,8 @@ class CVORunner(object):
         # unroll
         i = self.index_
         n = self.n_
-        ax0,ax1,ax2,ax3 = self.ax0_, self.ax1_, self.ax2_, self.ax3_
+        ax0,ax1,ax2,ax3,ax4 = \
+            self.ax0_, self.ax1_, self.ax2_, self.ax3_, self.ax4_
 
         odom   = self.odom_
         scan   = self.scan_
@@ -106,6 +111,7 @@ class CVORunner(object):
         #VoGUI.draw_top(ax1, rec_path, pts2, np.stack([tx,ty,th], axis=-1), scan_c)
         VoGUI.draw_3d(ax2, pts3)
         VoGUI.draw_2d_proj(ax3, imgs[i, ..., ::-1], pts_r)
+        VoGUI.draw_err(ax4, rec_path, odom[:i])
 
         self.fig_.canvas.draw()
         self.fig_.suptitle(msg)
@@ -197,20 +203,21 @@ class CVORunner(object):
                     self.index_ += 1
                     self.step()
                 plt.pause(0.001)
-                #plt.savefig('/tmp/{}.png'.format(self.index_))
+                plt.savefig('/tmp/{:03d}.png'.format(self.index_))
         else:
             plt.show()
 
 def main():
     #idx = np.random.choice(8)
-    idx = 23
+    idx = 26
     print('idx', idx)
 
     # load data
-    i0 = 0
+    i0 = 100
     di = 1
 
     imgs   = np.load('../../data/train/{}/img.npy'.format(idx))[i0::di]
+    #imgs = np.asarray([cv2.resize(e, None, fx=2, fy=2) for e in imgs])
     stamps = np.load('../../data/train/{}/stamp.npy'.format(idx))[i0::di]
     odom   = np.load('../../data/train/{}/odom.npy'.format(idx))[i0::di]
     try:

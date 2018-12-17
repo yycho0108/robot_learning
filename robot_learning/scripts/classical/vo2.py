@@ -98,15 +98,18 @@ class ClassicalVO(object):
             499.114583 / 2.0, 0.000000, 325.589216 / 2.0,
             0.000000, 498.996093 / 2.0, 238.001597 / 2.0,
             0.000000, 0.000000, 1.000000], (3,3))
+        self.K_doub_ = self.K_full_ * [[2,1,2],[1,2,2],[1,1,1]]
+
         self.K_ = self.K_full_ # select K based on incoming data.
+
         # distortion coefficient
         self.dC_ = np.float32([0.158661, -0.249478, -0.000564, 0.000157, 0.000000])
 
         # base_link<->camera transforms cache
         # TODO : extract transforms from input or URDF
         self.T_c2b_ = tx.compose_matrix(
-                angles=[-np.pi/2,0.0,-np.pi/2],
-                translate=[0.15,0,0.1]) # camera frame to base_link frame
+                angles=[-np.pi/2 - np.deg2rad(30),0.0,-np.pi/2],
+                translate=[0.25,0,0.1]) # camera frame to base_link frame
         self.T_b2c_ = tx.inverse_matrix(self.T_c2b_) # base_link frame to camera frame
 
     def track(self, img1, img2, pt1, pt2=None):
@@ -242,6 +245,32 @@ class ClassicalVO(object):
         kp = np.array(kp)
         des = np.float32(des)
         return [kp, des]
+    
+    def estimate_initial_flow(self,
+            pt1_in, pt2_in, des1, des2):
+        pt2 = np.empty_like(pt1_in,
+                dtype=np.float32)
+
+        match = self.match(des1, des2)
+        i1, i2 = np.int32([
+            (m.queryIdx, m.trainIdx)
+            for m in match]).T
+
+        msk = np.zeros(len(pt1_in), dtype=np.bool)
+        msk[i1] = True
+
+        # average displacement
+        delta = pt2_in[i2] - pt1_in[i1]
+        delta = np.mean(delta, axis=0, keepdims=True)
+
+        # initialize flow from matches
+        pt2[i1] = pt2_in[i2]
+
+        # initialize flow from detected flow average
+        pt2[~msk] = pt1_in[~msk] + delta
+
+        return pt2
+
 
     def getPoseAndPoints(self, pt1, pt2, midx, method):
         # == 0 :  unroll parameters ==
@@ -455,7 +484,12 @@ class ClassicalVO(object):
             # has sufficient # of landmarks to track
             # TODO : configure number of required landmark points
             pt1 = self.lm_pt2_ # use most recent tracking points
-            pt2, msk = self.track(img1, img2, pt1)
+
+            pt2_0 = self.estimate_initial_flow(
+                    pt1, cv2.KeyPoint_convert(kpt2),
+                    self.lm_des_, des2)
+
+            pt2, msk = self.track(img1, img2, pt1, pt2=pt2_0)
 
             track_ratio = float(msk.sum()) / msk.size
             print 'track status : {}%'.format(track_ratio * 100)
@@ -501,8 +535,13 @@ class ClassicalVO(object):
                     ss = d_prv / d_cur
                     #print('scale estimates : {}'.format(ss))
                     print('input scale : {}'.format(s))
-                    s = np.median(ss)
+                    s2 = np.median(ss)
                     print('computed scale : {}'.format(s))
+
+                    msg += 'scale : {:.2f}% | '.format(s2/s * 100)
+
+                    # update s with computed scale
+                    s = s2
                     cur *= s
 
                     cur_h = cv2.convertPointsToHomogeneous(cur)
@@ -547,7 +586,6 @@ class ClassicalVO(object):
                         msk1[(d < 20.0)[:,0]] = False
 
                         if msk1.sum() > 10:
-
                             #p1_n = cv2.KeyPoint.convert(kpt1[msk1])
                             #p2_n, msk_f2f = self.track(img1, img2, p1_n)
                             match_f2f = self.match(des1[msk1], des2)
@@ -606,6 +644,9 @@ class ClassicalVO(object):
 
             # extract points from keypoints
             pt1 = cv2.KeyPoint.convert(kpt1)
+            pt2_0 = self.estimate_initial_flow(
+                    pt1, cv2.KeyPoint.convert(kpt2),
+                    des1, des2)
             #pt2 = cv2.KeyPoint.convert(kpt2)
 
             # requires track landmarks initialization
@@ -709,10 +750,10 @@ class ClassicalVO(object):
         # compute cam2 pose
         res = cv2.solvePnPRansac(
             self.lm_pt3_, self.lm_pt2_, self.K_, self.dC_,
-            #useExtrinsicGuess=False,
-            useExtrinsicGuess=True,
-            rvec = rvec0,
-            tvec = tvec0,
+            useExtrinsicGuess=False,
+            #useExtrinsicGuess=True,
+            #rvec = rvec0,
+            #tvec = tvec0,
             iterationsCount=1000,
             reprojectionError=10.0, # TODO : tune these params
             confidence=0.9999,

@@ -104,6 +104,25 @@ class VoGUI(object):
         ax.imshow(img)
         ax.axis('off')
 
+    @staticmethod
+    def draw_err(ax, x, y):
+        ax.cla()
+
+        d = y - x 
+        # normalize angle component
+        d[:,2] = (d[:,2] + np.pi) % (2*np.pi) - np.pi
+
+        # use abs val as error
+        d = np.abs(d)
+
+        ax.plot(d[:,0], label='dx')
+        ax.plot(d[:,1], label='dy')
+        ax.plot(d[:,2], label='dh')
+        ax.legend()
+        ax.grid()
+        ax.set_axisbelow(True)
+        ax.set_title('VO Error')
+
     def handle_key(self, event):
         k = event.key
         if k in ['n', ' ', 'enter']:
