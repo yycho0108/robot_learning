@@ -148,7 +148,7 @@ Scale Estimation
 
 |![classical_scale](figs/vo/classical_with_scale.gif)|![classical_noscale_fail](figs/vo/classical_without_scale_fail.gif)|
 |:---:|:---:|
-|(a) Optical Flow Training Plot | (b) Optical Flow Sample Result|
+|(a) Visual Odometry With Scale Input | (b) Visual Odometry Failure Without Scale Input |
 
 As anticipated, robust scale estimation and the drift across time turned out to be the most challenging portion of monocular VO.
 
