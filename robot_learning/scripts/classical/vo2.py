@@ -54,35 +54,36 @@ class ClassicalVO(object):
         self.lm_des_ = None # landmark descriptors
 
         # build detector + descriptor
-        #self.det_ = cv2.GFTTDetector.create(
-        #        maxCorners=4096,
-        #        qualityLevel=0.01,
-        #        minDistance=1.0,
-        #        blockSize=3,
-        #        #useHarrisDetector=True,
-        #        #k=0.04
-        #        ) # keypoints detector
-        #self.des_ = cv2.BRISK_create() # descriptor
-        orb = cv2.ORB_create(
-                nfeatures=8192,
-                #scaleFactor=1.1,
-                #edgeThreshold=15,
-                #patchSize=15,
-                #WTA_K=4, # does WTA_K matter much?
-                )
-        self.det_ = orb
-        self.des_ = orb
+        self.det_ = cv2.GFTTDetector.create(
+                maxCorners=4096,
+                qualityLevel=0.01,
+                minDistance=1.0,
+                blockSize=3,
+                #useHarrisDetector=True,
+                #k=0.04
+                ) # keypoints detector
+        self.des_ = cv2.BRISK_create() # descriptor
+
+        #orb = cv2.ORB_create(
+        #        nfeatures=8192,
+        #        #scaleFactor=1.1,
+        #        #edgeThreshold=15,
+        #        #patchSize=15,
+        #        #WTA_K=4, # does WTA_K matter much?
+        #        )
+        #self.det_ = orb
+        #self.des_ = orb
 
         # build flann matcher
         FLANN_INDEX_KDTREE = 0
         FLANN_INDEX_LSH = 6
-        #index_params = dict(
-        #        algorithm = FLANN_INDEX_KDTREE,
-        #        trees = 5)
-        index_params= dict(algorithm = FLANN_INDEX_LSH,
-                   table_number = 6, # 12
-                   key_size = 12,     # 20
-                   multi_probe_level = 1) #2
+        index_params = dict(
+                algorithm = FLANN_INDEX_KDTREE,
+                trees = 5)
+        #index_params= dict(algorithm = FLANN_INDEX_LSH,
+        #           table_number = 6, # 12
+        #           key_size = 12,     # 20
+        #           multi_probe_level = 1) #2
         search_params = dict(checks=50)   # or pass empty dictionary
         flann = cv2.FlannBasedMatcher(index_params,search_params)
         self.flann_ = flann
@@ -197,9 +198,14 @@ class ClassicalVO(object):
                 continue
             (m,n) = e
             # TODO : set threshold for lowe's filter
-            if (m.distance < lowe_ratio*n.distance) and \
-                    m.distance < thresh: # TODO : default distance only valid for ORB
-                good.append(m)
+            if (m.distance < lowe_ratio*n.distance):
+                if isinstance(self.des_, cv2.ORB):
+                    if m.distance < thresh:
+                        # default distance only valid for ORB
+                        good.append(m)
+                else:
+                    good.append(m)
+
         good = np.asarray(good, dtype=cv2.DMatch)
 
         return good
@@ -536,7 +542,7 @@ class ClassicalVO(object):
                     #print('scale estimates : {}'.format(ss))
                     print('input scale : {}'.format(s))
                     s2 = np.median(ss)
-                    print('computed scale : {}'.format(s))
+                    print('computed scale : {}'.format(s2))
 
                     msg += 'scale : {:.2f}% | '.format(s2/s * 100)
 
@@ -750,17 +756,17 @@ class ClassicalVO(object):
         # compute cam2 pose
         res = cv2.solvePnPRansac(
             self.lm_pt3_, self.lm_pt2_, self.K_, self.dC_,
-            useExtrinsicGuess=False,
-            #useExtrinsicGuess=True,
-            #rvec = rvec0,
-            #tvec = tvec0,
+            #useExtrinsicGuess=False,
+            useExtrinsicGuess=True,
+            rvec = rvec0,
+            tvec = tvec0,
             iterationsCount=1000,
             reprojectionError=10.0, # TODO : tune these params
             confidence=0.9999,
             #flags = cv2.SOLVEPNP_EPNP
-            flags = cv2.SOLVEPNP_DLS # << WORKS PRETTY WELL (SLOW?)
+            #flags = cv2.SOLVEPNP_DLS # << WORKS PRETTY WELL (SLOW?)
             #flags = cv2.SOLVEPNP_AP3P
-            #flags = cv2.SOLVEPNP_ITERATIVE # << default
+            flags = cv2.SOLVEPNP_ITERATIVE # << default
             #flags = cv2.SOLVEPNP_P3P
             #flags = cv2.SOLVEPNP_UPNP
             )
