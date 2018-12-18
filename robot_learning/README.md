@@ -2,21 +2,15 @@
 
 Yoonyoung (Jamie) Cho | CompRobo FA2018 @ Olin College
 
-## Guidelines
-
-How did you solve the problem?  You should touch on the data you used, the algorithms you applied, etc.  If you implemented your own version of an algorithm as a step in your learning process, make sure to explain what you did for that part of the project as well.
-Describe a design decision you had to make when working on your project and what you ultimately did (and why)? These design decisions could be particular choices for how you implemented some part of an algorithm or perhaps a decision regarding which of two external packages to use in your project.
-What if any challenges did you face along the way?
-What would you do to improve your project if you had more time?
-Did you learn any interesting lessons for future robotic programming projects? These could relate to working on robotics projects in teams, working on more open-ended (and longer term) problems, or any other relevant topic.
-
 ## Introduction
 
-In the *Robot Learning* Project, my objective was to implement *monocular visual odometry*.
+This project was a part of *Robot Learning* phase of *ENGR3950: A Computational Introduction to Robotics* at Olin College.
+
+Accordingly, my objective here was to implement *monocular visual odometry*.
 
 In traditional computer vision approaches, monocular visual odometry is considered a difficult problem: among the number of challenges, the lack of scale information renders the problem inherently under-constrained. Many authors have tackled this problem through approaches such as parallax-based scale estimation, ground-plane estimation with fixed camera heights, and more. Often, the problem will be worked around through employing additional sensors such as an IMU for visual-inertial odometry, or adding another camera to achieve stereo vision.
 
-With the recent advances in deep learning, approaches such as [DeepVo]() has demonstrated compelling performance on monocular visual odometry; in this exploration, I sought to evaluate both modern and classical approaches to familiarize myself with the algorithms, as well as the challenges along the way.
+With the recent advances in deep learning, approaches such as [DeepVo](https://arxiv.org/abs/1709.08429) has demonstrated compelling performance on monocular visual odometry; in this exploration, I sought to evaluate both modern and classical approaches to familiarize myself with the algorithms, as well as the challenges along the way.
 
 ## Data
 
@@ -113,30 +107,39 @@ While it is unclear whether or not a higher quality optical flow estimates would
 it is anticipated that the RANSAC filtering process down the pipeline would be robust enough against such outliers in the correspondences.
 
 - Descriptor Match Tuning / Parameters
+
     The current implementation utilizes the [Flann](https://www.cs.ubc.ca/research/flann/) matcher implements a nearest-neighbor based search, and the resultant matches are afterwards filtered with the distance-based metric, as well as the canonical Lowe's ratio test with distance comparison with the second-best-match to identify matches of high likelihood of correspondence (unique). Whereas many of the parameters have been following the general suggested parameters, this is definitely subject to exploration (especially for the distance threshold).
     
 - Corner Sub-Pixel Alignment
+
     At Early stage of the development, the reconstructed landmarks exhibited strange behavior where the depth of each point in the point-cloud would appear to be discrete. One hypothesis on this was that the feature points were detected at a pixel-point resolution, which would give a fixed, discrete increments for disparity across correlation. As such, one experiment that was implemented was to adjust the detected corner features such that it would be closer to the "true" corner location, allowing for sub-pixel accuracy for where the pixel might be.
     
 - Landmark PnP Coordinate Frame - Oldest vs Newest
+
     At the beginning of the pipeline, where frame-by-frame matching was implemented, the landmarks and the motion vector were always computed with respected to the projection matrix of the penultimate observation. This had the benefit of filtering out erroneous y-directional translation that often gets introduced as a result of incorrect regression for the transformations (with the no-slip assumption), but had the landmarks' positions dynamically changing throughout the course of the run. As this may have introduced significant instabilities with accumulating pose error, the architecture was altered to compute landmark positions from the origin coordinates instead.
     
 - Re-initialization thresholds
+
     This is still very much experimental, and highly dependent on the operating environment. In the current pipeline, the only mechanism by which the current tracking status is evaluated is by observing the number of keypoints (landmarks) that are currently being tracked by the pipeline. At this stage, the complete re-initialization threshold is set to be 100 landmark points, which builds soem stability around the scale estimation drift over time with the persistent tracking scheme as described previously; however, too frequent of initialization completely corrupts the scale/motion information, which is an area of concern.
     
 - Landmark incremental updates and smoothing
+
     As the first introduction of the landmarks in the scene may be subject to incorrect triangulation or inaccurate estimate of pose at the particular frame, one simple strategy that was employed was to re-detect such landmarks and smooth their position over time, while also adding new landmarks dynamically. This drastically reduced the catastrophical failures of the algorithm, while the quality of the output did not exactly improve significantly.
     
 - Frame-by-frame landmark registration
+
     The current scheme compares the landmarks in a largely frame-to-map manner; the algorithm may perform better if correspondences across local neighboring frames are also established, but this is just a speculation at this point.
     
 - Using Extrinsic Guess for RANSAC from UKF
+
     The extrapolated UKF estimates at the current position is used as the seed for the RANSAC PnP Solution; it is unclear whether or not this increases the quality of the algorithm. Based on qualitative observation, this is not the case, but it may potentially benefit from this extra information in general: at least in terms of avoiding drastic outliers.
     
 - Choice of PnP Algorithm
+
     There exist a wide range of particular flavors of the PnP algorithm used in the OpenCV Implementation; some options are *EPNP, DLS, AP3P, ITERATIVE, P3P, UPNP*. Not all of these parameters have been evaluated, but the current algorithm of choice is DLS.
     
 - Image Resolution
+
     Higher image resolution allows for better triangulation information with what would otherwise be sub-pixel level information, at the cost of longer processing time; this is an area that was not explored to too much detail, but as the pipeline begins to consider optimization, this is definitely an area to look into.
 
 #### Challenges and Next Steps
@@ -201,39 +204,50 @@ As for the optical-flow network, the net started with the identical CNN layer wh
 #### Design Decisions
 
 - Two-dimensional space constraint
+
     While a real ground-rover may have full 6DoF pose specification in order to account for possible pitch and roll variations, as well as non-euclidean global surface geometry, I enforced a heavy two-dimensional constraint where the robot's pose was a 3DoF representation (x,y,heading). This was partly to reduce the complexity of the algorithm, and partly to reduce the possible state-space for the algorithm to explore. It certainly worked around rotation-vector encodings and other potential instabilities in the algorithm.
     
 - Downsize
+
     The network as a whole operated on a smaller image size than the reported paper; while this decision may have impacted the performance negatively, I believed (and still do) that for such an aggressively reduced problem, the network did not have to be large. Indeed, I saw significant overfitting behavior on the algorithm, meaning that the network could sufficiently encode the relationships, and had to incorporate a fair amount of regularization schemes to avoid the issue.
     
 - Separable Convolution
     Partly as an effort to improve the speed and memory bandwidth of the network, all convolutional layers have been replaced with separable convolution.
     
 - Batch Norm
+
     Similarly, a very standard approach on training networks reliably is to incorporate batch normalization to satisfy the general zero-mean unit-variance input assumption for the network. The caution here is not to apply batch normalization on the output layers, which are required to always be zero-bias.
 
 - Dropout
+
     This was a very standard way to reduce events of overfitting; on a high level, only a subset of the features are utilized to compute the final inference result, which builds in some degree of redundancy and independence across different features.
     
 - L2 Regularization
+
     This was also a very standard way to reduce events of overfitting, by constraining the "complexity" of the weights to remain within a certain practical domain by penalizing the scale of the weights.
     
 - Up-Convolution
+
     This was for the optical flow network. Part of the decision for implementing up-convolution stemmed from the fact that there exist no implementation of separable, transposed convolution in Tensorflow yet. For performance consideration, it was desirable to use the up-convolution scheme, where the previous layer is up-sampled and a standard convolution is applied henceforth. This also reduced the strided artifacts commonly seen (and were indeed seen) in the final flow image.
 
 - Dynamic weight decay for multi-objective networks
+
     This was a somewhat exploratory approach to balance the target function throughout the training duration for multi-objective networks; in particular, the network would compute the flow fields at each pyramidal representation, and the initial network would solve the *"easier"* problem of determining the mean flow vector across a larger receptive field. Later, the metric that are actually of interest to the final representation (such as the full-scale flow field inference) would come to a higher priority through dynamically adjusting the relative weights. While the first implementation of this improved the results somewhat, there was not much variability within the parameters within the scaling scheme.
     
 - Cyclic Learning Rate Decay
+
     This was a very exploratory approach to adjust the learning rate in a *cyclic* manner (i.e. a clamped decaying sinusoid), such that the learning rate would be slowly shifted up and down across the training duration. The idea was that this would potentially help between resolving the requirements for exploration (to not to settle for local minima) and optimization to a "narrow" and unforgiving minima. Unfortunately, no significant improvement was observed after implementing the scheme.
     
 - Learning Initial "Ramp"
+
     The original FlowNet paper also implemented this strategy to combat instabilities for their FlowNet-C architecture; accordingly, the learning rate would actually start at a much smaller value than the typical initial learning rate would be, then gradually ramp up to the desired learning rate to prevent exploding network gradients in the first few training iterations.
     
 - VO SE2 Weight Scaling
+
     Each of the 3DoF pose (x,y,heading) produce errors, and the weight scaling must be applied accordingly such that no one error dominates over others. In order to achieve this, a metric similar to mahalanobis-distance was implemented, where an estimate of the standard deviation of the dataset were used as the inverse scaling factor for the respective computed errors.
     
 - Freezing vs fine-tuning pre-trained weights
+
     At this point, it is unclear whether or not freezing the pre-trained weights or propagating gradients to the earlier layers at any point in the dual transfer-learning scheme in the current network architecture would improve the performance; no experiments have shown conclusive results on dramatic improvements as a result of either strategy.
     
 #### Challenges and Next Steps
