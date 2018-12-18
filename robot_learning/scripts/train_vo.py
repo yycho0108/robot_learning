@@ -20,6 +20,10 @@ import signal
 from tensorflow.python import debug as tf_debug
 
 class StopRequest(object):
+    """
+    Thin wrapper around custom handling for SIGINT.
+    Also duplicated in train_fn.py (TODO(yoonyoungcho): move to tf_utils)
+    """
     def __init__(self):
         self._start = False
         self._stop = False
@@ -32,6 +36,14 @@ class StopRequest(object):
             sys.exit(0)
 
 def main():
+    """
+    Primary training routine;
+    currently, the dynamic parameters apart from the configuration include:
+        restore_ckpt : the file path of the checkpoint from which to restore the model weights
+        fn_ckpt : Flownet-specific checkpoint file, same as above
+        kt_ckpt : KITTI-specific checkpoitn file, same as above
+        is_training : essentially, the flag to enable batch normalization updates.
+    """
     sig = StopRequest()
     # restore/train flags
     # checkpoint file to restore from

@@ -170,6 +170,7 @@ class VOAug(object):
 batch_augment = VOAug()
 
 class VoShow(object):
+    """ Modular Visual Odometry GUI """
     def __init__(self, data, as_path=True):
         self.data_ = data
         self.as_path_ = as_path

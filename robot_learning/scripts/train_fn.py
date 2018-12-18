@@ -20,6 +20,9 @@ import sys
 import signal
 
 class StopRequest(object):
+    """
+    Thin wrapper around custom handling for SIGINT.
+    """
     def __init__(self):
         self._start = False
         self._stop = False
@@ -34,6 +37,10 @@ class StopRequest(object):
 def load_data(
         data_root,
         sample_ratio=0.35):
+    """
+    (Deprecated due to large memory footprint)
+    Load Image from ILSVRC Indexing Cache.
+    """
     data_img1 = []
     data_img2 = []
     data_pred = []
@@ -60,9 +67,14 @@ def load_data(
     print(np.shape(data_pred))
     return data_img1, data_img2, data_pred, dlen
 
-
-
 def main():
+    """
+    Primary training routine;
+    currently, the dynamic parameters apart from the configuration include:
+        restore_ckpt : the file path of the checkpoint from which to restore the model weights
+        is_training : essentially, the flag to enable batch normalization updates.
+        aug : flag to enable data augmentation in the input data.
+    """
     sig = StopRequest()
 
     # restore/train flags

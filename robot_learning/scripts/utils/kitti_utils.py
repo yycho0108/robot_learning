@@ -7,6 +7,10 @@ from utils import anorm, mkdir
 import time
 
 class KittiLoader(object):
+    """
+    Load data from KITTI Visual Odometry dataset.
+    Also customizes the built cache, according to specification.
+    """
     def __init__(self, root, mode='train',
             from_dump=True,
             as_path=False

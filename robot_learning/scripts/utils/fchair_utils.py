@@ -8,12 +8,14 @@ from matplotlib import pyplot as plt
 from utils import proc_img
 
 def load_flo(f):
+    """ read .flo file to numpy """
     header = f.read(4) # == 'PIEH'
     w, h = [np.fromfile(f, np.int32, 1).squeeze() for _ in range(2)]
     flow = np.fromfile(f, np.float32, w*h*2).reshape( (h,w,2) )
     return flow
 
 def load_chair1(data_root, index, size=None):
+    """ single (img1,img2,flow) data from the chair directory """
     fname = os.path.join(data_root, ('%05d_flow.flo' % index))
     with open(fname, 'rb') as f:
         flow = load_flo(f)
@@ -33,12 +35,15 @@ def load_chair1(data_root, index, size=None):
     return (img1, img2, flow)
 
 def load_chair(data_root, n, size=None):
+    """ N (img1,img2,flow) data from the chair directory """
     idx = 1 + np.random.choice(22872, size=n, replace=False)
     data = zip(*[load_chair1(data_root, i, size=size) for i in idx])
     img1, img2, flow = [np.stack(e, axis=0) for e in data]
     return (img1, img2, flow)
 
 def load_ilsvrc1(data_root, index, size=None):
+    """ single (img1,img2,flow) data from the ilsvrc directory, same signature as load_chair1 """
+    fname = os.path.join(data_root, ('%05d_flow.flo' % index))
     img1 = np.load(os.path.join(data_root, '%05d_img1.npy' % index))[...,::-1]
     if size is not None:
         img1 = cv2.resize(img1, size)
@@ -56,6 +61,7 @@ def load_ilsvrc1(data_root, index, size=None):
     return (img1, img2, flow)
 
 def load_ilsvrc(data_root, n, size=None):
+    """ N (img1,img2,flow) data from the ilsvrc directory, same signature as load_chair """
     idx = np.random.choice(22732, size=n, replace=False)
     data = zip(*[load_ilsvrc1(data_root, i, size=size) for i in idx])
     img1, img2, flow = [np.stack(e, axis=0) for e in data]

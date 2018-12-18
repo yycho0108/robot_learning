@@ -7,7 +7,12 @@ from collections import defaultdict
 from vid_utils import VIDLoaderBase
 from matplotlib import pyplot as plt
 
+"""
+Most of the below code is deprecated.
+"""
+
 def rint(x):
+    """ rounded integer from input """
     return np.int32(np.round(x))
 
 def get(ann, tag):

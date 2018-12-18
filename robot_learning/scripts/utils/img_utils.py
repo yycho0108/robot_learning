@@ -10,6 +10,11 @@ from opt_utils import flow_to_image, apply_opt, FlowShow
 from fchair_utils import load_chair, load_ilsvrc
 
 def augment_image_affine_1(img, opt, size=None):
+    """
+    apply appropriate transforms to image and flow image
+    based on affine and color-space transformations.
+    """
+
     # size formatted (h,w,c)
 
     with tf.name_scope('augment_image_affine_single', [img, opt]):

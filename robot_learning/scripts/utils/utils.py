@@ -9,24 +9,29 @@ except ImportError:
   from pathlib2 import Path  # python 2 backport
 
 def anorm(x):
+    """ angular value, converted to (-np.pi, np.pi) range """
     return (x + np.pi) % (2*np.pi) - np.pi
 
 def no_op(*args, **kwargs):
     return
 
 def mkdir(x):
+    """ convenient mkdir wrapper"""
     return Path(x).mkdir(parents=True, exist_ok=True)
 
 def proc_img(x):
+    """ normalize image simply"""
     return (np.float32(x) / 128.) - 1.0
     #return np.float32(x) / 255. - 0.5
     #return (np.float32(x) - 128.) / 64.
 
 def proc_img_tf(x):
+    """ normalize image simply (tensorflow) """
     return (tf.cast(x,tf.float32)/128.) - 1.0
     #return (tf.cast(x,tf.float32) - 128.) / 64.
 
 def normalize(x, mn=0.0, mx=1.0):
+    """ normalize input to [mn=0,mx=1] range """
     xmn = np.min(x)
     xmx = np.max(x)
     return (x-xmn)*((mx-mn)/(xmx-xmn)) + mn

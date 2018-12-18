@@ -1,3 +1,7 @@
+"""
+The primary purpose of this file is to generate the optical flow dataset from a pre-trained FlowNet.
+Used for converting the ILSVRC Detection-From-Video dataset into an optical-flow dataset.
+"""
 import numpy as np
 from scipy.misc import imread
 import cv2
