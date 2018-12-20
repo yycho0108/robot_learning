@@ -149,7 +149,6 @@ class Conversions(object):
         # TODO : support arbitrary matchers or something
         # currently only supports wrapper around FLANN
         match = self.match_(des1, des2) # cv2.DMatch
-        i1, i2 = np.int32([(m.queryIdx, m.trainIdx) for m in match]).T
 
         ## apply lowe + distance filter
         good = []
@@ -188,7 +187,7 @@ class Conversions(object):
 class ClassicalVO(object):
     def __init__(self):
         # define constant parameters
-        Ks = (1.0 / 2.0)
+        Ks = (1.0 / 1.0)
         self.K_ = np.reshape([
             499.114583 * Ks, 0.000000, 325.589216 * Ks,
             0.000000, 498.996093 * Ks, 238.001597 * Ks,
@@ -255,8 +254,21 @@ class ClassicalVO(object):
 
         # frame-to-frame processing
         pt2_p = self.cvt_.kpt_to_pt(kpt_p)
+
+        # == obtain next-frame keypoints ==
+        # opt1 : points by track
         pt2_c, msk_t = self.track(img_p, img_c, pt2_p)
-        print 'mean delta', np.mean(pt2_c - pt2_p, axis=0) # -14 px
+
+        # opt2 : points by match
+        # i1, i2 = self.cvt_.des_des_to_match(des_p, des_c)
+        # msk_t = np.zeros(len(pt2_p), dtype=np.bool)
+        # msk_t[i1] = True
+        # pt2_c = np.zeros_like(pt2_p)
+        # pt2_c[i1] = self.cvt_.kpt_to_pt(kpt_c[i2])
+        # =================================
+
+
+        #print 'mean delta', np.mean(pt2_c - pt2_p, axis=0) # -14 px
 
         track_ratio = float(msk_t.sum()) / msk_t.size # logging/status
         print('track : {}/{}'.format(msk_t.sum(), msk_t.size))
@@ -267,17 +279,18 @@ class ClassicalVO(object):
         E, msk_e = cv2.findEssentialMat(pt2_u_c, pt2_u_p, self.K_,
                 **self.pEM_)
         msk_e = msk_e[:,0].astype(np.bool)
+        #print('em : {}/{}'.format(msk_e.sum(), msk_e.size))
 
         n_in, R, t, msk_r, _ = recover_pose(E, self.K_,
                 pt2_u_c[msk_e], pt2_u_p[msk_e], log=False)
-
-        print 'Rpart'
-        print np.round(np.rad2deg(tx.euler_from_matrix(R)), 3)
-        print 'Tpart'
-        print np.round( t.ravel() , 3)
+        #print( 'mr : {}/{}'.format(msk_r.sum(), msk_r.size))
 
         msk = np.zeros(len(pt2_p), dtype=np.bool)
-        msk[msk_t][msk_e][msk_r] = True
+        midx = np.where(msk_t)[0][
+                np.where(msk_e)[0]][
+                        np.where(msk_r)[0]]
+        msk[midx] = True
+        #print('final msk : {}/{}'.format(msk.sum(), msk.size))
 
         mim = drawMatches(img_p, img_c, pt2_p, pt2_c, msk)
 
@@ -285,13 +298,17 @@ class ClassicalVO(object):
         x, y, h = pose_p
 
         dh = -tx.euler_from_matrix(R)[1]
-        dx = s * np.float32([ np.abs(t[2]), 0*-t[1] ])
+        #dx = s * np.float32([ np.abs(t[2]), 0*-t[1] ])
+        dx = s * np.float32([ t[2], -t[1] ])
 
         c, s = np.cos(h), np.sin(h)
         R2_p = np.reshape([c,-s,s,c], [2,2]) # [2,2,N]
-        dp = R2_p.dot(dx)
+        dp = R2_p.dot(dx).ravel()
 
-        x_c = x + dp
+        x_c = [x+dp[0],y+dp[1]]
         h_c = (h + dh + np.pi) % (2*np.pi) - np.pi
+
+        # TODO : return correct values for reconstructed 3d points in map frame
+        # as well as reprojected 2d points based on such landmarks.
 
         return True, (mim, h_c, x_c, pt2_p, np.empty((0,3)), '')
