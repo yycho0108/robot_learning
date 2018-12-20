@@ -1,8 +1,10 @@
-from collections import namedtuple
+from collections import namedtuple, deque
 from filterpy.kalman import InformationFilter
 from tf import transformations as tx
 import cv2
 import numpy as np
+
+from vo_common import recover_pose, drawMatches
 
 class Landmark(object):
     def __init__(self,
@@ -33,13 +35,14 @@ class Conversions(object):
         self.K_ = K
         self.D_ = D
 
-        orb = cv2.ORB_create(
-                nfeatures=8192
-                )
-        if det is None:
+        if (det is None) and (des is None):
+            # default detector+descriptor=orb
+            orb = cv2.ORB_create(
+                    nfeatures=2048
+                    )
             det = orb
-        if des is None:
             des = orb
+
         self.det_ = det
         self.des_ = des
         # NOTE : des must be assigned prior to
@@ -49,7 +52,6 @@ class Conversions(object):
             self.match_ = match
 
     def _build_matcher(self):
-
         # define un-exported enums from OpenCV
         FLANN_INDEX_KDTREE = 0
         FLANN_INDEX_LSH = 6
@@ -78,12 +80,12 @@ class Conversions(object):
         return fn
 
     @staticmethod
-    def kpt_to_pt(self, kpt):
+    def kpt_to_pt(kpt):
         # k->p
         return cv2.KeyPoint.convert(kpt)
 
     @staticmethod
-    def pt_to_kpt(self, pt):
+    def pt_to_kpt(pt):
         # p->k
         raise NotImplementedError("Point To Keypoint not supported")
 
@@ -183,16 +185,18 @@ class Conversions(object):
     def __call__(self, ftype, *a, **k):
         return self.f_[ftype](*a, **k)
 
-class VO(object):
+class ClassicalVO(object):
     def __init__(self):
         # define constant parameters
+        Ks = (1.0 / 2.0)
         self.K_ = np.reshape([
-            499.114583 / 2.0, 0.000000, 325.589216 / 2.0,
-            0.000000, 498.996093 / 2.0, 238.001597 / 2.0,
+            499.114583 * Ks, 0.000000, 325.589216 * Ks,
+            0.000000, 498.996093 * Ks, 238.001597 * Ks,
             0.000000, 0.000000, 1.000000], (3,3))
         self.D_ = np.float32([0.158661, -0.249478, -0.000564, 0.000157, 0.000000])
 
         # define "system" parameters
+        self.pEM_ = dict(method=cv2.FM_RANSAC, prob=0.999, threshold=0.1)
 
         # conversions
         self.cvt_ = Conversions(self.K_, self.D_)
@@ -201,19 +205,38 @@ class VO(object):
         self.landmarks_ = []
         self.hist_ = deque(maxlen=100)
 
-    def match(self, des1, des2,
-            lowe=0.75, thresh=64.0):
-        pass
-
     def track(self, img1, img2, pt1, pt2=None):
-        # -> pt2, msk
-        pass
+        flags = cv2.OPTFLOW_LK_GET_MIN_EIGENVALS
+        if pt2 is not None:
+            flags += cv2.OPTFLOW_USE_INITIAL_FLOW
 
-    def detect(self, img):
-        # -> kpt
-        pass
+        lk_params = dict( winSize  = (51,13),
+                maxLevel = 100,
+                criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 1000, 0.001),
+                flags = flags,
+                minEigThreshold = 1e-2
+                )
+        img1_gray = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+        img2_gray = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
 
-    def __call__(self, img, pose):
+        # calculate optical flow
+        pt2, st, err = cv2.calcOpticalFlowPyrLK(
+                img1_gray, img2_gray, pt1, pt2,
+                **lk_params)
+        #print 'err stats : ', err.min(), err.max(), err.std(), err.mean()
+
+        h, w = np.shape(img2)[:2]
+
+        # apply mask
+        msk_in = np.all(np.logical_and(
+                np.greater_equal(pt2, [0,0]),
+                np.less(pt2, [w,h])), axis=-1)
+        msk_st = st[:,0].astype(np.bool)
+        msk = np.logical_and.reduce([msk_in, msk_st])#, msk_ef])
+
+        return pt2, msk
+
+    def __call__(self, img, pose, s=1.0):
         # suffix designations:
         # o/0 = origin (i=0)
         # p = previous (i=t-1)
@@ -227,27 +250,48 @@ class VO(object):
         # update history
         self.hist_.append( (kpt_c, des_c, img_c, pose_c) )
         if len(self.hist_) <= 1:
-            return None
+            return True, None
         kpt_p, des_p, img_p, pose_p = self.hist_[-2] # query data from previous time-frame
 
         # frame-to-frame processing
         pt2_p = self.cvt_.kpt_to_pt(kpt_p)
-        pt2_c, msk_t = self.track(img_p, img_c, pt2_p) 
+        pt2_c, msk_t = self.track(img_p, img_c, pt2_p)
+        print 'mean delta', np.mean(pt2_c - pt2_p, axis=0) # -14 px
 
         track_ratio = float(msk_t.sum()) / msk_t.size # logging/status
+        print('track : {}/{}'.format(msk_t.sum(), msk_t.size))
 
+        pt2_u_p = self.cvt_.pt2_to_pt2u(pt2_p[msk_t])
+        pt2_u_c = self.cvt_.pt2_to_pt2u(pt2_c[msk_t])
 
+        E, msk_e = cv2.findEssentialMat(pt2_u_c, pt2_u_p, self.K_,
+                **self.pEM_)
+        msk_e = msk_e[:,0].astype(np.bool)
 
+        n_in, R, t, msk_r, _ = recover_pose(E, self.K_,
+                pt2_u_c[msk_e], pt2_u_p[msk_e], log=False)
 
+        print 'Rpart'
+        print np.round(np.rad2deg(tx.euler_from_matrix(R)), 3)
+        print 'Tpart'
+        print np.round( t.ravel() , 3)
 
+        msk = np.zeros(len(pt2_p), dtype=np.bool)
+        msk[msk_t][msk_e][msk_r] = True
 
+        mim = drawMatches(img_p, img_c, pt2_p, pt2_c, msk)
 
+        # dh/dx in pose_p frame
+        x, y, h = pose_p
 
+        dh = -tx.euler_from_matrix(R)[1]
+        dx = s * np.float32([ np.abs(t[2]), 0*-t[1] ])
 
+        c, s = np.cos(h), np.sin(h)
+        R2_p = np.reshape([c,-s,s,c], [2,2]) # [2,2,N]
+        dp = R2_p.dot(dx)
 
+        x_c = x + dp
+        h_c = (h + dh + np.pi) % (2*np.pi) - np.pi
 
-
-
-
-
-
+        return True, (mim, h_c, x_c, pt2_p, np.empty((0,3)), '')

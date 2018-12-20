@@ -18,7 +18,7 @@ try:
 except ImportError:
   from pathlib2 import Path  # python 2 backport
 
-from vo2 import ClassicalVO
+from vo3 import ClassicalVO
 from ukf import build_ukf
 from gui import VoGUI
 

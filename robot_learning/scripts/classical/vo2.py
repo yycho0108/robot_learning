@@ -10,35 +10,7 @@ from matplotlib import pyplot as plt
 
 from sklearn.neighbors import NearestNeighbors
 
-from tests.test_fmat import recover_pose
-
-def drawMatches(img1, img2, pt1, pt2, msk,
-        radius = 3
-        ):
-    h,w = np.shape(img1)[:2]
-    pt1 = np.round(pt1).astype(np.int32)
-    pt2 = np.round(pt2 + [[w,0]]).astype(np.int32)
-
-    mim = np.concatenate([img1, img2], axis=1)
-    mim0 = mim.copy()
-
-    for (p1, p2) in zip(pt1[msk], pt2[msk]):
-        p1 = tuple(p1)
-        p2 = tuple(p2)
-        col = tuple(np.random.randint(255, size=4))
-        cv2.line(mim, p1, p2, col, 2)
-        cv2.circle(mim, tuple(p1), radius, col, 2)
-        cv2.circle(mim, tuple(p2), radius, col, 2)
-
-    for p in pt1[~msk]:
-        cv2.circle(mim, tuple(p), radius, (255,0,0), 1)
-
-    for p in pt2[~msk]:
-        cv2.circle(mim, tuple(p), radius, (255,0,0), 1)
-
-    mim = cv2.addWeighted(mim0, 0.5, mim, 0.5, 0.0)
-
-    return mim
+from vo_common import recover_pose
 
 class ClassicalVO(object):
     def __init__(self):
@@ -306,24 +278,24 @@ class ClassicalVO(object):
             pt2 = self.undistort(pt2)
 
         # find fundamental matrix
-        Fmat, msk = cv2.findFundamentalMat(pt1, pt2,
-                method=method,
-                param1=0.1, param2=0.999) # TODO : expose these thresholds
-        if msk is None:
-            return None
-        msk = np.asarray(msk[:,0]).astype(np.bool)
+        # Fmat, msk = cv2.findFundamentalMat(pt1, pt2,
+        #         method=method,
+        #         param1=0.1, param2=0.999) # TODO : expose these thresholds
+        # if msk is None:
+        #     return None
+        # msk = np.asarray(msk[:,0]).astype(np.bool)
 
-        # filter points + bookkeeping mask
-        pt1 = pt1[msk]
-        pt2 = pt2[msk]
-        midx = midx[msk]
+        # # filter points + bookkeeping mask
+        # pt1 = pt1[msk]
+        # pt2 = pt2[msk]
+        # midx = midx[msk]
 
-        # correct matches
-        pt1 = pt1[None, ...] # add axis 0
-        pt2 = pt2[None, ...]
-        pt2, pt1 = cv2.correctMatches(Fmat, pt1, pt2) # TODO : not sure if this is necessary
-        pt1 = pt1[0, ...] # remove axis 0
-        pt2 = pt2[0, ...]
+        # # correct matches
+        # pt1 = pt1[None, ...] # add axis 0
+        # pt2 = pt2[None, ...]
+        # pt2, pt1 = cv2.correctMatches(Fmat, pt1, pt2) # TODO : not sure if this is necessary
+        # pt1 = pt1[0, ...] # remove axis 0
+        # pt2 = pt2[0, ...]
 
         # filter NaN
         msk = np.logical_and(np.isfinite(pt1), np.isfinite(pt2))
@@ -783,17 +755,17 @@ class ClassicalVO(object):
         # compute cam2 pose
         res = cv2.solvePnPRansac(
             self.lm_pt3_, self.lm_pt2_, self.K_, self.dC_,
-            #useExtrinsicGuess=False,
-            useExtrinsicGuess=True,
-            rvec = rvec0,
-            tvec = tvec0,
+            useExtrinsicGuess=False,
+            #useExtrinsicGuess=True,
+            #rvec = rvec0,
+            #tvec = tvec0,
             iterationsCount=1000,
-            reprojectionError=1.0, # TODO : tune these params
+            reprojectionError=.1, # TODO : tune these params
             confidence=0.9999,
             #flags = cv2.SOLVEPNP_EPNP
-            flags = cv2.SOLVEPNP_DLS # << WORKS PRETTY WELL (SLOW?)
+            #flags = cv2.SOLVEPNP_DLS # << WORKS PRETTY WELL (SLOW?)
             #flags = cv2.SOLVEPNP_AP3P
-            #flags = cv2.SOLVEPNP_ITERATIVE # << default
+            flags = cv2.SOLVEPNP_ITERATIVE # << default
             #flags = cv2.SOLVEPNP_P3P
             #flags = cv2.SOLVEPNP_UPNP
             )

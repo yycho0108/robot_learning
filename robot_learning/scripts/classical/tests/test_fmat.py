@@ -2,6 +2,7 @@ import numpy as np
 import cv2
 from tf import transformations as tx
 from matplotlib import pyplot as plt
+import sys
 
 def print_Rt(R, t):
     print '\tR', np.round(np.rad2deg(tx.euler_from_matrix(R)), 2)
@@ -82,10 +83,10 @@ def generate_valid_points(
 
 def recover_pose(E,K,
         pt1, pt2,
-        #z_min = 1e-3,
-        #z_max = 100.0,
-        z_min = np.finfo(np.float32).eps,
-        z_max = np.inf
+        z_min = 1e-3,
+        z_max = 1000.0,
+        #z_min = np.finfo(np.float32).eps,
+        #z_max = np.inf
         ):
     print 'entering recover_pose'
 
@@ -193,7 +194,12 @@ def recover_pose(E,K,
     return n_in, R, t, msk, pt3
 
 def main():
-    #np.random.seed(0)
+    if len(sys.argv) >= 2:
+        s = int(sys.argv[1])
+        print s
+        np.random.seed(s)
+    else:
+        np.random.seed(0)
 
     # parameters
     #method = cv2.FM_LMEDS
@@ -318,10 +324,32 @@ def main():
 
     print '---------------------'
     msk = msk[:,0]
-    R, t = recover_pose(Emat2, K, pt1[msk], pt2[msk])
+    n_in, R, t, msk2, pt3 = recover_pose(Emat2, K, pt1[msk], pt2[msk])
     print 'RP'
     print_Rt(R,t)
     print '---------------------'
+
+    res = cv2.solvePnPRansac(
+            pt3.T,
+            pt2[msk][msk2], 
+            K, D*0,
+            useExtrinsicGuess=False,
+            #rvec = cv2.Rodrigues(R)[0],
+            #tvec = t,
+            iterationsCount=1000,
+            reprojectionError=1.0, # TODO : tune these params
+            confidence=0.9999,
+            #flags = cv2.SOLVEPNP_EPNP
+            flags = cv2.SOLVEPNP_DLS # << WORKS PRETTY WELL (SLOW?)
+            #flags = cv2.SOLVEPNP_AP3P
+            #flags = cv2.SOLVEPNP_ITERATIVE # << default
+            #flags = cv2.SOLVEPNP_P3P
+            #flags = cv2.SOLVEPNP_UPNP
+            )
+    dbg, rvec, tvec, inliers = res
+    R = cv2.Rodrigues(rvec)[0]
+    print 'PnP'
+    print_Rt(R, t)
 
     #n_in, R, t, msk, _ = cv2.recoverPose(Emat1,
     #        pt2,
@@ -332,15 +360,16 @@ def main():
     #print 'FM'
     #print_Rt(R,t)
 
-    n_in, R, t, msk, _ = cv2.recoverPose(Emat2, # pt2 w.r.t pt1
-            pt2,
-            pt1,
-            cameraMatrix=K,
-            distanceThresh=d_max)
-    print('recoverPose Inliers {}/{}'.format(n_in, msk.size))
+    #n_in, R, t, msk, _ = cv2.recoverPose(Emat2, # pt2 w.r.t pt1
+    #        pt2,
+    #        pt1,
+    #        cameraMatrix=K,
+    #        distanceThresh=d_max)
 
-    print 'EM'
-    print_Rt(R,t)
+
+    #print('recoverPose Inliers {}/{}'.format(n_in, msk.size))
+    #print 'EM'
+    #print_Rt(R,t)
 
     print(t_gt.dot(t))
 
