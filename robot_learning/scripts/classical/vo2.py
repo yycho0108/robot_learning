@@ -10,6 +10,8 @@ from matplotlib import pyplot as plt
 
 from sklearn.neighbors import NearestNeighbors
 
+from tests.test_fmat import recover_pose
+
 def drawMatches(img1, img2, pt1, pt2, msk,
         radius = 3
         ):
@@ -62,7 +64,9 @@ class ClassicalVO(object):
                 #useHarrisDetector=True,
                 #k=0.04
                 ) # keypoints detector
-        self.des_ = cv2.BRISK_create() # descriptor
+        #self.des_ = cv2.BRISK_create() # descriptor
+        self.des_ = cv2.xfeatures2d_BriefDescriptorExtractor.create()
+
 
         #orb = cv2.ORB_create(
         #        nfeatures=8192,
@@ -74,19 +78,25 @@ class ClassicalVO(object):
         #self.det_ = orb
         #self.des_ = orb
 
-        # build flann matcher
+        # define un-exported enums from OpenCV
         FLANN_INDEX_KDTREE = 0
         FLANN_INDEX_LSH = 6
-        index_params = dict(
-                algorithm = FLANN_INDEX_KDTREE,
-                trees = 5)
-        #index_params= dict(algorithm = FLANN_INDEX_LSH,
-        #           table_number = 6, # 12
-        #           key_size = 12,     # 20
-        #           multi_probe_level = 1) #2
-        search_params = dict(checks=50)   # or pass empty dictionary
-        flann = cv2.FlannBasedMatcher(index_params,search_params)
-        self.flann_ = flann
+        search_params = dict(checks=50)
+
+        if isinstance(self.des_, cv2.ORB):
+            # HAMMING
+            index_params= dict(algorithm = FLANN_INDEX_LSH,
+                       table_number = 6, # 12
+                       key_size = 12,     # 20
+                       multi_probe_level = 1) #2
+            flann = cv2.FlannBasedMatcher(index_params,search_params)
+            self.flann_ = flann
+        else:
+            index_params = dict(
+                    algorithm = FLANN_INDEX_KDTREE,
+                    trees = 5)
+            flann = cv2.FlannBasedMatcher(index_params,search_params)
+            self.flann_ = flann
 
         # camera matrix parameters
         # orig scale camera matrix (from calibration)
@@ -175,6 +185,7 @@ class ClassicalVO(object):
         """
         flann = self.flann_
         if len(des2) < 2:
+            print '?????????????????????????????????????????????????????'
             return None
 
         try:
@@ -185,9 +196,10 @@ class ClassicalVO(object):
                 # Regular Euclidean Distance
                 matches = flann.knnMatch(des1, des2, k=2)
         except Exception as e:
+            print '?????????????????????????????????????????????????????'
             print 'Exception during match : {}'.format(e)
-            print np.shape(des1)
-            print np.shape(des2)
+            print np.shape(des1), des1.dtype
+            print np.shape(des2), des2.dtype
             return None
 
         #good = matches
@@ -278,14 +290,20 @@ class ClassicalVO(object):
         return pt2
 
 
-    def getPoseAndPoints(self, pt1, pt2, midx, method):
+    def getPoseAndPoints(self, pt1, pt2, midx, method,
+            rectify=True
+            ):
         # == 0 :  unroll parameters ==
         Kmat = self.K_
         distCoeffs = self.dC_
 
-        # rectify input
+        # convert input to floats
         pt1 = np.float32(pt1)
         pt2 = np.float32(pt2)
+
+        if rectify:
+            pt1 = self.undistort(pt1)
+            pt2 = self.undistort(pt2)
 
         # find fundamental matrix
         Fmat, msk = cv2.findFundamentalMat(pt1, pt2,
@@ -322,21 +340,27 @@ class ClassicalVO(object):
             return None
 
         # TODO : expose these thresholds
+
+        #Emat = np.linalg.multi_dot([
+        #        np.linalg.inv(Kmat.T), Fmat, np.linalg.inv(Kmat)
+        #        ])
         Emat, msk = cv2.findEssentialMat(pt1, pt2, Kmat,
                 method=method, prob=0.999, threshold=0.1)
-        msk = np.asarray(msk[:,0]).astype(np.bool)
 
+        msk = np.asarray(msk[:,0]).astype(np.bool)
         # filter points + bookkeeping mask
         pt1 = pt1[msk]
         pt2 = pt2[msk]
         midx = midx[msk]
 
-        n_in, R, t, msk, _ = cv2.recoverPose(Emat,
-                pt1,
-                pt2,
-                cameraMatrix=Kmat,
-                distanceThresh=1000.0)#np.inf) # TODO : or something like 10.0/s ??
-        msk = np.asarray(msk[:,0]).astype(np.bool)
+        #n_in, R, t, msk, _ = cv2.recoverPose(Emat,
+        #        pt1,
+        #        pt2,
+        #        cameraMatrix=Kmat,
+        #        distanceThresh=1000.0)#np.inf) # TODO : or something like 10.0/s ??
+        #msk = np.asarray(msk[:,0]).astype(np.bool)
+        n_in, R, t, msk, _ = recover_pose(Emat, Kmat,
+                pt1, pt2)
 
         if msk.sum() <= 0:
             return None
@@ -381,7 +405,7 @@ class ClassicalVO(object):
         return [R, t, pt1, pt2, midx, pts_h]
 
     def undistort(self, pt):
-        #pt_u = cv2.undistortPoints(2.0*pt[None,...], self.K2_, self.dC_, P=self.K2_)[0]/2.0
+        # NOTE : no reprojection with K anymore
         pt_u = cv2.undistortPoints(pt[None,...], self.K_, self.dC_, P=self.K_)[0]
         return pt_u
 
@@ -508,10 +532,8 @@ class ClassicalVO(object):
                 self.lm_pt2_ = pt2[msk] # update tracking point
 
                 # # update landmark positions
-                res = self.getPoseAndPoints(
-                        self.undistort(pt2[msk]),
-                        self.undistort(pt1[msk]),
-                        np.arange(msk.sum()), method)
+                res = self.getPoseAndPoints(pt2[msk], pt1[msk],
+                        np.arange(msk.sum()), method, rectify=True)
 
                 if res is not None:
                     R, t, _, _, midx, pt3_h = res
@@ -548,6 +570,7 @@ class ClassicalVO(object):
 
                     # update s with computed scale
                     s = s2
+                    #s = 0.2 * 0.1
                     cur *= s
 
                     cur_h = cv2.convertPointsToHomogeneous(cur)
@@ -607,9 +630,11 @@ class ClassicalVO(object):
                             #msk_f2f = np.ones(len(p1_n), dtype=np.bool)
                             try:
                                 res_f2f = self.getPoseAndPoints(
-                                        self.undistort(p1_n[msk_f2f]),
-                                        self.undistort(p2_n[msk_f2f]),
-                                        np.arange(msk_f2f.sum()), method)
+                                        p1_n[msk_f2f],
+                                        p2_n[msk_f2f],
+                                        np.arange(msk_f2f.sum()), method,
+                                        rectify=True
+                                        )
 
                                 if res_f2f is not None:
                                     midx_f2f, pt3_h_f2f = res_f2f[-2:]
@@ -677,11 +702,12 @@ class ClassicalVO(object):
 
             # apply mask prior to triangulation
             pt1_l, pt2_l = pt1[msk], pt2[msk]
-            pt1_u, pt2_u = self.undistort(pt1_l), self.undistort(pt2_l)
             midx = np.arange(len(pt1_l))
 
             # landmarks triangulation
-            res = self.getPoseAndPoints(pt1_u, pt2_u, midx, method)
+            res = self.getPoseAndPoints(pt1_l, pt2_l, midx, method,
+                    rectify=True
+                    )
             R, t, _, _, midx, pt3_h = res
 
             lm_pt4 = (pt3_h / pt3_h[3:]).T
@@ -717,6 +743,7 @@ class ClassicalVO(object):
                     print('input scale : {}'.format(s))
                     s = np.median(ss)
                     print('computed scale : {}'.format(s))
+                    #s = 0.2 * 0.1
                     lm_pt4[:,:3] *= s
                 else:
                     print 'using input scale due to failure : {}'.format(s)
@@ -761,12 +788,12 @@ class ClassicalVO(object):
             rvec = rvec0,
             tvec = tvec0,
             iterationsCount=1000,
-            reprojectionError=10.0, # TODO : tune these params
+            reprojectionError=1.0, # TODO : tune these params
             confidence=0.9999,
             #flags = cv2.SOLVEPNP_EPNP
-            #flags = cv2.SOLVEPNP_DLS # << WORKS PRETTY WELL (SLOW?)
+            flags = cv2.SOLVEPNP_DLS # << WORKS PRETTY WELL (SLOW?)
             #flags = cv2.SOLVEPNP_AP3P
-            flags = cv2.SOLVEPNP_ITERATIVE # << default
+            #flags = cv2.SOLVEPNP_ITERATIVE # << default
             #flags = cv2.SOLVEPNP_P3P
             #flags = cv2.SOLVEPNP_UPNP
             )

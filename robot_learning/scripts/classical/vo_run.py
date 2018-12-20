@@ -203,17 +203,17 @@ class CVORunner(object):
                     self.index_ += 1
                     self.step()
                 plt.pause(0.001)
-                plt.savefig('/tmp/{:03d}.png'.format(self.index_))
+                #plt.savefig('/tmp/{:03d}.png'.format(self.index_))
         else:
             plt.show()
 
 def main():
     #idx = np.random.choice(8)
-    idx = 26
+    idx = 21
     print('idx', idx)
 
     # load data
-    i0 = 100
+    i0 = 0
     di = 1
 
     imgs   = np.load('../../data/train/{}/img.npy'.format(idx))[i0::di]
