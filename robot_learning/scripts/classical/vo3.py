@@ -338,24 +338,169 @@ class ClassicalVO(object):
 
         return pt2, msk
 
-    def proc_f2m(self, img, pose, lmk):
-        # 1. 
-        res = cv2.solvePnPRansac(
-            self.lm_pt3_, self.lm_pt2_, self.K_, self.dC_,
-            useExtrinsicGuess=False,
-            #useExtrinsicGuess=True,
-            #rvec = rvec0,
-            #tvec = tvec0,
-            iterationsCount=1000,
-            reprojectionError=.1, # TODO : tune these params
-            confidence=0.9999,
-            #flags = cv2.SOLVEPNP_EPNP
-            #flags = cv2.SOLVEPNP_DLS # << WORKS PRETTY WELL (SLOW?)
-            #flags = cv2.SOLVEPNP_AP3P
-            flags = cv2.SOLVEPNP_ITERATIVE # << default
-            #flags = cv2.SOLVEPNP_P3P
-            #flags = cv2.SOLVEPNP_UPNP
-            )
+    def proc_f2m(self, pose, scale,
+            des_p, des_c,
+            msk_t, msk_e, msk_r,
+            pt2_u_p, pt2_u_c,
+            pt3
+            ):
+        # frame-to-map processing
+        # (i.e. uses landmark data)
+
+        if len(self.landmarks_.pos_) > 0:
+            # enter landmark processing
+            # TODO : add preliminary filter by view angle
+            pt2_lm_c, lm_msk = self.cvt_.pt3_pose_to_pt2_msk(
+                    self.landmarks_.pos_, pose)
+            # note that pt2_lm_c is undistorted.
+            print('visible landmarks : {}/{}'.format(lm_msk.sum(), lm_msk.size))
+        else:
+            lm_msk = np.ones((0), dtype=np.bool)
+
+        # select useful descriptor by current match
+        des_p_m = des_p[msk_t][msk_e][msk_r]
+
+        i1, i2 = self.cvt_.des_des_to_match(
+                self.landmarks_.des_[lm_msk],
+                des_p_m)
+
+        if lm_msk.sum() > 0:
+            # filter correspondences by Emat consensus
+            # TODO : take advantage of the Emat here to some use?
+            _, lm_msk_e = cv2.findEssentialMat(
+                    pt2_lm_c[lm_msk][i1],
+                    pt2_u_c[msk_e][msk_r][i2],
+                    self.K_,
+                    **self.pEM_)
+            lm_msk_e = lm_msk_e[:,0].astype(np.bool)
+            print('landmark concensus : {}/{}'.format( lm_msk_e.sum(), lm_msk_e.size))
+
+            ## == visualize projection error ==
+            #ax = plt.gca()
+            #ax.cla()
+            #viz_lmk = pt2_lm_c[lm_msk][i1] # landmark projections to current pose
+            #viz_cam = pt2_u_c[msk_e][msk_r][i2] # camera correspondences
+            #ax.plot(viz_lmk[:,0],viz_lmk[:,1], 'ko', alpha=0.2) # where landmarks are supposed to be
+            #ax.plot(viz_cam[:,0],viz_cam[:,1], 'r+', alpha=0.2)
+            #ax.quiver(
+            #        viz_lmk[:,0], viz_lmk[:,1],
+            #        viz_cam[:,0]-viz_lmk[:,0], viz_cam[:,1]-viz_lmk[:,1],
+            #        scale_units='xy',
+            #        angles='xy',
+            #        scale=1,
+            #        color='b',
+            #        alpha=0.2
+            #        )
+            ## apply consensus
+            #viz_lmk = viz_lmk[lm_msk_e]
+            #viz_cam = viz_cam[lm_msk_e]
+
+            ##plt.hist(viz_cam[:,0] - viz_lmk[:,0],
+            ##        bins=np.linspace(-100,100)
+            ##        )
+            #ax.plot(viz_lmk[:,0],viz_lmk[:,1], 'ko') # where landmarks are supposed to be
+            #ax.plot(viz_cam[:,0],viz_cam[:,1], 'r+')
+            #ax.quiver(
+            #        viz_lmk[:,0], viz_lmk[:,1],
+            #        viz_cam[:,0]-viz_lmk[:,0], viz_cam[:,1]-viz_lmk[:,1],
+            #        scale_units='xy',
+            #        angles='xy',
+            #        scale=1,
+            #        color='g'
+            #        )
+            #if not ax.yaxis_inverted():
+            #    ax.invert_yaxis()
+            # ====================================
+        else:
+            lm_msk_e = np.ones(len(i1), dtype=np.bool)
+
+        # landmark correspondences
+        p_lm_0 = self.landmarks_.pos_[lm_msk][i1][lm_msk_e] # map-frame lm pos
+        p_lm_c = self.cvt_.map_to_cam(p_lm_0, pose) # TODO : use rectified pose?
+
+        p_lm_v2_c = pt3[i2][lm_msk_e] # current camera frame lm pos
+
+        # estimate scale from landmark correspondences
+        d_lm_old = np.linalg.norm(p_lm_c, axis=-1)
+        d_lm_new = np.linalg.norm(p_lm_v2_c, axis=-1)
+
+        # TODO : update landmarks from computed correspondences
+
+        if len(d_lm_old) > 0:
+            scale_rel = (d_lm_old / d_lm_new)
+            #plt.gca().cla()
+            #plt.hist(scale_rel)
+            #plt.show()
+
+            #print 'scale_rel'
+            #print scale_rel
+
+            scale_est = np.median(scale_rel, axis=-1)
+            print('estimated scale ratio : {}/{} = {}'.format(
+                scale_est, scale, scale_est/scale))
+
+            # override scale here
+            scale = scale_est
+
+            #res = cv2.solvePnPRansac(
+            #        p_lm_0, pt2_u_c[msk_e][msk_r][i2], self.K_, 0*self.D_,
+            #        useExtrinsicGuess = False,
+            #        iterationsCount=1000,
+            #        reprojectionError=1.0,
+            #        confidence=0.9999,
+            #        #flags = cv2.SOLVEPNP_EPNP
+            #        #flags = cv2.SOLVEPNP_DLS # << WORKS PRETTY WELL (SLOW?)
+            #        #flags = cv2.SOLVEPNP_AP3P
+            #        flags = cv2.SOLVEPNP_ITERATIVE # << default
+            #        #flags = cv2.SOLVEPNP_P3P
+            #        #flags = cv2.SOLVEPNP_UPNP
+            #        )
+            #dbg, rvec, tvec, inliers = res
+            #print('pnp {}/{}'.format( len(inliers), len(p_lm_0)))
+            #print('tvec-pnp', tvec.ravel())
+        else:
+            # implicit : scale = scale
+            pass
+
+        # insert unselected landmarks
+        lm_sel_msk = np.zeros(len(des_p_m), dtype=np.bool)
+        lm_sel_msk[i2] = True
+        lm_new_msk = ~lm_sel_msk
+
+
+        n_new = (lm_new_msk).sum()
+        msk_n = np.ones(n_new, dtype=np.bool)
+
+        if len(d_lm_old) > 0:
+            # filter insertion by proximity to existing landmarks
+            neigh = NearestNeighbors(n_neighbors=1)
+            neigh.fit(pt2_lm_c[lm_msk])
+            d, _ = neigh.kneighbors(pt2_u_c[msk_e][msk_r][lm_new_msk], return_distance=True)
+            msk_knn = (d < 16.0)[:,0] # TODO : magic number
+
+            # dist to nearest landmark, less than 20px
+            msk_n[msk_knn] = False
+            n_new = msk_n.sum()
+
+        print('adding {} landmarks : {}->{}'.format(n_new,
+            len(self.landmarks_.pos_), len(self.landmarks_.pos_)+n_new
+            ))
+
+        pos_new = self.cvt_.cam_to_map(
+                scale * pt3[lm_new_msk][msk_n],
+                pose) # TODO : use rectified pose here if available
+        des_new = des_p_m[lm_new_msk][msk_n]
+        ang_new = np.full((n_new,1), pose[-1], dtype=np.float32)
+
+        # append new landmarks ...
+        self.landmarks_.ang_ = np.concatenate(
+                [self.landmarks_.ang_, ang_new], axis=0)
+        self.landmarks_.des_ = np.concatenate(
+                [self.landmarks_.des_, des_new], axis=0)
+        self.landmarks_.pos_ = np.concatenate(
+                [self.landmarks_.pos_, pos_new], axis=0)
+
+        return scale
 
     def __call__(self, img, pose, scale=1.0):
         # suffix designations:
@@ -410,157 +555,12 @@ class ClassicalVO(object):
         #print( 'mr : {}/{}'.format(msk_r.sum(), msk_r.size))
 
         if True:
-            if len(self.landmarks_.pos_) > 0:
-                # enter landmark processing
-                pt2_lm_c, lm_msk = self.cvt_.pt3_pose_to_pt2_msk(
-                        self.landmarks_.pos_, pose)
-                # note that pt2_lm_c is undistorted.
-                print('visible landmarks : {}/{}'.format(lm_msk.sum(), lm_msk.size))
-            else:
-                lm_msk = np.ones((0), dtype=np.bool)
-
-            # select useful descriptor by current match
-            des_p_m = des_p[msk_t][msk_e][msk_r]
-
-            i1, i2 = self.cvt_.des_des_to_match(
-                    self.landmarks_.des_[lm_msk],
-                    des_p_m)
-
-            if lm_msk.sum() > 0:
-                # filter correspondences by Emat consensus
-                # TODO : take advantage of the Emat here to some use?
-                _, lm_msk_e = cv2.findEssentialMat(
-                        pt2_lm_c[lm_msk][i1],
-                        pt2_u_c[msk_e][msk_r][i2],
-                        self.K_,
-                        **self.pEM_)
-                lm_msk_e = lm_msk_e[:,0].astype(np.bool)
-                print('landmark concensus : {}/{}'.format( lm_msk_e.sum(), lm_msk_e.size))
-
-                ## == visualize projection error ==
-                #ax = plt.gca()
-                #ax.cla()
-                #viz_lmk = pt2_lm_c[lm_msk][i1] # landmark projections to current pose
-                #viz_cam = pt2_u_c[msk_e][msk_r][i2] # camera correspondences
-                #ax.plot(viz_lmk[:,0],viz_lmk[:,1], 'ko', alpha=0.2) # where landmarks are supposed to be
-                #ax.plot(viz_cam[:,0],viz_cam[:,1], 'r+', alpha=0.2)
-                #ax.quiver(
-                #        viz_lmk[:,0], viz_lmk[:,1],
-                #        viz_cam[:,0]-viz_lmk[:,0], viz_cam[:,1]-viz_lmk[:,1],
-                #        scale_units='xy',
-                #        angles='xy',
-                #        scale=1,
-                #        color='b',
-                #        alpha=0.2
-                #        )
-                ## apply consensus
-                #viz_lmk = viz_lmk[lm_msk_e]
-                #viz_cam = viz_cam[lm_msk_e]
-
-                ##plt.hist(viz_cam[:,0] - viz_lmk[:,0],
-                ##        bins=np.linspace(-100,100)
-                ##        )
-                #ax.plot(viz_lmk[:,0],viz_lmk[:,1], 'ko') # where landmarks are supposed to be
-                #ax.plot(viz_cam[:,0],viz_cam[:,1], 'r+')
-                #ax.quiver(
-                #        viz_lmk[:,0], viz_lmk[:,1],
-                #        viz_cam[:,0]-viz_lmk[:,0], viz_cam[:,1]-viz_lmk[:,1],
-                #        scale_units='xy',
-                #        angles='xy',
-                #        scale=1,
-                #        color='g'
-                #        )
-                #if not ax.yaxis_inverted():
-                #    ax.invert_yaxis()
-                # ====================================
-            else:
-                lm_msk_e = np.ones(len(i1), dtype=np.bool)
-
-            # landmark correspondences
-            p_lm_0 = self.landmarks_.pos_[lm_msk][i1][lm_msk_e] # map-frame lm pos
-            p_lm_c = self.cvt_.map_to_cam(p_lm_0, pose) # TODO : use rectified pose?
-
-            p_lm_v2_c = pt3[i2][lm_msk_e] # current camera frame lm pos
-
-            # estimate scale from landmark correspondences
-            d_lm_old = np.linalg.norm(p_lm_c, axis=-1)
-            d_lm_new = np.linalg.norm(p_lm_v2_c, axis=-1)
-
-            # TODO : update landmarks from computed correspondences
-
-            if len(d_lm_old) > 0:
-                scale_rel = (d_lm_old / d_lm_new)
-                #plt.gca().cla()
-                #plt.hist(scale_rel)
-                #plt.show()
-
-                #print 'scale_rel'
-                #print scale_rel
-
-                scale_est = np.median(scale_rel, axis=-1)
-                print('estimated scale ratio : {}/{} = {}'.format(
-                    scale_est, scale, scale_est/scale))
-
-                # override scale here
-                scale = scale_est
-
-                #res = cv2.solvePnPRansac(
-                #        p_lm_0, pt2_u_c[msk_e][msk_r][i2], self.K_, 0*self.D_,
-                #        useExtrinsicGuess = False,
-                #        iterationsCount=1000,
-                #        reprojectionError=1.0,
-                #        confidence=0.9999,
-                #        #flags = cv2.SOLVEPNP_EPNP
-                #        #flags = cv2.SOLVEPNP_DLS # << WORKS PRETTY WELL (SLOW?)
-                #        #flags = cv2.SOLVEPNP_AP3P
-                #        flags = cv2.SOLVEPNP_ITERATIVE # << default
-                #        #flags = cv2.SOLVEPNP_P3P
-                #        #flags = cv2.SOLVEPNP_UPNP
-                #        )
-                #dbg, rvec, tvec, inliers = res
-                #print('pnp {}/{}'.format( len(inliers), len(p_lm_0)))
-                #print('tvec-pnp', tvec.ravel())
-            else:
-                # implicit : scale = scale
-                pass
-
-            # insert unselected landmarks
-            lm_sel_msk = np.zeros(len(des_p_m), dtype=np.bool)
-            lm_sel_msk[i2] = True
-            lm_new_msk = ~lm_sel_msk
-
-
-            n_new = (lm_new_msk).sum()
-            msk_n = np.ones(n_new, dtype=np.bool)
-
-            if len(d_lm_old) > 0:
-                # filter insertion by proximity to existing landmarks
-                neigh = NearestNeighbors(n_neighbors=1)
-                neigh.fit(pt2_lm_c[lm_msk])
-                d, _ = neigh.kneighbors(pt2_u_c[msk_e][msk_r][lm_new_msk], return_distance=True)
-                msk_knn = (d < 20.0)[:,0] # TODO : magic number
-
-                # dist to nearest landmark, less than 20px
-                msk_n[msk_knn] = False
-                n_new = msk_n.sum()
-
-            print('adding {} landmarks : {}->{}'.format(n_new,
-                len(self.landmarks_.pos_), len(self.landmarks_.pos_)+n_new
-                ))
-
-            pos_new = self.cvt_.cam_to_map(
-                    scale * pt3[lm_new_msk][msk_n],
-                    pose) # TODO : use rectified pose here if available
-            des_new = des_p_m[lm_new_msk][msk_n]
-            ang_new = np.full((n_new,1), pose[-1], dtype=np.float32)
-
-            # append new landmarks ...
-            self.landmarks_.ang_ = np.concatenate(
-                    [self.landmarks_.ang_, ang_new], axis=0)
-            self.landmarks_.des_ = np.concatenate(
-                    [self.landmarks_.des_, des_new], axis=0)
-            self.landmarks_.pos_ = np.concatenate(
-                    [self.landmarks_.pos_, pos_new], axis=0) 
+            scale = self.proc_f2m(pose, scale,
+                    des_p, des_c,
+                    msk_t, msk_e, msk_r,
+                    pt2_u_p, pt2_u_c,
+                    pt3
+                    )
 
         msk = np.zeros(len(pt2_p), dtype=np.bool)
         midx = np.where(msk_t)[0][
@@ -586,10 +586,12 @@ class ClassicalVO(object):
         h_c = (h + dh + np.pi) % (2*np.pi) - np.pi
         print('tvec-f2f', x_c)
 
-        # TODO : return correct values for reconstructed 3d points in map frame
-        # as well as reprojected 2d points based on such landmarks.
+        # construct visualizations
+        pt3_m = self.cvt_.cam_to_map(pt3 * scale, pose)
+        pt2_c_rec, _ = self.cvt_.pt3_pose_to_pt2_msk(pt3_m, pose)
+        pt3_m = pt3_m.dot(self.T_c2b_[:3,:3].T) + self.T_c2b_[:3,3]
 
-        return True, (mim, h_c, x_c, pt2_p, np.empty((0,3)), '')
+        return True, (mim, h_c, x_c, pt2_c_rec, pt3_m, '')
 
 def main():
     K = np.float32([500,0,320,0,500,240,0,0,1]).reshape(3,3)

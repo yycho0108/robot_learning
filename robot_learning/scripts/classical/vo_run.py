@@ -111,7 +111,7 @@ class CVORunner(object):
         #VoGUI.draw_top(ax1, rec_path, pts2, np.stack([tx,ty,th], axis=-1), scan_c)
         VoGUI.draw_3d(ax2, pts3)
         VoGUI.draw_2d_proj(ax3, imgs[i, ..., ::-1], pts_r)
-        #VoGUI.draw_err(ax4, rec_path, odom[:i])
+        VoGUI.draw_err(ax4, rec_path, odom[:i])
 
         self.fig_.canvas.draw()
         self.fig_.suptitle(msg)
