@@ -1,6 +1,7 @@
 #!/usr/bin/env python2
 
 import numpy as np
+from numpy import s_
 import sys
 import cv2
 from scipy.optimize import linear_sum_assignment
@@ -87,6 +88,7 @@ class CVORunner(object):
             pts2,
             scan_c,
             pts_r,
+            cov,
             msg='title'
             ):
         # unroll
@@ -107,7 +109,7 @@ class CVORunner(object):
 
         VoGUI.draw_img(ax0, aimg[..., ::-1])
         ax0.set_title('Tracking Visualization')
-        VoGUI.draw_top(ax1, rec_path, pts2, odom[:i+1], scan_c)
+        VoGUI.draw_top(ax1, rec_path, pts2, odom[:i+1], scan_c, cov)
         #VoGUI.draw_top(ax1, rec_path, pts2, np.stack([tx,ty,th], axis=-1), scan_c)
         VoGUI.draw_3d(ax2, pts3)
         VoGUI.draw_2d_proj(ax3, imgs[i, ..., ::-1], pts_r)
@@ -115,6 +117,39 @@ class CVORunner(object):
 
         self.fig_.canvas.draw()
         self.fig_.suptitle(msg)
+
+    def get_QR(self, pose, dt):
+        # Get appropriate Q/R Matrices from current pose.
+        # Mostly just deals with getting the right orientation.
+        Q0 = np.diag(np.square([3e-2, 5e-3, 1e-1, 3e-3, 1e-3, 2e-2]))
+        R0 = np.diag(np.square([5e-2, 7e-2, 4e-2]))
+        T = Rmat(pose[-1])
+
+        Q = Q0.copy()
+
+        # constant acceleration model?
+        # NOTE : currently results in non-positive-definite matrix
+        #g = [dt**2/2, dt]
+        #G = np.outer(g,g)
+        # x-part
+        # Q[np.ix_([0,3],[0,3])] = G * (0.3)**2 # 10 cm/s^2
+        # Q[np.ix_([1,4],[1,4])] = G * (0.1)**2 # 2 cm/s^2
+        # Q[np.ix_([2,5],[2,5])] = G * (0.5)**2 # ~ 6 deg/s^2
+
+        # apply rotation to translational parts
+        Q[:2,:2] = T.dot(Q[:2,:2]).dot(T.T)
+        #Q[3:5,3:5] = T.dot(Q[3:5,3:5]).dot(T.T)
+        #NOTE: vx-vy components are invariant to current pose
+
+        #Q = (Q+Q.T)/2.0
+        #if np.any(Q<0):
+        #    Q -= np.min(Q)
+
+        # R has nothing to do with time
+        R = R0.copy()
+        R[:2,:2] = T.dot(R[:2,:2]).dot(T.T)
+
+        return Q, R
 
     def step(self):
         i = self.index_
@@ -149,10 +184,21 @@ class CVORunner(object):
         dps_gt = sub_p3d(odom[i], odom[i-1])
         s = np.linalg.norm(dps_gt[:2])
         #s = 0.2
+        Q,R = self.get_QR(ukf.x[:3], dt)
+        ukf.Q=Q
+        ukf.R=R
+        #ukf.P=np.abs(ukf.P)
 
         prv = ukf.x[:3].copy()
-
-        ukf.predict(dt=dt)
+        try:
+            ukf.predict(dt=dt)
+        except Exception as e:
+            print 'Wat? {}'.format(e)
+            print 'Q', ukf.Q
+            print 'R', ukf.R
+            print 'x', ukf.x
+            print 'P', ukf.P
+            raise e
         # TODO : currently passing 'ground-truth' position
         #suc, res = vo(img, odom[i], s=s)
         suc, res = vo(img, ukf.x[:3].copy(), scale=s)
@@ -187,7 +233,7 @@ class CVORunner(object):
             scan_c = None
 
         ### EVERYTHING FROM HERE IS PLOTTING + VIZ ###
-        self.show(aimg, pts3, pts2, scan_c, pts_r, ('[%d/%d] '%(i,n)) + msg)
+        self.show(aimg, pts3, pts2, scan_c, pts_r, ukf.P, ('[%d/%d] '%(i,n)) + msg)
 
     def quit(self):
         self.quit_ = True

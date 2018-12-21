@@ -50,11 +50,31 @@ def build_ukf(x0=None, P0=None,
     if x0 is None:
         x0 = np.zeros(6)
     if P0 is None:
-        P0 = np.diag([1e-6,1e-6,1e-6, 1e-1, 1e-1, 1e-1])
+        # initial pose is very accurate, but velocity is unknown.
+        # considering vehicle dynamics, it's most likely constrained
+        # within +-0.5m/s in x direction, +-0.1m/s in y direction,
+        # and 0.5rad/s in angular velocity.
+        P0 = np.diag(np.square(
+            [1e-6, 1e-6, 1e-6, 5e-1, 1e-1, 5e-1]
+            ))
     if Q is None:
-        Q = np.diag([1e-4, 1e-4, 1e-2, 1e-1, 1e-1, 1e-1]) #xyhvw
+        # treat Q as a "tuning parameter"
+        # low Q = high confidence in general state estimation
+        # high Q = high confidence in measurement
+        # from https://www.researchgate.net/post/How_can_I_find_process_noise_and_measurement_noise_in_a_Kalman_filter_if_I_have_a_set_of_RSSI_readings
+        # Higher Q, the higher gain, more weight to the noisy measurements
+        # and the estimation accuracy is compromised; In case of lower Q, the
+        # better estimation accuracy is achieved and time lag may be introduced in the estimated value.
+        # process noise
+        Q = np.diag(np.square(
+            [5e-2, 5e-2, 1e-1, 1e-1, 1e-1, 1e-1]
+            )) #xyhvw
     if R is None:
-        R = np.diag([1e-1, 1e-1, 1e-1]) # xyh
+        # in general anticipate much lower heading error than positional error
+        # 1e-2 ~ 0.57 deg
+        R = np.diag(np.square(
+            [2e-2, 2e-2, 5e-2]
+            )) # xyh
 
     #spts = MerweScaledSigmaPoints(6, 1e-3, 2, 3-6, subtract=ukf_residual)
     spts = JulierSigmaPoints(6, 6-2, sqrt_method=np.linalg.cholesky, subtract=ukf_residual)

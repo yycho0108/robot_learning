@@ -7,7 +7,111 @@ import numpy as np
 from vo_common import recover_pose, drawMatches
 from matplotlib import pyplot as plt
 from sklearn.neighbors import NearestNeighbors
+from matplotlib.patches import Ellipse
 
+def zu2Rs(u):
+    """
+    specialization of zu2R for batch u.
+    computes R such that R.z = u, where z=(0,0,1)
+    requires u to be a unit vector.
+    """
+
+    u_z = np.float32([0,0,1]).reshape(1,3)
+    c = np.sum(u_z*u, axis=-1) # cos of angle
+    sax = np.cross(u_z, u) # sin * axis
+    ax = sax / np.linalg.norm(sax, axis=-1, keepdims=True)
+    A = ax[:,None,:] * ax[:,:,None]
+
+    sx, sy, sz = sax.T
+
+    b = np.asarray([
+        c,-sz,sy,
+        sz,c,-sx,
+        -sy,sx,c]).T.reshape(-1,3,3)
+    R = (1 - c).reshape(-1,1,1) * A + b
+    return R
+
+def oriented_cov(
+        pt3,
+        cov0,
+        ):
+    """
+    According to https://math.stackexchange.com/a/476311
+    """
+
+    d = np.linalg.norm(pt3, axis=-1, keepdims=True)
+    u_z = pt3 / d # Nx3
+    R = zu2Rs(u_z)
+
+    RT = np.transpose(R, [0,2,1])
+    C = np.matmul(np.matmul(R, cov0[None,...]), RT)
+
+    # apply depth scale for variance
+    C = d[...,None] * C
+    return C
+
+lmk_fig = None
+def show_landmark_2d(pos, cov, clear=True, draw=True,
+        style='k+',
+        colors=None,
+        label=''
+        ):
+    """ from https://stackoverflow.com/a/20127387 """
+
+    global lmk_fig
+    if lmk_fig is None:
+        lmk_fig = plt.figure()
+    ax = lmk_fig.gca()
+    if clear:
+        ax.cla()
+
+    # subsample
+    if len(pos) <= 0:
+        return
+
+    n = min(256, len(pos))
+    idx = np.random.randint(0, len(pos), size=n)
+    pos = pos[idx]
+    cov = cov[idx]
+
+    x = pos[:,2]
+    y = -pos[:,1]
+
+
+    if colors is None:
+        colors = np.random.uniform(size=(n,3))
+    
+    ax.plot(x, y, style, alpha=0.75,label=label
+            )
+
+    for p,c,col in zip(pos, cov, colors):
+        # re-orient to the things we care about ...
+        x,y = p[2], -p[1]
+        c_2d = np.reshape([
+                c[2,2], c[2,1],
+                c[1,2], c[1,1]], (2,2))
+
+        l, v = np.linalg.eig(c_2d)
+        l    = np.sqrt(l)
+        ell = Ellipse(xy=(x, y),
+                    width=l[0]*2, height=l[1]*2,
+                    angle=np.rad2deg(np.arccos(v[0, 0])))
+        #ell.set_facecolor('none') #??
+        ax.add_artist(ell)
+        ell.set_clip_box(ax.bbox)
+        ell.set_alpha(0.25)
+        ell.set_facecolor(col)
+
+    ax.set_xlim(-1.0, 10.0)
+    ax.set_ylim(-5.0, 5.0)
+    #ax.set_aspect('equal', 'datalim')
+    #ax.autoscale(True)
+    #print 'should have added {} ellipses'.format(len(pos))
+    if draw:
+        ax.legend()
+        ax.plot([0],[0],'k+')
+        lmk_fig.canvas.draw()
+        plt.pause(0.001)
 
 class Landmark(object):
     def __init__(self,
@@ -338,6 +442,28 @@ class ClassicalVO(object):
 
         return pt2, msk
 
+    def initialize_landmark_variance(self, pt3_c, pose):
+        # initialize variance
+        var_rel = np.square([0.05, 0.05, 1.0]) # expected landmark variance @ ~ 1m
+        var_rel = np.diag(var_rel) # 3x3
+        var_c = oriented_cov(pt3_c, var_rel) # Nx3x3
+
+        # now rotate camera-coordinate variance to map-coord variance
+        T_b2o = self.cvt_.pose_to_T(pose)
+        T_c2m = np.linalg.multi_dot([
+            self.cvt_.T_b2c_,
+            T_b2o,
+            self.cvt_.T_c2b_
+            ])
+        R_c2m = T_c2m[:3,:3]
+
+        var_m = np.matmul(
+                np.matmul(R_c2m[None,...], var_c),
+                R_c2m.T[None,...]
+                )
+
+        return var_m
+
     def proc_f2m(self, pose, scale,
             des_p, des_c,
             msk_t, msk_e, msk_r,
@@ -421,10 +547,59 @@ class ClassicalVO(object):
         p_lm_v2_c = pt3[i2][lm_msk_e] # current camera frame lm pos
 
         # estimate scale from landmark correspondences
-        d_lm_old = np.linalg.norm(p_lm_c, axis=-1)
-        d_lm_new = np.linalg.norm(p_lm_v2_c, axis=-1)
+        #d_lm_old = np.linalg.norm(p_lm_c, axis=-1)
+        #d_lm_new = np.linalg.norm(p_lm_v2_c, axis=-1)
+        d_lm_old = p_lm_c[:,2]
+        d_lm_new = p_lm_v2_c[:,2] # z-value much more stable than norm
+        scale_rel = (d_lm_old / d_lm_new).reshape(-1,1)
 
-        # TODO : update landmarks from computed correspondences
+        # scale estimate weights
+        #scale_w = (self.landmarks_.var_[lm_msk][i1][lm_msk_e][:,(0,1,2),(0,1,2)])
+        #scale_w = np.linalg.norm(scale_w, axis=-1) 
+        #scale_w = np.sum(scale_w) / scale_w
+        #scale_est = np.sum(scale_rel * scale_w, axis=0).reshape(-1,1)
+        scale_est = np.mean(scale_rel)
+
+        if True:
+            # update landmarks from computed correspondences
+            p_lm_v2_c_s = p_lm_v2_c * scale_rel # apply est or rel ???
+            var_lm_old = self.landmarks_.var_[lm_msk][i1][lm_msk_e]
+            var_lm_new = self.initialize_landmark_variance(p_lm_v2_c_s, pose)
+            p_lm_v2_0 = self.cvt_.cam_to_map(p_lm_v2_c_s, pose)
+
+            # apply kalman filter
+            # (with transition & observation matrices F=I, H=I)
+            y_k = (p_lm_v2_0 - p_lm_0).reshape(-1,3,1)
+            S_k = var_lm_new + var_lm_old # I think R_k = var_lm_new (measurement noise)
+            K_k = np.matmul(var_lm_old, np.linalg.inv(S_k))
+            x_k = p_lm_0.reshape(-1,3,1) + np.matmul(K_k, y_k)
+            I = np.eye(3)[None,...] # (1,3,3)
+            P_k = np.matmul(I - K_k, var_lm_old)
+
+            midx = np.arange(len(self.landmarks_.pos_))
+            midx = midx[lm_msk][i1][lm_msk_e]
+
+            self.landmarks_.pos_[midx] = x_k[...,0]
+            self.landmarks_.var_[midx] = P_k
+
+        # == visualize filtering process ==
+        # n_show = 10
+        # colors = np.random.uniform(size=(n_show,3))
+        # show_landmark_2d(p_lm_0[:n_show], var_lm_old[:n_show],
+        #         clear=True, draw=False,
+        #         style='k.', colors=colors, label='lm_pre'
+        #         )
+        # show_landmark_2d(p_lm_v2_0[:n_show], var_lm_new[:n_show],
+        #         clear=False, draw=False,
+        #         style='r+', colors=colors, label='lm_obs'
+        #         )
+        # show_landmark_2d(
+        #         self.landmarks_.pos_[midx][:n_show],
+        #         self.landmarks_.var_[midx][:n_show],
+        #         clear=False, draw=True,
+        #         style='b*', colors=colors, label='lm_post'
+        #         )
+        # =================================
 
         if len(d_lm_old) > 0:
             scale_rel = (d_lm_old / d_lm_new)
@@ -467,7 +642,6 @@ class ClassicalVO(object):
         lm_sel_msk[i2] = True
         lm_new_msk = ~lm_sel_msk
 
-
         n_new = (lm_new_msk).sum()
         msk_n = np.ones(n_new, dtype=np.bool)
 
@@ -485,12 +659,17 @@ class ClassicalVO(object):
         print('adding {} landmarks : {}->{}'.format(n_new,
             len(self.landmarks_.pos_), len(self.landmarks_.pos_)+n_new
             ))
+        pt3_new_c = scale * pt3[lm_new_msk][msk_n]
 
         pos_new = self.cvt_.cam_to_map(
-                scale * pt3[lm_new_msk][msk_n],
+                pt3_new_c,
                 pose) # TODO : use rectified pose here if available
         des_new = des_p_m[lm_new_msk][msk_n]
         ang_new = np.full((n_new,1), pose[-1], dtype=np.float32)
+
+        var_new = self.initialize_landmark_variance(
+                pt3_new_c,
+                pose)
 
         # append new landmarks ...
         self.landmarks_.ang_ = np.concatenate(
@@ -499,6 +678,8 @@ class ClassicalVO(object):
                 [self.landmarks_.des_, des_new], axis=0)
         self.landmarks_.pos_ = np.concatenate(
                 [self.landmarks_.pos_, pos_new], axis=0)
+        self.landmarks_.var_ = np.concatenate(
+                [self.landmarks_.var_, var_new], axis=0)
 
         return scale
 
@@ -534,6 +715,10 @@ class ClassicalVO(object):
         # msk_t[i1] = True
         # pt2_c = np.zeros_like(pt2_p)
         # pt2_c[i1] = self.cvt_.kpt_to_pt(kpt_c[i2])
+
+        # apply additional constraints
+        msk_d = (np.max(np.abs(pt2_p - pt2_c), axis=-1) > 1.0) # enforce >1px difference
+        msk_t &= msk_d
         # =================================
 
         #print 'mean delta', np.mean(pt2_c - pt2_p, axis=0) # -14 px
@@ -550,7 +735,10 @@ class ClassicalVO(object):
         #print('em : {}/{}'.format(msk_e.sum(), msk_e.size))
 
         n_in, R, t, msk_r, pt3 = recover_pose(E, self.K_,
-                pt2_u_c[msk_e], pt2_u_p[msk_e], log=False)
+                pt2_u_c[msk_e], pt2_u_p[msk_e], log=False,
+                #z_max = 5000.0
+                # = usually ~10m
+                )
         pt3 = pt3.T
         #print( 'mr : {}/{}'.format(msk_r.sum(), msk_r.size))
 
@@ -589,6 +777,20 @@ class ClassicalVO(object):
         # construct visualizations
         pt3_m = self.cvt_.cam_to_map(pt3 * scale, pose)
         pt2_c_rec, _ = self.cvt_.pt3_pose_to_pt2_msk(pt3_m, pose)
+        # override pt3_m with all currently tracked landmarks
+
+        # filter by 'high' confidence
+        #pt3_lm_c = self.cvt_.map_to_cam(self.landmarks_.pos_, pose)
+        #d_lm_c   = np.linalg.norm(pt3_lm_c, axis=-1)
+        #v_xy = self.landmarks_.var_[:, (2,1), (2,1)]
+        #s_xy = np.linalg.norm(np.sqrt(v_xy), axis=-1)
+        #s_xy_r = s_xy / d_lm_c # relative conf.
+        #idx  = np.argsort(s_xy_r)
+        #pt3_m = self.landmarks_.pos_[idx[:512]]
+        pt3_m = self.landmarks_.pos_
+        pt2_c_rec, _ = self.cvt_.pt3_pose_to_pt2_msk(pt3_m, pose)
+
+        # convert to base_link coordinates
         pt3_m = pt3_m.dot(self.T_c2b_[:3,:3].T) + self.T_c2b_[:3,3]
 
         return True, (mim, h_c, x_c, pt2_c_rec, pt3_m, '')

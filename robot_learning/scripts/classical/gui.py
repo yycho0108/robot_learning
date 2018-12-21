@@ -2,6 +2,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 import sys
 from misc import Rmat
+from matplotlib.patches import Ellipse
 
 def axisEqual3D(ax):
     """ from https://stackoverflow.com/a/19248731 """
@@ -38,7 +39,8 @@ class VoGUI(object):
     @staticmethod
     def draw_top(ax,
             path0, pts,
-            path1=None, scan=None
+            path1=None, scan=None,
+            cov=None
             ):
         ax.cla()
 
@@ -47,6 +49,20 @@ class VoGUI(object):
 
         ax.plot(path0[:,0], path0[:,1], 'b:')
         ax.plot(path0[-1:,0], path0[-1:,1], 'bo', markersize=5, label='visual odometry')
+
+        if cov is not None:
+            x, y = path0[-1,:2]
+            l, v = np.linalg.eig(cov[:2,:2])
+            h = np.arctan2(v[0,1], v[0,0])
+            l    = np.sqrt(l)
+            ell = Ellipse(xy=(x, y),
+                        width=l[0]*2*2, height=l[1]*2*2,
+                        angle=h)
+            ax.add_artist(ell)
+            ell.set_clip_box(ax.bbox)
+            ell.set_alpha(0.25)
+            ell.set_facecolor('b')
+
 
         # trajectory (ground truth)
         ax.plot(path1[:,0], path1[:,1], 'k--')
@@ -68,8 +84,9 @@ class VoGUI(object):
         VoGUI.draw_hud(ax, path1[-1], fov, 5.0, 'k--')
 
         cx, cy = path1[-1, :2]
-        ax.set_xlim(cx-5.0, cx+5.0)
-        ax.set_ylim(cy-5.0, cy+5.0)
+        r_lim = 2.0
+        ax.set_xlim(cx-r_lim, cx+r_lim)
+        ax.set_ylim(cy-r_lim, cy+r_lim)
         ax.grid()
         ax.set_axisbelow(True)
         ax.set_aspect('equal', 'datalim')
