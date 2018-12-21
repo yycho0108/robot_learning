@@ -162,7 +162,7 @@ class Conversions(object):
         if (det is None) and (des is None):
             # default detector+descriptor=orb
             orb = cv2.ORB_create(
-                    nfeatures=2048
+                    nfeatures=4096
                     )
             det = orb
             des = orb
@@ -445,6 +445,7 @@ class ClassicalVO(object):
     def initialize_landmark_variance(self, pt3_c, pose):
         # initialize variance
         var_rel = np.square([0.05, 0.05, 1.0]) # expected landmark variance @ ~ 1m
+        # TODO : ^ is a ballpart estimate.
         var_rel = np.diag(var_rel) # 3x3
         var_c = oriented_cov(pt3_c, var_rel) # Nx3x3
 
@@ -732,7 +733,7 @@ class ClassicalVO(object):
         E, msk_e = cv2.findEssentialMat(pt2_u_c, pt2_u_p, self.K_,
                 **self.pEM_)
         msk_e = msk_e[:,0].astype(np.bool)
-        #print('em : {}/{}'.format(msk_e.sum(), msk_e.size))
+        print('em : {}/{}'.format(msk_e.sum(), msk_e.size))
 
         n_in, R, t, msk_r, pt3 = recover_pose(E, self.K_,
                 pt2_u_c[msk_e], pt2_u_p[msk_e], log=False,
@@ -788,6 +789,7 @@ class ClassicalVO(object):
         #idx  = np.argsort(s_xy_r)
         #pt3_m = self.landmarks_.pos_[idx[:512]]
         pt3_m = self.landmarks_.pos_
+        pt3_m = pt3_m[np.abs(pt3_m[:,2]) < 2.0 ] # ground-plane +- 2.0m
         pt2_c_rec, _ = self.cvt_.pt3_pose_to_pt2_msk(pt3_m, pose)
 
         # convert to base_link coordinates
