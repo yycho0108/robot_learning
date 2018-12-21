@@ -10,7 +10,7 @@ from matplotlib import pyplot as plt
 
 from sklearn.neighbors import NearestNeighbors
 
-from vo_common import recover_pose
+from vo_common import recover_pose, drawMatches
 
 class ClassicalVO(object):
     def __init__(self):
@@ -95,7 +95,9 @@ class ClassicalVO(object):
                 translate=[0.25,0,0.1]) # camera frame to base_link frame
         self.T_b2c_ = tx.inverse_matrix(self.T_c2b_) # base_link frame to camera frame
 
-    def track(self, img1, img2, pt1, pt2=None):
+    def track(self, img1, img2, pt1, pt2=None,
+            reverse_check=True
+            ):
         """
         Track points from source img to destination img.
 
@@ -108,7 +110,7 @@ class ClassicalVO(object):
             pt2(np.ndarray): Tracked Points in Target Image, [N,2]
             msk(np.ndarray): Boolean mask array of valid track points.
         """
-        flags = cv2.OPTFLOW_LK_GET_MIN_EIGENVALS
+        flags = 0#cv2.OPTFLOW_LK_GET_MIN_EIGENVALS
         if pt2 is not None:
             flags += cv2.OPTFLOW_USE_INITIAL_FLOW
 
@@ -125,6 +127,21 @@ class ClassicalVO(object):
         pt2, st, err = cv2.calcOpticalFlowPyrLK(
                 img1_gray, img2_gray, pt1, pt2,
                 **lk_params)
+
+        if reverse_check:
+            # unset initial flow flag
+            lk_params['flags'] &= (~cv2.OPTFLOW_USE_INITIAL_FLOW)
+
+            pt1_r, st, err = cv2.calcOpticalFlowPyrLK(
+                img2_gray, img1_gray, pt2, None,
+                **lk_params)
+            d_rec = np.linalg.norm(pt1 - pt1_r, axis=-1)
+            msk_err = (d_rec <= 2.0)
+            #print('track err : {}/{}'.format(msk_err.sum(), msk_err.size))
+        else:
+            msk_err = np.ones(
+                    len(pt2), dtype=np.bool)
+
         #print 'err stats : ', err.min(), err.max(), err.std(), err.mean()
 
         h, w = np.shape(img2)[:2]
@@ -138,7 +155,11 @@ class ClassicalVO(object):
         #msk_ef = np.less(err[:,0], 1.0)
         #msk_hu = np.less(np.abs(pt2[:,1]-pt1[:,1]), 5.0) # heuristic
         #msk_ef = np.less(err[:,0], 10.0)
-        msk = np.logical_and.reduce([msk_in, msk_st])#, msk_ef])
+
+        msk = np.logical_and.reduce([
+            msk_err,
+            msk_in,
+            msk_st])#, msk_ef])
 
         return pt2, msk
 
@@ -317,7 +338,7 @@ class ClassicalVO(object):
         #        np.linalg.inv(Kmat.T), Fmat, np.linalg.inv(Kmat)
         #        ])
         Emat, msk = cv2.findEssentialMat(pt1, pt2, Kmat,
-                method=method, prob=0.999, threshold=0.1)
+                method=method, prob=0.999, threshold=1.0)
 
         msk = np.asarray(msk[:,0]).astype(np.bool)
         # filter points + bookkeeping mask

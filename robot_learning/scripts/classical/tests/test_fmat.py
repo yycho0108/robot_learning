@@ -198,8 +198,6 @@ def main():
         s = int(sys.argv[1])
         print s
         np.random.seed(s)
-    else:
-        np.random.seed(0)
 
     # parameters
     #method = cv2.FM_LMEDS
@@ -219,16 +217,15 @@ def main():
     p_min = [-5.0, -5.0, 0.0] # points distribution
     p_max = [5.0, 5.0, 5.0]   # points distribution
 
-    t_max = 1.0
+    t_max = 2.0
     r_max = np.deg2rad(10.0)#(np.pi / 4.0)
     n_pt  = 512 
     d_max = np.inf
 
     # camera relative pose definition
     t = np.random.uniform(-t_max, t_max, size=3)
-    t /= np.linalg.norm(t) # convert to unit translation, for convenience
+    #t /= np.linalg.norm(t) # convert to unit translation, for convenience
 
-    #if(t[2]<0): t*=-1
     print('Real Translation', t)
     r = np.random.uniform(-r_max, r_max, size=3)
     R = tx.euler_matrix(*r)[:3,:3]
@@ -248,7 +245,7 @@ def main():
 
     pt = generate_valid_points(
         n = n_pt,
-        d_min=0.1, d_max=10.0,
+        d_min=0.1, d_max=100.0,
         h = 240.0, w = 320.0,
         fov_v=0.895, fov_h=1.139,
         T_alt = T_alt)
@@ -266,6 +263,7 @@ def main():
             np.zeros_like(tvec),
             cameraMatrix=K,
             distCoeffs=D)
+    pt1 = np.random.normal(pt1, 2.0) # + noise
     pt1 = np.round(pt1)
     pt1 = np.squeeze(pt1, axis=1)
 
@@ -281,6 +279,7 @@ def main():
             cameraMatrix=K,
             distCoeffs=D,
             )
+    pt2 = np.random.normal(pt2, 2.0) # + noise
     pt2 = np.round(pt2)
     pt2 = np.squeeze(pt2, axis=1)
 
@@ -313,7 +312,8 @@ def main():
 
     Emat, msk = cv2.findEssentialMat(pt1, pt2, K,
             method=method,
-            prob=0.999, threshold=0.1)
+            prob=0.9999, threshold=1.0)
+    msk = msk[:,0]
     msk = msk.astype(np.bool)
 
     print('inl : {}/{}'.format(msk.sum(), msk.size))
@@ -323,14 +323,16 @@ def main():
     Emat2 = Emat
 
     print '---------------------'
-    msk = msk[:,0]
     n_in, R, t, msk2, pt3 = recover_pose(Emat2, K, pt1[msk], pt2[msk])
     print 'RP'
+    print('inl : {}/{}'.format(msk2.sum(), msk2.size))
     print_Rt(R,t)
     print '---------------------'
 
+    print pt3.T.shape
+    print pt2[msk][msk2].shape
     res = cv2.solvePnPRansac(
-            pt3.T,
+            pt3.T[msk2],
             pt2[msk][msk2], 
             K, D*0,
             useExtrinsicGuess=False,
@@ -360,18 +362,18 @@ def main():
     #print 'FM'
     #print_Rt(R,t)
 
-    #n_in, R, t, msk, _ = cv2.recoverPose(Emat2, # pt2 w.r.t pt1
-    #        pt2,
-    #        pt1,
-    #        cameraMatrix=K,
-    #        distanceThresh=d_max)
+    n_in, R, t, msk, _ = cv2.recoverPose(Emat2, # pt2 w.r.t pt1
+            pt1[msk],
+            pt2[msk],
+            cameraMatrix=K,
+            distanceThresh=d_max)
 
 
-    #print('recoverPose Inliers {}/{}'.format(n_in, msk.size))
-    #print 'EM'
-    #print_Rt(R,t)
+    print('recoverPose Inliers {}/{}'.format(n_in, msk.size))
+    print 'EM'
+    print_Rt(R,t)
 
-    print(t_gt.dot(t))
+    print((t_gt / np.linalg.norm(t_gt)).dot(t / np.linalg.norm(t)))
 
     # visualization
 

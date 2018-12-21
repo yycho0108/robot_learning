@@ -75,7 +75,7 @@ def recover_pose(E,K,
 
     R, t = perm[sel]
     msk = msks[sel]
-    pt3 = pt3s[sel]
+    pt3 = pt3s[sel][:,msk]
     n_in = msk.sum()
 
     return n_in, R, t, msk, pt3
