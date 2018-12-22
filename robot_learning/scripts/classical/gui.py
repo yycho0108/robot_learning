@@ -40,9 +40,16 @@ class VoGUI(object):
     def draw_top(ax,
             path0, pts,
             path1=None, scan=None,
-            cov=None
+            cov=None,
+            col=None
             ):
         ax.cla()
+
+        # reconstruction
+        if col is None:
+            ax.plot(pts[:,0], pts[:,1], 'r.', label='points')
+        else:
+            ax.scatter(pts[:,0], pts[:,1], c=col[...,::-1]/255., label='points')
 
         # origin
         ax.plot([0],[0],'k+')
@@ -63,13 +70,10 @@ class VoGUI(object):
             ell.set_alpha(0.25)
             ell.set_facecolor('b')
 
-
         # trajectory (ground truth)
-        ax.plot(path1[:,0], path1[:,1], 'k--')
-        ax.plot(path1[-1:,0], path1[-1:,1], 'ko', markersize=5, label='ground truth')
+        ax.plot(path1[:,0], path1[:,1], 'r--')
+        ax.plot(path1[-1:,0], path1[-1:,1], 'ro', markersize=5, label='ground truth')
 
-        # reconstruction
-        ax.plot(pts[:,0], pts[:,1], 'r.', label='points')
 
         ax.set_title('VO Status Overview')
         ax.legend()
@@ -99,10 +103,16 @@ class VoGUI(object):
         ax.set_aspect('equal', 'datalim')
 
     @staticmethod
-    def draw_3d(ax, pts):
+    def draw_3d(ax, pts, col=None):
         ax.cla()
-        ax.plot(pts[:,0], pts[:,1], pts[:,2], '.')
-        axisEqual3D(ax)
+        if col is None:
+            ax.plot(pts[:,0], pts[:,1], pts[:,2], '.')
+        else:
+            ax.scatter(pts[:,0], pts[:,1], pts[:,2], c=col[...,::-1]/255.)
+        #axisEqual3D(ax)
+        ax.set_xlim(-1.0, 5.0)
+        ax.set_ylim(-5.0, 5.0)
+        ax.set_zlim(-5.0, 5.0)
         ax.set_xlabel('x')
         ax.set_ylabel('y')
         ax.set_zlabel('z')

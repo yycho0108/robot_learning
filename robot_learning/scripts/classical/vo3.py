@@ -1,3 +1,7 @@
+"""
+Semi-Urgent TODOs:
+    - memory management (masks/fancy indexing creates copies; reuse same-sized arrays etc.)
+"""
 from collections import namedtuple, deque
 from filterpy.kalman import InformationFilter
 from tf import transformations as tx
@@ -5,390 +9,145 @@ import cv2
 import numpy as np
 
 from vo_common import recover_pose, drawMatches
+from vo_common import robust_mean, oriented_cov, show_landmark_2d
+from vo_common import Landmarks, Conversions
 from matplotlib import pyplot as plt
 from sklearn.neighbors import NearestNeighbors
 from matplotlib.patches import Ellipse
+from mpl_toolkits.mplot3d import Axes3D
 
-def robust_mean(x, margin=10.0, weight=None):
-    if len(x) <= 0:
-        return np.nan
-    x = np.asarray(x, dtype=np.float32)
-    s_lo = np.percentile(x, 50.0 - margin)
-    s_hi = np.percentile(x, 50.0 + margin)
-    msk = np.logical_and.reduce([
-        s_lo <= x, x <= s_hi
-        ])
+tfig = None
 
-    if weight is None:
-        return x[msk].mean()
-    else:
-        # compute normalized weight
-        #print 'weighting'
-        #print weight.shape
-        #print msk.shape
-        w = weight[msk[...,0]]
-        w = w / w.sum()
+def axisEqual3D(ax):
+    """ from https://stackoverflow.com/a/19248731 """
+    extents = np.array([getattr(ax, 'get_{}lim'.format(dim))() for dim in 'xyz'])
+    sz = extents[:,1] - extents[:,0]
+    centers = np.mean(extents, axis=1)
+    maxsize = max(abs(sz))
+    r = maxsize/2
+    for ctr, dim in zip(centers, 'xyz'):
+        getattr(ax, 'set_{}lim'.format(dim))(ctr - r, ctr + r)
 
-        return np.sum(x[msk] * w, axis=-1)
-
-def zu2Rs(u):
-    """
-    specialization of zu2R for batch u.
-    computes R such that R.z = u, where z=(0,0,1)
-    requires u to be a unit vector.
-    """
-
-    u_z = np.float32([0,0,1]).reshape(1,3)
-    c = np.sum(u_z*u, axis=-1) # cos of angle
-    sax = np.cross(u_z, u) # sin * axis
-    ax = sax / np.linalg.norm(sax, axis=-1, keepdims=True)
-    A = ax[:,None,:] * ax[:,:,None]
-
-    sx, sy, sz = sax.T
-
-    b = np.asarray([
-        c,-sz,sy,
-        sz,c,-sx,
-        -sy,sx,c]).T.reshape(-1,3,3)
-    R = (1 - c).reshape(-1,1,1) * A + b
-    return R
-
-def oriented_cov(
-        pt3,
-        cov0,
+def ransac_update_num_iters(p, ep, mpt, it,
+        eps = np.finfo(np.float32).eps
         ):
     """
-    According to https://math.stackexchange.com/a/476311
+    based on opencv calib3d/ptsetreg.cpp
+    Still have no idea why this is valid.
     """
+    p  = np.clip(p, 0, 1)
+    ep = np.clip(ep, 0, 1)
 
-    d = np.linalg.norm(pt3, axis=-1, keepdims=True)
-    u_z = pt3 / d # Nx3
-    R = zu2Rs(u_z)
+    nmr = max(1.0 - p, eps)
+    dmr = 1.0 - np.power(1.0-ep, mpt)
 
-    RT = np.transpose(R, [0,2,1])
-    C = np.matmul(np.matmul(R, cov0[None,...]), RT)
+    if dmr < eps:
+        return 0
 
-    # apply depth scale for variance
-    # C = d[...,None] * C
-    return C
+    nmr = np.log(nmr)
+    dmr = np.log(dmr)
 
-lmk_fig = None
-def show_landmark_2d(pos, cov, clear=True, draw=True,
-        style='k+',
-        colors=None,
-        label=''
+    res = it if (dmr >= 0 or -nmr >= it * -dmr) else np.round(nmr/dmr).astype(np.int32)
+    return res
+
+def estimate_plane_ransac(pts,
+        max_it=1000,
+        conf = 0.99,
+        thresh = 0.1,
+        nvec=None
         ):
-    """ from https://stackoverflow.com/a/20127387 """
 
-    global lmk_fig
-    if lmk_fig is None:
-        lmk_fig = plt.figure()
-    ax = lmk_fig.gca()
-    if clear:
-        ax.cla()
+    best_fit = None
+    best_err = np.inf
+    best_msk = None
 
-    # subsample
-    if len(pos) <= 0:
-        return
+    n_it = max(max_it, 1)
+    i = 0
 
-    n = min(256, len(pos))
-    idx = np.random.randint(0, len(pos), size=n)
-    pos = pos[idx]
-    cov = cov[idx]
+    while i < n_it:
+        ## select three points that define a plane and go from there.
+        #sel = np.random.randint(len(pts), size=3)
+        sel = np.random.choice(len(pts), size=3, replace=False)
 
-    x = pos[:,2]
-    y = -pos[:,1]
+        c = np.mean(pts[sel], axis=0, keepdims=True) # plane center
 
+        if nvec is None:
+            pa, pb, pc = pts[sel]
 
-    if colors is None:
-        colors = np.random.uniform(size=(n,3))
-    
-    ax.plot(x, y, style, alpha=0.75,label=label
-            )
+            ba = tx.unit_vector(pb-pa)
+            ca = tx.unit_vector(pc-pa)
 
-    for p,c,col in zip(pos, cov, colors):
-        # re-orient to the things we care about ...
-        x,y = p[2], -p[1]
-        c_2d = np.reshape([
-                c[2,2], c[2,1],
-                c[1,2], c[1,1]], (2,2))
-
-        l, v = np.linalg.eig(c_2d)
-        l    = np.sqrt(l)
-        ell = Ellipse(xy=(x, y),
-                    width=l[0]*2, height=l[1]*2,
-                    angle=np.rad2deg(np.arccos(v[0, 0])))
-        #ell.set_facecolor('none') #??
-        ax.add_artist(ell)
-        ell.set_clip_box(ax.bbox)
-        ell.set_alpha(0.25)
-        ell.set_facecolor(col)
-
-    ax.set_xlim(-1.0, 10.0)
-    ax.set_ylim(-5.0, 5.0)
-    #ax.set_aspect('equal', 'datalim')
-    #ax.autoscale(True)
-    #print 'should have added {} ellipses'.format(len(pos))
-    if draw:
-        ax.legend()
-        ax.plot([0],[0],'k+')
-        lmk_fig.canvas.draw()
-        plt.pause(0.001)
-
-class Landmark(object):
-    def __init__(self,
-            pos,
-            var,
-            des,
-            kpt,
-            trk,
-            ang
-            ):
-        self.pos_ = pos # 3D Position = [3]
-        self.var_ = var # Variance = [3x3]
-        self.des_ = des # Descriptor = [32?]
-        self.kpt_ = kpt # Keypoint = [cv2.KeyPoint]
-        self.trk_ = trk # Tracking = Bool
-        self.ang_ = ang # View Angle = Float - useful for loop closure
-
-    def update(self):
-        pass
-
-# manage multiple landmarks
-# for easier queries.
-
-class Landmarks(object):
-    def __init__(self, n_des=32):
-        self.pos_ = np.empty((0,3), dtype=np.float32)
-        self.var_ = np.empty((0,3,3), dtype=np.float32)
-        self.des_ = np.empty((0,n_des), dtype=np.int32)
-        self.ang_ = np.empty((0,1), dtype=np.float32)
-        #self.kpt_
-        #self.trk_
-
-class Conversions(object):
-    """
-    Utilities class that deal with representations.
-    """
-    def __init__(self, K, D,
-            T_c2b,
-            det=None,
-            des=None,
-            match=None
-            ):
-        self.K_ = K
-        self.D_ = D
-        self.T_c2b_ = T_c2b
-        self.T_b2c_ = tx.inverse_matrix(T_c2b)
-
-        if (det is None) and (des is None):
-            # default detector+descriptor=orb
-            orb = cv2.ORB_create(
-                    nfeatures=8192,
-                    scaleFactor=1.1,
-                    nlevels=8
-                    )
-            det = orb
-            des = orb
-
-        self.det_ = det
-        self.des_ = des
-        # NOTE : des must be assigned prior to
-        # self._build_matcher()
-        if match is None:
-            match = self._build_matcher()
-            self.match_ = match
-
-    def _build_matcher(self):
-        # define un-exported enums from OpenCV
-        FLANN_INDEX_KDTREE = 0
-        FLANN_INDEX_LSH = 6
-
-        # TODO : figure out what to set for
-        # search_params
-        search_params = dict(checks=50)
-        # or pass empty dictionary
-
-        # build flann matcher
-        fn = None
-        if isinstance(self.des_, cv2.ORB):
-            # HAMMING
-            index_params= dict(algorithm = FLANN_INDEX_LSH,
-                       table_number = 6, # 12
-                       key_size = 12,     # 20
-                       multi_probe_level = 1) #2
-            flann = cv2.FlannBasedMatcher(index_params,search_params)
-            fn = lambda a,b : flann.knnMatch(np.uint8(a), np.uint8(b), k=2)
+            n = tx.unit_vector(np.cross(ba, ca)) # plane normal
         else:
-            index_params = dict(
-                    algorithm = FLANN_INDEX_KDTREE,
-                    trees = 5)
-            flann = cv2.FlannBasedMatcher(index_params,search_params)
-            fn = lambda a,b : flann.knnMatch(np.float32(a), np.float32(b), k=2)
-        return fn
+            n = nvec
 
-    @staticmethod
-    def kpt_to_pt(kpt):
-        # k->p
-        return cv2.KeyPoint.convert(kpt)
+        err = (pts - c).dot(n.reshape(-1,1)) # Nx3 . 3x1
+        err = np.abs(err)
 
-    @staticmethod
-    def pt_to_kpt(pt):
-        # p->k
-        raise NotImplementedError("Point To Keypoint not supported")
+        msk = (err < thresh)
+        n_in = msk.sum()
+        err = err[msk].sum()
 
-    def img_to_kpt(self, img, subpix=True):
-        # i->k
-        kpt = self.det_.detect(img)
-        #kpt = self.det_.detect(img[240:])
-        #for k in kpt:
-        #    k.pt = tuple(k.pt[0]+240, k.pt[1])
+        n_it = ransac_update_num_iters(conf,
+                float(msk.size - n_in) / msk.size, # idk what ep is
+                3, # 3 points required to define a plane
+                n_it)
 
-        if subpix:
-            # sub-pixel corner refinement
-            crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 100, 0.01)
+        if err < best_err:
+            best_err = err
+            best_fit = (c, n)
+            best_msk = msk
 
-            p_in = cv2.KeyPoint.convert(kpt)
-            img_g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            spx_kpt = cv2.cornerSubPix(img_g, p_in, (3,3), (-1,-1),
-                    criteria = crit)
-            for k, pt in zip(kpt, spx_kpt):
-                k.pt = tuple(pt)
-        return kpt
+        i += 1
 
-    def img_kpt_to_kpt_des(self, img, kpt):
-        # i,k->k,d
-        # -- extract descriptors --
-        kpt, des = self.des_.compute(img, kpt)
+    #print('completed in {} iterations'.format(i))
 
-        if des is None:
-            return None
+    return best_fit, best_err, best_msk
 
-        kpt = np.asarray(kpt)
-        des = np.asarray(des)
-        return [kpt, des]
 
-    def pt2_to_pt2u(self, pt2):
-        pt2 = cv2.undistortPoints(pt2[None,...],
-                self.K_,
-                self.D_,
-                P=self.K_)[0]
-        return pt2
+def get_points_color(img, pts, w=1):
+    # iterative method
 
-    def pt3_pose_to_pt2_msk(self, pt3, pose, distort=False):
-        # pose = (x,y,h)
-        # NOTE: pose is specified w.r.t base_link, not camera.
+    n, m = img.shape[:2]
+    pis, pjs = np.round(pts[:,::-1]).T.reshape(2,-1).astype(np.int32)
+    oi, oj = np.mgrid[-w:w+1,-w:w+1]
+    iw, jw = pis[:,None,None] + oi, pjs[:,None,None] + oj
+    iw = np.clip(iw, 0, n-1)
+    jw = np.clip(jw, 0, m-1)
 
-        D = self.D_
-        if not distort:
-            D *= 0.0
-        
-        pt3_cam = self.map_to_cam(pt3, pose)
+    cols_w = img[iw, jw] # n,2*w+1,2*w+1,3
 
-        pt2, _ = cv2.projectPoints(
-                pt3_cam,
-                np.zeros(3),
-                np.zeros(3), # zeros, because conversions happened above
-                cameraMatrix=self.K_,
-                distCoeffs=D,
-                # TODO : verify if it is appropriate to apply distortion
-                )
-        pt2 = np.squeeze(pt2, axis=1)
+    # opt 1 : naive mean
+    # cols = np.mean(cols_w, axis=(1,2))
 
-        # valid visibility mask
-        lm_msk = (pt3_cam[:,2] > 1e-3) # z-positive
-        lm_msk = np.logical_and.reduce([
-            pt3_cam[:,2] > 1e-3, # z-positive
-            0 <= pt2[:,0],
-            pt2[:,0] < 640, # TODO : hardcoded
-            0 <= pt2[:,1],
-            pt2[:,1] < 480 # TODO : hardcoded
-            ])
-        return pt2, lm_msk
+    cols = cols_w.astype(np.float32)
+    cols = np.sqrt(np.mean(np.square(cols),axis=(1,2)))
+    #cols = np.linalg.norm(cols_w, axis=(1,2))
 
-    def des_des_to_match(self, des1, des2,
-            lowe=0.75,
-            maxd=64.0
-            ):
-        # TODO : support arbitrary matchers or something
-        # currently only supports wrapper around FLANN
-        match = self.match_(des1, des2) # cv2.DMatch
 
-        ## apply lowe + distance filter
-        good = []
-        for e in match:
-            if not len(e) == 2:
-                continue
-            (m, n) = e
-            # TODO : set threshold for lowe's filter
-            # TODO : set reasonable maxd for GFTT, for instance.
-            c_lowe = (m.distance <= lowe * n.distance)
-            c_maxd = (m.distance <= maxd)
-            if (c_lowe and c_maxd):
-                good.append(m)
+    # opt 2 : rms
+    #cols = np.sqrt(np.mean(np.square(cols_w),axis=(1,2)))
+    #print 'stat-pre', cols_w.std(axis=(0,1,2))
+    #cols = np.linalg.norm(cols_w, axis=(1,2))
+    #csq  = np.square(cols_w) #R
+    #csum = np.mean(csq, axis=(1,2)) #M
+    #cols = np.sqrt(csum) #S
+    #print 'stat-post', cols.std(axis=0)
+    #cols = np.linalg.norm(cols_w, axis=(1,2)).astype(np.float32) # n,3
 
-        # extract indices
-        i1, i2 = np.int32([
-            (m.queryIdx, m.trainIdx) for m in good
-            ]).reshape(-1,2).T
+    #for oi in range(-w,w+1):
+    #    for oj in range(-w,w+1):
+    #        img[pis-oi,pjs-oj]
+    #cs = []
+    #for (pi,pj) in zip(pis, pjs):
+    #    c = np.linalg.norm(img[pi-w:pi+w, pj-w:pj+w], axis=(0,1))
+    #    cs.append(c)
 
-        return i1, i2
-
-    @staticmethod
-    def pt_to_pth(pt):
-        # copied
-        return np.pad(pt, [(0,0),(0,1)],
-                mode='constant',
-                constant_values=1.0
-                )
-
-    @staticmethod
-    def pth_to_pt(pth):
-        # copied
-        return (pth[:, :-1] / pth[:, -1:])
-
-    def pose_to_T(self, pose):
-        x, y, h = pose
-        # transform points from base_link to origin coordinate system.
-        return tx.compose_matrix(
-                angles=[0.0, 0.0, h],
-                translate=[x, y, 0.0])
-
-    def map_to_cam(self, pt, pose):
-        # convert map-frame points to cam-frame points
-        # NOTE: pose is specified w.r.t base_link, not camera.
-        pt_h = self.pt_to_pth(pt)
-
-        T_b2o = self.pose_to_T(pose)
-        T_o2b = tx.inverse_matrix(T_b2o)
-
-        pt_cam_h = np.linalg.multi_dot([
-            pt_h,
-            self.T_c2b_.T, # now base0 coordinates
-            T_o2b.T, # now base1 coordinates
-            self.T_b2c_.T # now cam1 coordinates
-            ])
-        pt_cam = self.pth_to_pt(pt_cam_h)
-        return pt_cam
-
-    def cam_to_map(self, pt, pose):
-        # convert cam-frame points to map-frame points
-        # NOTE: pose is specified w.r.t base_link, not camera.
-        pt_h = self.pt_to_pth(pt)
-        T_b2o = self.pose_to_T(pose)
-        T_o2b = tx.inverse_matrix(T_b2o)
-
-        pt_map_h = np.linalg.multi_dot([
-            pt_h,
-            self.T_c2b_.T,
-            T_b2o.T,
-            self.T_b2c_.T
-            ])
-        pt_map = self.pth_to_pt(pt_map_h)
-        return pt_map
-
-    def __call__(self, ftype, *a, **k):
-        return self.f_[ftype](*a, **k)
+    # vectorized method
+    #cs = np.clip(cs, 0, 255) # TODO : evaluate if necessary
+    #print 'cmax(pre)', cols_w.max()
+    #print 'cmax(post)', cols.max()
+    return np.asarray(cols, dtype=img.dtype)
 
 class ClassicalVO(object):
     def __init__(self):
@@ -499,7 +258,8 @@ class ClassicalVO(object):
             des_p, des_c,
             msk_t, msk_e, msk_r,
             pt2_u_p, pt2_u_c,
-            pt3
+            pt3,
+            img_c, pt2_c
             ):
         # frame-to-map processing
         # (i.e. uses landmark data)
@@ -774,6 +534,8 @@ class ClassicalVO(object):
                 pt3_new_c,
                 pose)
 
+        col_new = get_points_color(img_c, pt2_c[msk_t][msk_e][msk_r][lm_new_msk][msk_n], w=1)
+
         # append new landmarks ...
         self.landmarks_.ang_ = np.concatenate(
                 [self.landmarks_.ang_, ang_new], axis=0)
@@ -783,6 +545,8 @@ class ClassicalVO(object):
                 [self.landmarks_.pos_, pos_new], axis=0)
         self.landmarks_.var_ = np.concatenate(
                 [self.landmarks_.var_, var_new], axis=0)
+        self.landmarks_.col_ = np.concatenate(
+                [self.landmarks_.col_, col_new], axis=0)
 
         return scale
 
@@ -875,6 +639,8 @@ class ClassicalVO(object):
 
         n_in, R, t, msk_r, pt3 = recover_pose(E, self.K_,
                 pt2_u_c[msk_e], pt2_u_p[msk_e], log=False,
+                z_min = 0.01 / scale,
+                z_max = 100.0 / scale
                 #z_max = 5000.0
                 # = usually ~10m
                 )
@@ -882,29 +648,70 @@ class ClassicalVO(object):
         pt3 = pt3.T
 
         # == process ground plane ==
-        camera_height = 0.113
-        dh_thresh = 0.1
+        camera_height = 0.113 # TODO : hardcoded
         pt3_base = pt3.dot(self.cvt_.T_c2b_[:3,:3].T)
+        # only apply rotation: pt3_base still w.r.t camera offset @ base orientation
 
+        # opt1 : directly estimate ground plane by filtering height
+        dh_thresh = 0.1
         gp_msk = np.logical_and.reduce([
             pt3_base[:,2] < (-camera_height + dh_thresh) / scale, # only filter for down-ness
             (-camera_height -dh_thresh)/scale < pt3_base[:,2], # sanity check with large-ish height value
             pt3_base[:,0] < 50.0 / scale  # sanity check with large-ish depth value
             ])
-
         pt_gp = pt3_base[gp_msk]
+
+        # opt2 : estimate ground-plane for projection
+        # unfortunately, there's far too few points on the ground plane
+        # to compute a reasonable estimate.
+
+        #dh_thresh = 0.3
+        #gp_msk_lax = np.logical_and.reduce([
+        #    pt3_base[:,0] < (10.0 / scale),
+        #    pt3_base[:,2] < (-camera_height + dh_thresh) / scale,
+        #    (-camera_height - dh_thresh)/scale < pt3_base[:,2]
+        #    ])
+
+        ## get mask from plane estimation
+        #gp_fit, gp_err, gp_msk = estimate_plane_ransac(
+        #        pt3_base[gp_msk_lax],
+        #        1000,
+        #        0.999,
+        #        0.1 / scale, # ~ apply 10cm tolerance for ground
+        #        nvec = np.float32([0.0, 0.0, 1.0])
+        #        )
+        ##print 'gp dist', gp_fit[0].dot(gp_fit[1])
+        ##print 'gp nvec', gp_fit[1]
+        #gp_msk = gp_msk[:,0].astype(np.bool)
+        #pt_gp = pt3_base[gp_msk_lax][gp_msk]
+
+        #tmp = pt3_base[gp_msk_lax][gp_msk]
+        #global tfig
+        #if tfig is None:
+        #    tfig = plt.figure()
+        #    tax  = tfig.add_subplot(1,1,1, projection='3d')
+
+        #tfig.gca().cla()
+        #tfig.gca().plot(tmp[:,0],tmp[:,1],tmp[:,2],'.')
+        #axisEqual3D(tfig.gca())
+        #tfig.gca().set_xlabel('x')
+        #tfig.gca().set_ylabel('y')
+        #tfig.gca().set_zlabel('z')
+
         scale_gp = scale
+        #print 'gp inl : {}/{}'.format(gp_msk.sum(), gp_msk.size)
         if gp_msk.sum() > 0:
             h_gp = robust_mean(-pt_gp[:,2])
+            #h_gp = - gp_fit[0].dot(gp_fit[1])[0]
+            #print 'gp height?', h_gp
             #h_gp = np.median(pt_gp[:,1])
 
             #print 'ground-plane {}/{}'.format(gp_msk.sum(), gp_msk.size)
             #print (pt_gp.min(axis=0), pt_gp.max(axis=0), pt_gp.mean(axis=0))
             if not np.isnan(h_gp):
                 scale_gp = camera_height / h_gp
-            print 'scale_gp : {:.2f}/{:.2f}={:.2f}%'.format(scale_gp, scale,
+            print 'scale_gp : {:.4f}/{:.4f}={:.2f}%'.format(scale_gp, scale,
                     100 * scale_gp / scale)
-            print 'inliers : {}/{}'.format(gp_msk.sum(), gp_msk.size)
 
             # use gp scale instead
             scale = scale_gp
@@ -929,7 +736,8 @@ class ClassicalVO(object):
                     des_p, des_c,
                     msk_t, msk_e, msk_r,
                     pt2_u_p, pt2_u_c,
-                    pt3
+                    pt3,
+                    img_c, pt2_c,
                     )
             # recompute rectified pose_c_r
             pose_c_r = self.pRt2pose(pose_p, R, scale*t)
@@ -956,19 +764,28 @@ class ClassicalVO(object):
         #idx  = np.argsort(s_xy_r)
         #pt3_m = self.landmarks_.pos_[idx[:512]]
         pt3_m = self.landmarks_.pos_
-        #pt3_viz_msk = np.logical_and.reduce([
-        #    0.05 <= -pt3_m[:,1],
-        #    -pt3_m[:,1] < 2.0])
-        #pt3_m = pt3_m[pt3_viz_msk] # ground-plane +- 2.0m
+        col_m = self.landmarks_.col_
+
+        # convert to base_link coordinates
+        pt3_m_b = pt3_m.dot(self.T_c2b_[:3,:3].T) + self.T_c2b_[:3,3]
+
+        pt3_viz_msk = np.logical_and.reduce([
+            -0.2 <= pt3_m_b[:,2],
+            pt3_m_b[:,2] < 5.0])
+        pt3_m = pt3_m[pt3_viz_msk] # ground-plane +- 2.0m
+        col_m = col_m[pt3_viz_msk]
+
         pt2_c_rec, rec_msk = self.cvt_.pt3_pose_to_pt2_msk(pt3_m, pose, distort=True)
-        pt3_m = pt3_m[rec_msk]
+        #pt3_m = pt3_m[rec_msk]
+        #col_m = col_m[rec_msk]
         pt2_c_rec = pt2_c_rec[rec_msk]
+
         # ================================
 
         # convert to base_link coordinates
         pt3_m = pt3_m.dot(self.T_c2b_[:3,:3].T) + self.T_c2b_[:3,3]
 
-        return True, (mim, h_c, x_c, pt2_c_rec, pt3_m, '')
+        return True, (mim, h_c, x_c, pt2_c_rec, pt3_m, col_m, '')
 
 def main():
     K = np.float32([500,0,320,0,500,240,0,0,1]).reshape(3,3)

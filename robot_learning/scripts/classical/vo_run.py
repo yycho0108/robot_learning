@@ -89,6 +89,7 @@ class CVORunner(object):
             scan_c,
             pts_r,
             cov,
+            pts_col,
             msg='title'
             ):
         # unroll
@@ -109,9 +110,9 @@ class CVORunner(object):
 
         VoGUI.draw_img(ax0, aimg[..., ::-1])
         ax0.set_title('Tracking Visualization')
-        VoGUI.draw_top(ax1, rec_path, pts2, odom[:i+1], scan_c, cov)
+        VoGUI.draw_top(ax1, rec_path, pts2, odom[:i+1], scan_c, cov, pts_col)
         #VoGUI.draw_top(ax1, rec_path, pts2, np.stack([tx,ty,th], axis=-1), scan_c)
-        VoGUI.draw_3d(ax2, pts3)
+        VoGUI.draw_3d(ax2, pts3, pts_col)
         VoGUI.draw_2d_proj(ax3, imgs[i, ..., ::-1], pts_r)
         VoGUI.draw_err(ax4, rec_path, odom[:i])
 
@@ -232,7 +233,7 @@ class CVORunner(object):
             # skip filter updates
             return
 
-        (aimg, vo_h, vo_t, pts_r, pts3, msg) = res
+        (aimg, vo_h, vo_t, pts_r, pts3, col_p, msg) = res
         #dps = np.float32([dt[0], dt[1], dh])
         #print('dh', np.rad2deg(dh))
         #print('(pred-gt) {} vs {}'.format(dps, dps_gt) )
@@ -255,7 +256,7 @@ class CVORunner(object):
             scan_c = None
 
         ### EVERYTHING FROM HERE IS PLOTTING + VIZ ###
-        self.show(aimg, pts3, pts2, scan_c, pts_r, ukf.P, ('[%d/%d] '%(i,n)) + msg)
+        self.show(aimg, pts3, pts2, scan_c, pts_r, ukf.P, col_p, ('[%d/%d] '%(i,n)) + msg)
 
     def quit(self):
         self.quit_ = True
