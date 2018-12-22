@@ -213,15 +213,14 @@ class CVORunner(object):
         #ukf.P=np.abs(ukf.P)
 
         prv = ukf.x[:3].copy()
-        try:
-            ukf.predict(dt=dt)
-        except Exception as e:
-            print 'Wat? {}'.format(e)
-            print 'Q', ukf.Q
-            print 'R', ukf.R
-            print 'x', ukf.x
-            print 'P', ukf.P
-            raise e
+        ukf.predict(dt=dt)
+        cur = ukf.x[:3]
+
+        # override scale, since initialization is complete
+        if i >= 2:
+            # TODO : set flag to track scale initialization instead
+            scale = np.linalg.norm(cur[:2] - prv[:2])
+
         # TODO : currently passing 'ground-truth' position
         #suc, res = vo(img, odom[i], s=s)
         suc, res = vo(img, ukf.x[:3].copy(), scale=s)

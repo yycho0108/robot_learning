@@ -161,7 +161,7 @@ class ClassicalVO(object):
 
         # conversion from camera frame to base_link frame
         self.T_c2b_ = tx.compose_matrix(
-                angles=[-np.pi/2 - np.deg2rad(30),0.0,-np.pi/2],
+                angles=[-np.pi/2,0.0,-np.pi/2],
                 translate=[0.174,0,0.113])
 
         # define "system" parameters
@@ -439,9 +439,9 @@ class ClassicalVO(object):
                     #pnp_h = np.rad2deg(pnp_h)
                     print('pnp : {}, {}, ({}/{})'.format(
                         pnp_p, pnp_h, len(inliers), len(pt_world)))
-
-                    self.pnp_p_ = pnp_p
-                    self.pnp_h_ = pnp_h
+                    # NOTE : uncomment this to revive pnp visualization
+                    #self.pnp_p_ = pnp_p
+                    #self.pnp_h_ = pnp_h
                 else:
                     self.pnp_p_ = None
                     self.pnp_h_ = None
@@ -591,18 +591,18 @@ class ClassicalVO(object):
 
         # == obtain next-frame keypoints ==
         # opt1 : points by track
-        # pt2_c, msk_t = self.track(img_p, img_c, pt2_p)
+        pt2_c, msk_t = self.track(img_p, img_c, pt2_p)
 
         # opt2 : points by match
-        i1, i2 = self.cvt_.des_des_to_match(des_p, des_c)
-        msk_t = np.zeros(len(pt2_p), dtype=np.bool)
-        msk_t[i1] = True
-        pt2_c = np.zeros_like(pt2_p)
-        pt2_c[i1] = self.cvt_.kpt_to_pt(kpt_c[i2])
+        # i1, i2 = self.cvt_.des_des_to_match(des_p, des_c)
+        # msk_t = np.zeros(len(pt2_p), dtype=np.bool)
+        # msk_t[i1] = True
+        # pt2_c = np.zeros_like(pt2_p)
+        # pt2_c[i1] = self.cvt_.kpt_to_pt(kpt_c[i2])
 
         # apply additional constraints
-        # msk_d = (np.max(np.abs(pt2_p - pt2_c), axis=-1) > 1.0) # enforce >1px difference
-        # msk_t &= msk_d
+        msk_d = (np.max(np.abs(pt2_p - pt2_c), axis=-1) > 1.0) # enforce >1px difference
+        msk_t &= msk_d
         # =================================
 
         #print 'mean delta', np.mean(pt2_c - pt2_p, axis=0) # -14 px
@@ -614,7 +614,7 @@ class ClassicalVO(object):
         pt2_u_c = self.cvt_.pt2_to_pt2u(pt2_c[msk_t])
 
         # NOTE : experimental
-        if False:
+        if True:
             # correct Matches
             F, msk_f = cv2.findFundamentalMat(
                     pt2_u_c,
@@ -639,8 +639,8 @@ class ClassicalVO(object):
 
         n_in, R, t, msk_r, pt3 = recover_pose(E, self.K_,
                 pt2_u_c[msk_e], pt2_u_p[msk_e], log=False,
-                z_min = 0.01 / scale,
-                z_max = 100.0 / scale
+                #z_min = 0.01 / scale,
+                #z_max = 100.0 / scale
                 #z_max = 5000.0
                 # = usually ~10m
                 )
@@ -766,19 +766,27 @@ class ClassicalVO(object):
         pt3_m = self.landmarks_.pos_
         col_m = self.landmarks_.col_
 
+        # filter by height
         # convert to base_link coordinates
-        pt3_m_b = pt3_m.dot(self.T_c2b_[:3,:3].T) + self.T_c2b_[:3,3]
-
-        pt3_viz_msk = np.logical_and.reduce([
-            -0.2 <= pt3_m_b[:,2],
-            pt3_m_b[:,2] < 5.0])
-        pt3_m = pt3_m[pt3_viz_msk] # ground-plane +- 2.0m
-        col_m = col_m[pt3_viz_msk]
+        # pt3_m_b = pt3_m.dot(self.T_c2b_[:3,:3].T) + self.T_c2b_[:3,3]
+        #pt3_viz_msk = np.logical_and.reduce([
+        #    -0.2 <= pt3_m_b[:,2],
+        #    pt3_m_b[:,2] < 5.0])
+        #pt3_m = pt3_m[pt3_viz_msk]
+        #col_m = col_m[pt3_viz_msk]
 
         pt2_c_rec, rec_msk = self.cvt_.pt3_pose_to_pt2_msk(pt3_m, pose, distort=True)
-        #pt3_m = pt3_m[rec_msk]
-        #col_m = col_m[rec_msk]
+
+        # filter by visibility
+        pt3_m = pt3_m[rec_msk]
+        col_m = col_m[rec_msk]
         pt2_c_rec = pt2_c_rec[rec_msk]
+
+        # subsample points to show
+        n_show = min(len(pt3_m), 128)
+        sel = np.random.choice(len(pt3_m), size=n_show, replace=(len(pt3_m) > n_show))
+        pt3_m = pt3_m[sel]
+        col_m = col_m[sel]
 
         # ================================
 
