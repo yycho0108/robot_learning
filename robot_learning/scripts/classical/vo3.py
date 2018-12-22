@@ -9,6 +9,28 @@ from matplotlib import pyplot as plt
 from sklearn.neighbors import NearestNeighbors
 from matplotlib.patches import Ellipse
 
+def robust_mean(x, margin=10.0, weight=None):
+    if len(x) <= 0:
+        return np.nan
+    x = np.asarray(x, dtype=np.float32)
+    s_lo = np.percentile(x, 50.0 - margin)
+    s_hi = np.percentile(x, 50.0 + margin)
+    msk = np.logical_and.reduce([
+        s_lo <= x, x <= s_hi
+        ])
+
+    if weight is None:
+        return x[msk].mean()
+    else:
+        # compute normalized weight
+        #print 'weighting'
+        #print weight.shape
+        #print msk.shape
+        w = weight[msk[...,0]]
+        w = w / w.sum()
+
+        return np.sum(x[msk] * w, axis=-1)
+
 def zu2Rs(u):
     """
     specialization of zu2R for batch u.
@@ -47,7 +69,7 @@ def oriented_cov(
     C = np.matmul(np.matmul(R, cov0[None,...]), RT)
 
     # apply depth scale for variance
-    C = d[...,None] * C
+    # C = d[...,None] * C
     return C
 
 lmk_fig = None
@@ -251,9 +273,13 @@ class Conversions(object):
                 P=self.K_)[0]
         return pt2
 
-    def pt3_pose_to_pt2_msk(self, pt3, pose):
+    def pt3_pose_to_pt2_msk(self, pt3, pose, distort=False):
         # pose = (x,y,h)
         # NOTE: pose is specified w.r.t base_link, not camera.
+
+        D = self.D_
+        if not distort:
+            D *= 0.0
         
         pt3_cam = self.map_to_cam(pt3, pose)
 
@@ -262,7 +288,7 @@ class Conversions(object):
                 np.zeros(3),
                 np.zeros(3), # zeros, because conversions happened above
                 cameraMatrix=self.K_,
-                distCoeffs=0*self.D_,
+                distCoeffs=D,
                 # TODO : verify if it is appropriate to apply distortion
                 )
         pt2 = np.squeeze(pt2, axis=1)
@@ -375,11 +401,10 @@ class ClassicalVO(object):
         # conversion from camera frame to base_link frame
         self.T_c2b_ = tx.compose_matrix(
                 angles=[-np.pi/2 - np.deg2rad(30),0.0,-np.pi/2],
-                translate=[0.25,0,0.1])
-
+                translate=[0.174,0,0.113])
 
         # define "system" parameters
-        self.pEM_ = dict(method=cv2.FM_RANSAC, prob=0.999, threshold=1.0)
+        self.pEM_ = dict(method=cv2.FM_RANSAC, prob=0.99, threshold=1.0)
         self.pLK_ = dict(winSize = (51,13),
                 maxLevel = 16,
                 criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03),
@@ -397,6 +422,9 @@ class ClassicalVO(object):
         #self.landmarks_ = []
         self.landmarks_ = Landmarks()
         self.hist_ = deque(maxlen=100)
+
+        self.pnp_p_ = None
+        self.pnp_h_ = None
 
     def track(self, img1, img2, pt1, pt2=None):
         # stat img
@@ -444,7 +472,7 @@ class ClassicalVO(object):
 
     def initialize_landmark_variance(self, pt3_c, pose):
         # initialize variance
-        var_rel = np.square([0.05, 0.05, 1.0]) # expected landmark variance @ ~ 1m
+        var_rel = np.square([0.02, 0.02, 1.0]) # expected landmark variance @ ~ 1m
         # TODO : ^ is a ballpart estimate.
         var_rel = np.diag(var_rel) # 3x3
         var_c = oriented_cov(pt3_c, var_rel) # Nx3x3
@@ -484,14 +512,14 @@ class ClassicalVO(object):
         else:
             lm_msk = np.ones((0), dtype=np.bool)
 
-        # select useful descriptor by current match
+        # select useful descriptor based on current viewpoint
         des_p_m = des_p[msk_t][msk_e][msk_r]
 
         i1, i2 = self.cvt_.des_des_to_match(
                 self.landmarks_.des_[lm_msk],
                 des_p_m)
 
-        if lm_msk.sum() > 0:
+        if lm_msk.sum() > 16:
             # filter correspondences by Emat consensus
             # TODO : take advantage of the Emat here to some use?
             _, lm_msk_e = cv2.findEssentialMat(
@@ -500,6 +528,7 @@ class ClassicalVO(object):
                     self.K_,
                     **self.pEM_)
             lm_msk_e = lm_msk_e[:,0].astype(np.bool)
+
             print('landmark concensus : {}/{}'.format( lm_msk_e.sum(), lm_msk_e.size))
 
             ## == visualize projection error ==
@@ -547,23 +576,41 @@ class ClassicalVO(object):
 
         p_lm_v2_c = pt3[i2][lm_msk_e] # current camera frame lm pos
 
+
         # estimate scale from landmark correspondences
-        #d_lm_old = np.linalg.norm(p_lm_c, axis=-1)
-        #d_lm_new = np.linalg.norm(p_lm_v2_c, axis=-1)
-        d_lm_old = p_lm_c[:,2]
-        d_lm_new = p_lm_v2_c[:,2] # z-value much more stable than norm
+        d_lm_old = np.linalg.norm(p_lm_c, axis=-1)
+        d_lm_new = np.linalg.norm(p_lm_v2_c, axis=-1)
+        #d_lm_old = p_lm_c[:,2]
+        #d_lm_new = p_lm_v2_c[:,2] # z-value much more stable than norm
+
+        # validation : dot product (=cos(theta))
+        #uv_lm_c = p_lm_c / d_lm_old[:, None] # Nx3
+        #uv_lm_v2_c = p_lm_v2_c / d_lm_new[:, None] #Nx3
+        #if uv_lm_c.size > 0:
+        #    ang = np.sum(uv_lm_c * uv_lm_v2_c, axis=-1)
+        #    print('angle stats :', ang.min(), ang.mean(), ang.max(), ang.std())
+
         scale_rel = (d_lm_old / d_lm_new).reshape(-1,1)
+        scale_rel_std = scale_rel.std()
+        print('estimated scale stability', scale_rel_std)
 
-        # scale estimate weights
-        #scale_w = (self.landmarks_.var_[lm_msk][i1][lm_msk_e][:,(0,1,2),(0,1,2)])
-        #scale_w = np.linalg.norm(scale_w, axis=-1) 
-        #scale_w = np.sum(scale_w) / scale_w
-        #scale_est = np.sum(scale_rel * scale_w, axis=0).reshape(-1,1)
-        scale_est = np.mean(scale_rel)
+        if scale_rel_std < 0.1:
+            # scale weight by landmark variance
+            scale_w = (self.landmarks_.var_[lm_msk][i1][lm_msk_e][:,(0,1,2),(0,1,2)])
+            scale_w = np.linalg.norm(scale_w, axis=-1) 
+            scale_w = np.sum(scale_w) / scale_w
+            scale_est = robust_mean(scale_rel, weight=scale_w)
+            #scale_est_2 = robust_mean(scale_rel)
+            #print('weighting diff : {} vs {}'.format(scale_est, scale_est_2))
+        else:
+            # TODO : why does this happen?
+            # scale estimates are anticipated to be unstable.
+            # use input scale
+            scale_est = scale
 
-        if True:
+        if True: # == if USE_LM_KF
             # update landmarks from computed correspondences
-            p_lm_v2_c_s = p_lm_v2_c * scale_rel # apply est or rel ???
+            p_lm_v2_c_s = p_lm_v2_c * scale_est # apply est or rel ???
             var_lm_old = self.landmarks_.var_[lm_msk][i1][lm_msk_e]
             var_lm_new = self.initialize_landmark_variance(p_lm_v2_c_s, pose)
             p_lm_v2_0 = self.cvt_.cam_to_map(p_lm_v2_c_s, pose)
@@ -583,8 +630,63 @@ class ClassicalVO(object):
             self.landmarks_.pos_[midx] = x_k[...,0]
             self.landmarks_.var_[midx] = P_k
 
+        if True: # == if USE_PNP
+            pt_world = self.landmarks_.pos_[lm_msk][i1]#[lm_msk_e]
+            pt_cam   = pt2_u_c[msk_e][msk_r][i2]#[lm_msk_e]
+
+            if pt_world.size>0 and pt_cam.size>0:
+                # PNP is super unreliable
+                # use guess?
+
+                T_b2o = self.cvt_.pose_to_T(pose)
+                T_c0c2_est = np.linalg.multi_dot([
+                    self.cvt_.T_b2c_,
+                    tx.inverse_matrix(T_b2o), # T_b0b2
+                    self.cvt_.T_c2b_])
+
+                rvec0 = cv2.Rodrigues(T_c0c2_est[:3,:3])[0]
+                tvec0 = T_c0c2_est[:3, 3:]
+
+                res = cv2.solvePnPRansac(
+                        pt_world, pt_cam,
+                        self.K_, 0*self.D_,
+                        #useExtrinsicGuess = False,
+                        useExtrinsicGuess = True,
+                        rvec=rvec0,
+                        tvec=tvec0,
+                        iterationsCount=1000,
+                        reprojectionError=10.0,
+                        confidence=0.999,
+                        #flags = cv2.SOLVEPNP_EPNP
+                        #flags = cv2.SOLVEPNP_DLS
+                        #flags = cv2.SOLVEPNP_AP3P
+                        flags = cv2.SOLVEPNP_ITERATIVE
+                        #flags = cv2.SOLVEPNP_P3P
+                        #flags = cv2.SOLVEPNP_UPNP
+                        )
+
+                suc , rvec, tvec, inliers = res
+                if suc:
+                    T = np.eye(4, dtype=np.float64)
+                    T[:3,:3] = cv2.Rodrigues(rvec)[0]
+                    T[:3,3:] = tvec.reshape(3,1)
+                    T = tx.inverse_matrix(T)
+
+                    pnp_p = T[2,3], -T[0,3]
+                    pnp_h = -tx.euler_from_matrix(T)[1]
+                    #pnp_h = np.rad2deg(pnp_h)
+                    print('pnp : {}, {}, ({}/{})'.format(
+                        pnp_p, pnp_h, len(inliers), len(pt_world)))
+
+                    self.pnp_p_ = pnp_p
+                    self.pnp_h_ = pnp_h
+                else:
+                    self.pnp_p_ = None
+                    self.pnp_h_ = None
+
+
         # == visualize filtering process ==
-        # n_show = 10
+        # n_show = 1
         # colors = np.random.uniform(size=(n_show,3))
         # show_landmark_2d(p_lm_0[:n_show], var_lm_old[:n_show],
         #         clear=True, draw=False,
@@ -603,21 +705,10 @@ class ClassicalVO(object):
         # =================================
 
         if len(d_lm_old) > 0:
-            scale_rel = (d_lm_old / d_lm_new)
-            #plt.gca().cla()
-            #plt.hist(scale_rel)
-            #plt.show()
-
-            #print 'scale_rel'
-            #print scale_rel
-
-            scale_est = np.median(scale_rel, axis=-1)
             print('estimated scale ratio : {}/{} = {}'.format(
                 scale_est, scale, scale_est/scale))
-
             # override scale here
             scale = scale_est
-
             #res = cv2.solvePnPRansac(
             #        p_lm_0, pt2_u_c[msk_e][msk_r][i2], self.K_, 0*self.D_,
             #        useExtrinsicGuess = False,
@@ -639,8 +730,17 @@ class ClassicalVO(object):
             pass
 
         # insert unselected landmarks
+
+        # apply a lot more lenient matcher
+        i1_lax, i2_lax = self.cvt_.des_des_to_match(
+                self.landmarks_.des_[lm_msk],
+                des_p_m,
+                lowe=1.0,
+                maxd=128.0
+                )
+
         lm_sel_msk = np.zeros(len(des_p_m), dtype=np.bool)
-        lm_sel_msk[i2] = True
+        lm_sel_msk[i2_lax] = True
         lm_new_msk = ~lm_sel_msk
 
         n_new = (lm_new_msk).sum()
@@ -684,6 +784,23 @@ class ClassicalVO(object):
 
         return scale
 
+    def pRt2pose(self, p, R, t):
+        x, y, h = p
+
+        dh = -tx.euler_from_matrix(R)[1]
+        #dx = s * np.float32([ np.abs(t[2]), 0*-t[1] ])
+        dx = np.float32([ t[2], -t[1] ])
+
+        c, s = np.cos(h), np.sin(h)
+        R2_p = np.reshape([c,-s,s,c], [2,2]) # [2,2,N]
+        dp = R2_p.dot(dx).ravel()
+
+        x_c = x+dp[0]
+        y_c = y+dp[1]
+        h_c = (h + dh + np.pi) % (2*np.pi) - np.pi
+
+        return np.float32([x_c,y_c,h_c])
+
     def __call__(self, img, pose, scale=1.0):
         # suffix designations:
         # o/0 = origin (i=0)
@@ -708,14 +825,14 @@ class ClassicalVO(object):
 
         # == obtain next-frame keypoints ==
         # opt1 : points by track
-        pt2_c, msk_t = self.track(img_p, img_c, pt2_p)
+        # pt2_c, msk_t = self.track(img_p, img_c, pt2_p)
 
         # opt2 : points by match
-        # i1, i2 = self.cvt_.des_des_to_match(des_p, des_c)
-        # msk_t = np.zeros(len(pt2_p), dtype=np.bool)
-        # msk_t[i1] = True
-        # pt2_c = np.zeros_like(pt2_p)
-        # pt2_c[i1] = self.cvt_.kpt_to_pt(kpt_c[i2])
+        i1, i2 = self.cvt_.des_des_to_match(des_p, des_c)
+        msk_t = np.zeros(len(pt2_p), dtype=np.bool)
+        msk_t[i1] = True
+        pt2_c = np.zeros_like(pt2_p)
+        pt2_c[i1] = self.cvt_.kpt_to_pt(kpt_c[i2])
 
         # apply additional constraints
         msk_d = (np.max(np.abs(pt2_p - pt2_c), axis=-1) > 1.0) # enforce >1px difference
@@ -730,6 +847,25 @@ class ClassicalVO(object):
         pt2_u_p = self.cvt_.pt2_to_pt2u(pt2_p[msk_t])
         pt2_u_c = self.cvt_.pt2_to_pt2u(pt2_c[msk_t])
 
+        # NOTE : experimental
+        if True:
+            # correct Matches
+            F, msk_f = cv2.findFundamentalMat(
+                    pt2_u_c,
+                    pt2_u_p,
+                    method=self.pEM_['method'],
+                    param1=self.pEM_['threshold'],
+                    param2=self.pEM_['prob'],
+                    )
+            msk_f = msk_f[:,0].astype(np.bool)
+            msk_t[np.where(msk_t)[0]] &= msk_f
+
+            pt2_u_c, pt2_u_p = cv2.correctMatches(F,
+                    pt2_u_c[msk_f][None,...],
+                    pt2_u_p[msk_f][None,...])
+            pt2_u_c = np.squeeze(pt2_u_c, axis=0)
+            pt2_u_p = np.squeeze(pt2_u_p, axis=0)
+
         E, msk_e = cv2.findEssentialMat(pt2_u_c, pt2_u_p, self.K_,
                 **self.pEM_)
         msk_e = msk_e[:,0].astype(np.bool)
@@ -740,16 +876,33 @@ class ClassicalVO(object):
                 #z_max = 5000.0
                 # = usually ~10m
                 )
-        pt3 = pt3.T
         #print( 'mr : {}/{}'.format(msk_r.sum(), msk_r.size))
+        pt3 = pt3.T
 
-        if True:
-            scale = self.proc_f2m(pose, scale,
-                    des_p, des_c,
-                    msk_t, msk_e, msk_r,
-                    pt2_u_p, pt2_u_c,
-                    pt3
-                    )
+        # == process ground plane ==
+        camera_height = 0.113
+        gp_msk = np.logical_and.reduce([
+            0.0 < pt3[:,1], # only filter for down-ness
+            pt3[:,1] < 100.0, # sanity check with large-ish height value
+            pt3[:,2] < 1000.0  # sanity check with large-ish depth value
+            ])
+
+        pt_gp = pt3[gp_msk]
+        scale_gp = scale
+        if gp_msk.sum() > 0:
+            h_gp = robust_mean(pt_gp[:,1])
+            #h_gp = np.median(pt_gp[:,1])
+
+            #print 'ground-plane {}/{}'.format(gp_msk.sum(), gp_msk.size)
+            #print (pt_gp.min(axis=0), pt_gp.max(axis=0), pt_gp.mean(axis=0))
+            if not np.isnan(h_gp):
+                scale_gp = camera_height / h_gp
+            print 'scale_gp : {:.2f}/{:.2f}={:.2f}%'.format(scale_gp, scale,
+                    100 * scale_gp / scale)
+
+            # use gp scale instead
+            scale = scale_gp
+        # ========================== 
 
         msk = np.zeros(len(pt2_p), dtype=np.bool)
         midx = np.where(msk_t)[0][
@@ -761,25 +914,33 @@ class ClassicalVO(object):
         mim = drawMatches(img_p, img_c, pt2_p, pt2_c, msk)
 
         # dh/dx in pose_p frame
-        x, y, h = pose_p
+        pose_c_r = self.pRt2pose(pose_p, R, scale*t)
+        if True:
+            # TODO : smarter way to incorporate ground-plane scale information??
 
-        dh = -tx.euler_from_matrix(R)[1]
-        #dx = s * np.float32([ np.abs(t[2]), 0*-t[1] ])
-        dx = scale * np.float32([ t[2], -t[1] ])
+            # estimate scale based on current pose guess
+            scale = self.proc_f2m(pose_c_r, scale,
+                    des_p, des_c,
+                    msk_t, msk_e, msk_r,
+                    pt2_u_p, pt2_u_c,
+                    pt3
+                    )
+            # recompute rectified pose_c_r
+            pose_c_r = self.pRt2pose(pose_p, R, scale*t)
 
-        c, s = np.cos(h), np.sin(h)
-        R2_p = np.reshape([c,-s,s,c], [2,2]) # [2,2,N]
-        dp = R2_p.dot(dx).ravel()
-
-        x_c = [x+dp[0],y+dp[1]]
-        h_c = (h + dh + np.pi) % (2*np.pi) - np.pi
-        print('tvec-f2f', x_c)
+        x_c = pose_c_r[:2]
+        h_c = pose_c_r[2]
+            
+        print('pose-f2f', x_c, h_c)
 
         # construct visualizations
-        pt3_m = self.cvt_.cam_to_map(pt3 * scale, pose)
-        pt2_c_rec, _ = self.cvt_.pt3_pose_to_pt2_msk(pt3_m, pose)
-        # override pt3_m with all currently tracked landmarks
 
+        # = opt1 : show currently tracked points =
+        # pt3_m = self.cvt_.cam_to_map(pt3 * scale, pose)
+        # pt2_c_rec, _ = self.cvt_.pt3_pose_to_pt2_msk(pt3_m, pose)
+
+        # = opt2 : show landmark instead =
+        # override pt3_m with all currently tracked landmarks
         # filter by 'high' confidence
         #pt3_lm_c = self.cvt_.map_to_cam(self.landmarks_.pos_, pose)
         #d_lm_c   = np.linalg.norm(pt3_lm_c, axis=-1)
@@ -789,8 +950,14 @@ class ClassicalVO(object):
         #idx  = np.argsort(s_xy_r)
         #pt3_m = self.landmarks_.pos_[idx[:512]]
         pt3_m = self.landmarks_.pos_
-        pt3_m = pt3_m[np.abs(pt3_m[:,2]) < 2.0 ] # ground-plane +- 2.0m
-        pt2_c_rec, _ = self.cvt_.pt3_pose_to_pt2_msk(pt3_m, pose)
+        #pt3_viz_msk = np.logical_and.reduce([
+        #    0.05 <= -pt3_m[:,1],
+        #    -pt3_m[:,1] < 2.0])
+        #pt3_m = pt3_m[pt3_viz_msk] # ground-plane +- 2.0m
+        pt2_c_rec, rec_msk = self.cvt_.pt3_pose_to_pt2_msk(pt3_m, pose, distort=True)
+        pt3_m = pt3_m[rec_msk]
+        pt2_c_rec = pt2_c_rec[rec_msk]
+        # ================================
 
         # convert to base_link coordinates
         pt3_m = pt3_m.dot(self.T_c2b_[:3,:3].T) + self.T_c2b_[:3,3]

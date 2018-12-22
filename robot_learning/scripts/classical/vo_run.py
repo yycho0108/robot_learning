@@ -115,6 +115,26 @@ class CVORunner(object):
         VoGUI.draw_2d_proj(ax3, imgs[i, ..., ::-1], pts_r)
         VoGUI.draw_err(ax4, rec_path, odom[:i])
 
+        if self.vo_.pnp_p_ is not None:
+            self.ax1_.plot(
+                    [self.vo_.pnp_p_[0]],
+                    [self.vo_.pnp_p_[1]],
+                    'go',
+                    label='pnp',
+                    alpha=0.5
+                    )
+            self.ax1_.quiver(
+                    [self.vo_.pnp_p_[0]],
+                    [self.vo_.pnp_p_[1]],
+                    [np.cos(self.vo_.pnp_h_)],
+                    [np.sin(self.vo_.pnp_h_)],
+                    angles='xy',
+                    #scale=1,
+                    color='g',
+                    alpha=0.5
+                    )
+
+
         self.fig_.canvas.draw()
         self.fig_.suptitle(msg)
 
@@ -254,7 +274,7 @@ class CVORunner(object):
 
 def main():
     #idx = np.random.choice(8)
-    idx = 21
+    idx = 23
     print('idx', idx)
 
     # load data

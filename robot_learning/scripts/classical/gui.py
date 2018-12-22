@@ -79,14 +79,21 @@ class VoGUI(object):
             ax.plot(scan[:,0], scan[:,1], 'b.', label='scan')
 
         # ground-truth HUD
-        fov = 1.14 # ~ 65.3'
+        fov = 1.14 # ~ 65.3' TODO:hardcoded
         VoGUI.draw_hud(ax, path0[-1], fov, 5.0, 'b:')
         VoGUI.draw_hud(ax, path1[-1], fov, 5.0, 'k--')
 
-        cx, cy = path1[-1, :2]
-        r_lim = 2.0
-        ax.set_xlim(cx-r_lim, cx+r_lim)
-        ax.set_ylim(cy-r_lim, cy+r_lim)
+        cx1, cy1 = path0[-1, :2]
+        cx2, cy2 = path1[-1, :2]
+
+        xmin = min(cx1,cx2)
+        xmax = max(cx1,cx2)
+        ymin = min(cy1,cy2)
+        ymax = max(cy1,cy2)
+
+        r_lim = 5.0
+        ax.set_xlim(xmin-r_lim, xmax+r_lim)
+        ax.set_ylim(ymin-r_lim, ymax+r_lim)
         ax.grid()
         ax.set_axisbelow(True)
         ax.set_aspect('equal', 'datalim')
@@ -130,11 +137,11 @@ class VoGUI(object):
         d[:,2] = (d[:,2] + np.pi) % (2*np.pi) - np.pi
 
         # use abs val as error
-        d = np.abs(d)
+        dp = np.linalg.norm(d[:,:2], axis=-1)
+        dh = np.abs(d[:,2])
 
-        ax.plot(d[:,0], label='dx')
-        ax.plot(d[:,1], label='dy')
-        ax.plot(d[:,2], label='dh')
+        ax.plot(dp, label='dp')
+        ax.plot(dh, label='dh')
         ax.legend()
         ax.grid()
         ax.set_axisbelow(True)
