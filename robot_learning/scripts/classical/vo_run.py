@@ -1,5 +1,5 @@
 #!/usr/bin/env python2
-
+import time
 import numpy as np
 from numpy import s_
 import sys
@@ -108,10 +108,9 @@ class CVORunner(object):
 
         rec_path = np.stack([tx,ty,th], axis=-1)
 
-        VoGUI.draw_img(ax0, aimg[..., ::-1])
         ax0.set_title('Tracking Visualization')
+        VoGUI.draw_img(ax0, aimg[..., ::-1])
         VoGUI.draw_top(ax1, rec_path, pts2, odom[:i+1], scan_c, cov, pts_col)
-        #VoGUI.draw_top(ax1, rec_path, pts2, np.stack([tx,ty,th], axis=-1), scan_c)
         VoGUI.draw_3d(ax2, pts3, pts_col)
         VoGUI.draw_2d_proj(ax3, imgs[i, ..., ::-1], pts_r)
         VoGUI.draw_err(ax4, rec_path, odom[:i])
@@ -142,7 +141,7 @@ class CVORunner(object):
     def get_QR(self, pose, dt):
         # Get appropriate Q/R Matrices from current pose.
         # Mostly just deals with getting the right orientation.
-        Q0 = np.diag(np.square([5e-2, 5e-2, 6e-2, 2.5e-2, 2.5e-2, 8e-2]))
+        Q0 = np.diag(np.square([5e-2, 5e-2, 6e-2, 2.5e-2, 2.5e-2, 1.6e-1]))
         R0 = np.diag(np.square([5e-2, 7e-2, 4e-2]))
         T = Rmat(pose[-1])
 
@@ -270,7 +269,7 @@ class CVORunner(object):
                     self.index_ += 1
                     self.step()
                 plt.pause(0.001)
-                plt.savefig('/tmp/{:03d}.png'.format(self.index_))
+                #plt.savefig('/tmp/{:03d}.png'.format(self.index_))
         else:
             plt.show()
 
@@ -301,7 +300,7 @@ def main():
     stamps -= stamps[0] # t0 = 0
 
     app = CVORunner(imgs, stamps, odom, scan)
-    app.run(auto=True)
+    app.run(auto=False)
 
 if __name__ == "__main__":
     main()
