@@ -20,7 +20,7 @@ except ImportError:
   from pathlib2 import Path  # python 2 backport
 
 from vo3 import ClassicalVO
-from ukf import build_ukf
+from ukf import build_ukf, build_ekf
 from gui import VoGUI
 
 sys.path.append('../')
@@ -141,7 +141,7 @@ class CVORunner(object):
     def get_QR(self, pose, dt):
         # Get appropriate Q/R Matrices from current pose.
         # Mostly just deals with getting the right orientation.
-        Q0 = np.diag(np.square([3e-2, 5e-3, 1e-1, 3e-3, 1e-3, 2e-2]))
+        Q0 = np.diag(np.square([5e-2, 5e-2, 6e-2, 2.5e-2, 2.5e-2, 8e-2]))
         R0 = np.diag(np.square([5e-2, 7e-2, 4e-2]))
         T = Rmat(pose[-1])
 
@@ -204,9 +204,11 @@ class CVORunner(object):
         dps_gt = sub_p3d(odom[i], odom[i-1])
         s = np.linalg.norm(dps_gt[:2])
         #s = 0.2
+
         Q,R = self.get_QR(ukf.x[:3], dt)
         ukf.Q=Q
         ukf.R=R
+
         #ukf.P=np.abs(ukf.P)
 
         prv = ukf.x[:3].copy()
@@ -274,7 +276,7 @@ class CVORunner(object):
 
 def main():
     #idx = np.random.choice(8)
-    idx = 23
+    idx = 24
     print('idx', idx)
 
     # load data

@@ -184,7 +184,9 @@ class Conversions(object):
         if (det is None) and (des is None):
             # default detector+descriptor=orb
             orb = cv2.ORB_create(
-                    nfeatures=4096
+                    nfeatures=8192,
+                    scaleFactor=1.1,
+                    nlevels=8
                     )
             det = orb
             des = orb
@@ -835,8 +837,8 @@ class ClassicalVO(object):
         pt2_c[i1] = self.cvt_.kpt_to_pt(kpt_c[i2])
 
         # apply additional constraints
-        msk_d = (np.max(np.abs(pt2_p - pt2_c), axis=-1) > 1.0) # enforce >1px difference
-        msk_t &= msk_d
+        # msk_d = (np.max(np.abs(pt2_p - pt2_c), axis=-1) > 1.0) # enforce >1px difference
+        # msk_t &= msk_d
         # =================================
 
         #print 'mean delta', np.mean(pt2_c - pt2_p, axis=0) # -14 px
@@ -848,7 +850,7 @@ class ClassicalVO(object):
         pt2_u_c = self.cvt_.pt2_to_pt2u(pt2_c[msk_t])
 
         # NOTE : experimental
-        if True:
+        if False:
             # correct Matches
             F, msk_f = cv2.findFundamentalMat(
                     pt2_u_c,
@@ -881,16 +883,19 @@ class ClassicalVO(object):
 
         # == process ground plane ==
         camera_height = 0.113
+        dh_thresh = 0.1
+        pt3_base = pt3.dot(self.cvt_.T_c2b_[:3,:3].T)
+
         gp_msk = np.logical_and.reduce([
-            0.0 < pt3[:,1], # only filter for down-ness
-            pt3[:,1] < 100.0, # sanity check with large-ish height value
-            pt3[:,2] < 1000.0  # sanity check with large-ish depth value
+            pt3_base[:,2] < (-camera_height + dh_thresh) / scale, # only filter for down-ness
+            (-camera_height -dh_thresh)/scale < pt3_base[:,2], # sanity check with large-ish height value
+            pt3_base[:,0] < 50.0 / scale  # sanity check with large-ish depth value
             ])
 
-        pt_gp = pt3[gp_msk]
+        pt_gp = pt3_base[gp_msk]
         scale_gp = scale
         if gp_msk.sum() > 0:
-            h_gp = robust_mean(pt_gp[:,1])
+            h_gp = robust_mean(-pt_gp[:,2])
             #h_gp = np.median(pt_gp[:,1])
 
             #print 'ground-plane {}/{}'.format(gp_msk.sum(), gp_msk.size)
@@ -899,6 +904,7 @@ class ClassicalVO(object):
                 scale_gp = camera_height / h_gp
             print 'scale_gp : {:.2f}/{:.2f}={:.2f}%'.format(scale_gp, scale,
                     100 * scale_gp / scale)
+            print 'inliers : {}/{}'.format(gp_msk.sum(), gp_msk.size)
 
             # use gp scale instead
             scale = scale_gp
@@ -931,7 +937,7 @@ class ClassicalVO(object):
         x_c = pose_c_r[:2]
         h_c = pose_c_r[2]
             
-        print('pose-f2f', x_c, h_c)
+        print('\t\t pose-f2f : {}.{}'.format(x_c, h_c))
 
         # construct visualizations
 
