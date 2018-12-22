@@ -259,13 +259,70 @@ class Landmark(object):
 # for easier queries.
 class Landmarks(object):
     def __init__(self, n_des=32):
-        self.pos_ = np.empty((0,3), dtype=np.float32)
-        self.var_ = np.empty((0,3,3), dtype=np.float32)
-        self.des_ = np.empty((0,n_des), dtype=np.int32)
-        self.ang_ = np.empty((0,1), dtype=np.float32)
-        self.col_ = np.empty((0,3), dtype=np.uint8)
-        #self.kpt_
-        #self.trk_
+        self.n_des_=n_des
+        self.capacity_ = c = 1024
+        self.size_ = s = 0
+
+        c = self.capacity_
+        s = self.size_
+
+        self.pos_ = np.empty((c,3), dtype=np.float32)
+        self.var_ = np.empty((c,3,3), dtype=np.float32)
+        self.des_ = np.empty((c,n_des), dtype=np.int32)
+        # TODO : ^ highly dependent on descriptor
+        self.ang_ = np.empty((c,1), dtype=np.float32)
+        self.col_ = np.empty((c,3), dtype=np.uint8)
+
+    def resize(self, c_new):
+        print('-------landmarks resizing : {} -> {}'.format(self.capacity_, c_new))
+        p = np.empty((c_new,3), dtype=np.float32)
+        v = np.empty((c_new,3,3), dtype=np.float32)
+        d = np.empty((c_new,self.n_des_), dtype=np.int32)
+        a = np.empty((c_new,1), dtype=np.float32)
+        c = np.empty((c_new,3), dtype=np.uint8)
+        p[:self.size_] = self.pos
+        v[:self.size_] = self.var
+        d[:self.size_] = self.des
+        a[:self.size_] = self.ang
+        c[:self.size_] = self.col
+        self.pos_ = p
+        self.var_ = v
+        self.des_ = d
+        self.ang_ = a
+        self.col_ = c
+        self.capacity_ = c_new
+
+    def append(self, p,v,d,a,c):
+        n = len(p)
+        if self.size_ + n > self.capacity_:
+            self.resize(self.capacity_ * 2)
+            # retry append
+            self.append(p,v,d,a,c)
+        else:
+            # assign
+            self.pos_[self.size_:self.size_+n] = p
+            self.var_[self.size_:self.size_+n] = v
+            self.des_[self.size_:self.size_+n] = d
+            self.ang_[self.size_:self.size_+n] = a
+            self.col_[self.size_:self.size_+n] = c
+            # update size
+            self.size_ += n
+
+    @property
+    def pos(self):
+        return self.pos_[:self.size_]
+    @property
+    def var(self):
+        return self.var_[:self.size_]
+    @property
+    def des(self):
+        return self.des_[:self.size_]
+    @property
+    def ang(self):
+        return self.ang_[:self.size_]
+    @property
+    def col(self):
+        return self.col_[:self.size_]
 
 class Conversions(object):
     """
@@ -286,7 +343,7 @@ class Conversions(object):
             # default detector+descriptor=orb
             orb = cv2.ORB_create(
                     nfeatures=4096,
-                    scaleFactor=1.1,
+                    scaleFactor=1.2,
                     nlevels=8
                     )
             det = orb

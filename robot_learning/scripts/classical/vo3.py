@@ -18,6 +18,9 @@ from mpl_toolkits.mplot3d import Axes3D
 
 tfig = None
 
+def lerp(a,b,w):
+    return (a*w) + (b*(1.0-w))
+
 def axisEqual3D(ax):
     """ from https://stackoverflow.com/a/19248731 """
     extents = np.array([getattr(ax, 'get_{}lim'.format(dim))() for dim in 'xyz'])
@@ -264,11 +267,11 @@ class ClassicalVO(object):
         # frame-to-map processing
         # (i.e. uses landmark data)
 
-        if len(self.landmarks_.pos_) > 0:
+        if len(self.landmarks_.pos) > 0:
             # enter landmark processing
             # TODO : add preliminary filter by view angle
             pt2_lm_c, lm_msk = self.cvt_.pt3_pose_to_pt2_msk(
-                    self.landmarks_.pos_, pose)
+                    self.landmarks_.pos, pose)
             # note that pt2_lm_c is undistorted.
             print('visible landmarks : {}/{}'.format(lm_msk.sum(), lm_msk.size))
         else:
@@ -278,7 +281,7 @@ class ClassicalVO(object):
         des_p_m = des_p[msk_t][msk_e][msk_r]
 
         i1, i2 = self.cvt_.des_des_to_match(
-                self.landmarks_.des_[lm_msk],
+                self.landmarks_.des[lm_msk],
                 des_p_m)
 
         if lm_msk.sum() > 16:
@@ -333,17 +336,19 @@ class ClassicalVO(object):
             lm_msk_e = np.ones(len(i1), dtype=np.bool)
 
         # landmark correspondences
-        p_lm_0 = self.landmarks_.pos_[lm_msk][i1][lm_msk_e] # map-frame lm pos
+        p_lm_0 = self.landmarks_.pos[lm_msk][i1][lm_msk_e] # map-frame lm pos
         p_lm_c = self.cvt_.map_to_cam(p_lm_0, pose) # TODO : use rectified pose?
 
         p_lm_v2_c = pt3[i2][lm_msk_e] # current camera frame lm pos
 
-
         # estimate scale from landmark correspondences
-        d_lm_old = np.linalg.norm(p_lm_c, axis=-1)
-        d_lm_new = np.linalg.norm(p_lm_v2_c, axis=-1)
-        #d_lm_old = p_lm_c[:,2]
-        #d_lm_new = p_lm_v2_c[:,2] # z-value much more stable than norm
+        # opt1 : norm
+        #d_lm_old = np.linalg.norm(p_lm_c, axis=-1)
+        #d_lm_new = np.linalg.norm(p_lm_v2_c, axis=-1)
+        # opt2 : take z-value in camera coordinates
+        # z-value much more stable than norm?
+        d_lm_old = p_lm_c[:,2]
+        d_lm_new = p_lm_v2_c[:,2]
 
         # validation : dot product (=cos(theta))
         #uv_lm_c = p_lm_c / d_lm_old[:, None] # Nx3
@@ -358,7 +363,7 @@ class ClassicalVO(object):
 
         if scale_rel_std < 0.1:
             # scale weight by landmark variance
-            scale_w = (self.landmarks_.var_[lm_msk][i1][lm_msk_e][:,(0,1,2),(0,1,2)])
+            scale_w = (self.landmarks_.var[lm_msk][i1][lm_msk_e][:,(0,1,2),(0,1,2)])
             scale_w = np.linalg.norm(scale_w, axis=-1) 
             scale_w = np.sum(scale_w) / scale_w
             scale_est = robust_mean(scale_rel, weight=scale_w)
@@ -373,7 +378,7 @@ class ClassicalVO(object):
         if True: # == if USE_LM_KF
             # update landmarks from computed correspondences
             p_lm_v2_c_s = p_lm_v2_c * scale_est # apply est or rel ???
-            var_lm_old = self.landmarks_.var_[lm_msk][i1][lm_msk_e]
+            var_lm_old = self.landmarks_.var[lm_msk][i1][lm_msk_e]
             var_lm_new = self.initialize_landmark_variance(p_lm_v2_c_s, pose)
             p_lm_v2_0 = self.cvt_.cam_to_map(p_lm_v2_c_s, pose)
 
@@ -386,14 +391,14 @@ class ClassicalVO(object):
             I = np.eye(3)[None,...] # (1,3,3)
             P_k = np.matmul(I - K_k, var_lm_old)
 
-            midx = np.arange(len(self.landmarks_.pos_))
+            midx = np.arange(len(self.landmarks_.pos))
             midx = midx[lm_msk][i1][lm_msk_e]
 
-            self.landmarks_.pos_[midx] = x_k[...,0]
-            self.landmarks_.var_[midx] = P_k
+            self.landmarks_.pos[midx] = x_k[...,0]
+            self.landmarks_.var[midx] = P_k
 
         if True: # == if USE_PNP
-            pt_world = self.landmarks_.pos_[lm_msk][i1]#[lm_msk_e]
+            pt_world = self.landmarks_.pos[lm_msk][i1]#[lm_msk_e]
             pt_cam   = pt2_u_c[msk_e][msk_r][i2]#[lm_msk_e]
 
             if pt_world.size>0 and pt_cam.size>0:
@@ -469,8 +474,19 @@ class ClassicalVO(object):
         if len(d_lm_old) > 0:
             print('estimated scale ratio : {}/{} = {}'.format(
                 scale_est, scale, scale_est/scale))
+            alpha = 0.5
             # override scale here
-            scale = scale_est
+            # will smoothing over time hopefully prevent scale drift?
+            """
+            There are currently three methods to estimate scale:
+            1. baseline=ukf prediction based estimate
+            2. ground-plane projection based estimate
+            3. landmark correspondence based estimate
+            all of these estimates are un-intelligently
+            combined to produce the final result.
+            """
+            scale = lerp(scale, scale_est, alpha)
+
             #res = cv2.solvePnPRansac(
             #        p_lm_0, pt2_u_c[msk_e][msk_r][i2], self.K_, 0*self.D_,
             #        useExtrinsicGuess = False,
@@ -495,7 +511,7 @@ class ClassicalVO(object):
 
         # apply a lot more lenient matcher
         i1_lax, i2_lax = self.cvt_.des_des_to_match(
-                self.landmarks_.des_[lm_msk],
+                self.landmarks_.des[lm_msk],
                 des_p_m,
                 lowe=1.0,
                 maxd=128.0
@@ -520,7 +536,7 @@ class ClassicalVO(object):
             n_new = msk_n.sum()
 
         print('adding {} landmarks : {}->{}'.format(n_new,
-            len(self.landmarks_.pos_), len(self.landmarks_.pos_)+n_new
+            len(self.landmarks_.pos), len(self.landmarks_.pos)+n_new
             ))
         pt3_new_c = scale * pt3[lm_new_msk][msk_n]
 
@@ -537,17 +553,10 @@ class ClassicalVO(object):
         col_new = get_points_color(img_c, pt2_c[msk_t][msk_e][msk_r][lm_new_msk][msk_n], w=1)
 
         # append new landmarks ...
-        self.landmarks_.ang_ = np.concatenate(
-                [self.landmarks_.ang_, ang_new], axis=0)
-        self.landmarks_.des_ = np.concatenate(
-                [self.landmarks_.des_, des_new], axis=0)
-        self.landmarks_.pos_ = np.concatenate(
-                [self.landmarks_.pos_, pos_new], axis=0)
-        self.landmarks_.var_ = np.concatenate(
-                [self.landmarks_.var_, var_new], axis=0)
-        self.landmarks_.col_ = np.concatenate(
-                [self.landmarks_.col_, col_new], axis=0)
-
+        self.landmarks_.append(
+                pos_new, var_new,
+                des_new, ang_new,
+                col_new)
         return scale
 
     def pRt2pose(self, p, R, t):
@@ -792,6 +801,12 @@ class ClassicalVO(object):
 
         # convert to base_link coordinates
         pt3_m = pt3_m.dot(self.T_c2b_[:3,:3].T) + self.T_c2b_[:3,3]
+
+        # TODO : propagate status messages for the GUI
+        # namely, track status, pnp status(?),
+        # ground-plane projection status,
+        # landmark correspondence scale estimation status,
+        # landmark updates (#additions), etc.
 
         return True, (mim, h_c, x_c, pt2_c_rec, pt3_m, col_m, '')
 
