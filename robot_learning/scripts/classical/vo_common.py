@@ -344,7 +344,8 @@ class Conversions(object):
             orb = cv2.ORB_create(
                     nfeatures=4096,
                     scaleFactor=1.2,
-                    nlevels=8
+                    nlevels=8,
+                    scoreType=cv2.ORB_FAST_SCORE,
                     )
             det = orb
             des = orb

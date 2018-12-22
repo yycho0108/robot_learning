@@ -141,7 +141,7 @@ class CVORunner(object):
     def get_QR(self, pose, dt):
         # Get appropriate Q/R Matrices from current pose.
         # Mostly just deals with getting the right orientation.
-        Q0 = np.diag(np.square([5e-2, 5e-2, 6e-2, 2.5e-2, 2.5e-2, 1.6e-1]))
+        Q0 = np.diag(np.square([5e-2, 5e-2, 6e-2, 2.5e-2, 2.5e-2, 8e-2]))
         R0 = np.diag(np.square([5e-2, 7e-2, 4e-2]))
         T = Rmat(pose[-1])
 
@@ -239,6 +239,9 @@ class CVORunner(object):
         pos = [vo_t[0], vo_t[1], vo_h]
         ukf.update(pos)
 
+        # WARN: HARD override
+        #ukf.x[:3] = pos
+
         tx.append( float(ukf.x[0]) )
         ty.append( float(ukf.x[1]) )
         th.append( float(ukf.x[2]) )
@@ -254,7 +257,8 @@ class CVORunner(object):
             scan_c = None
 
         ### EVERYTHING FROM HERE IS PLOTTING + VIZ ###
-        self.show(aimg, pts3, pts2, scan_c, pts_r, ukf.P, col_p, ('[%d/%d] '%(i,n)) + msg)
+        if (i % 10) == 0:
+            self.show(aimg, pts3, pts2, scan_c, pts_r, ukf.P, col_p, ('[%d/%d] '%(i,n)) + msg)
 
     def quit(self):
         self.quit_ = True
@@ -274,8 +278,9 @@ class CVORunner(object):
             plt.show()
 
 def main():
+    np.set_printoptions(precision=4)
     #idx = np.random.choice(8)
-    idx = 24
+    idx = 25
     print('idx', idx)
 
     # load data
@@ -300,7 +305,7 @@ def main():
     stamps -= stamps[0] # t0 = 0
 
     app = CVORunner(imgs, stamps, odom, scan)
-    app.run(auto=False)
+    app.run(auto=True)
 
 if __name__ == "__main__":
     main()
