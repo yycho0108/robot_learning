@@ -222,7 +222,9 @@ class CVORunner(object):
 
         # TODO : currently passing 'ground-truth' position
         #suc, res = vo(img, odom[i], s=s)
-        suc, res = vo(img, ukf.x[:3].copy(), scale=s)
+        suc, res = vo(img, ukf.x[:3].copy(), scale=s,
+                pose_p = prv
+                )
         if not suc:
             print('Visual Odometry Aborted!')
             return
@@ -231,16 +233,16 @@ class CVORunner(object):
             # skip filter updates
             return
 
-        (aimg, vo_h, vo_t, pts_r, pts3, col_p, msg) = res
+        (aimg, vo_h, vo_t, pts_r, pts3, col_p, msg, pos_ba) = res
         #dps = np.float32([dt[0], dt[1], dh])
         #print('dh', np.rad2deg(dh))
         #print('(pred-gt) {} vs {}'.format(dps, dps_gt) )
         #pos = add_p3d(prv, dps)
         pos = [vo_t[0], vo_t[1], vo_h]
         ukf.update(pos)
-
-        # WARN: HARD override
-        #ukf.x[:3] = pos
+        if pos_ba is not None:
+            # WARN: HARD override
+            ukf.x[:3] = pos_ba
 
         tx.append( float(ukf.x[0]) )
         ty.append( float(ukf.x[1]) )
@@ -257,7 +259,7 @@ class CVORunner(object):
             scan_c = None
 
         ### EVERYTHING FROM HERE IS PLOTTING + VIZ ###
-        if (i % 10) == 0:
+        if (i % 16) == 0:
             self.show(aimg, pts3, pts2, scan_c, pts_r, ukf.P, col_p, ('[%d/%d] '%(i,n)) + msg)
 
     def quit(self):

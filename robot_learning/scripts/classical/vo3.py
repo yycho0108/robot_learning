@@ -16,6 +16,11 @@ from sklearn.neighbors import NearestNeighbors
 from matplotlib.patches import Ellipse
 from mpl_toolkits.mplot3d import Axes3D
 
+from scipy.sparse import lil_matrix
+from scipy.optimize import least_squares
+
+from ba import ba_J
+
 tfig = None
 
 def lerp(a,b,w):
@@ -229,6 +234,14 @@ class ClassicalVO(object):
         self.pnp_p_ = None
         self.pnp_h_ = None
 
+        # bundle adjustment
+        self.ba_en_ = True
+        self.ba_freq_ = 16 # empirically pretty good
+        self.ba_pos_ = []
+        self.ba_ci_ = []
+        self.ba_li_ = []
+        self.ba_p2_ = []
+
     def track(self, img1, img2, pt1, pt2=None,
             thresh=1.0
             ):
@@ -335,24 +348,30 @@ class ClassicalVO(object):
                 self.landmarks_.des[lm_idx],
                 des_p_m)
 
+        lm_msk_e = np.ones(len(i1), dtype=np.bool)
+        lm_idx_e = np.where(lm_msk_e)[0]
+
         if len(lm_idx) > 16:
             # filter correspondences by Emat consensus
 
             # TODO : take advantage of the Emat here to some use?
 
-            _, lm_msk_e = cv2.findEssentialMat(
-                    pt2_lm_c[lm_idx][i1],
-                    pt2_u_c[idx_er][i2],
-                    self.K_,
-                    **self.pEM_)
-            lm_msk_e = lm_msk_e[:,0].astype(np.bool)
+            #_, lm_msk_e = cv2.findEssentialMat(
+            #        pt2_lm_c[lm_idx][i1],
+            #        pt2_u_c[idx_er][i2],
+            #        self.K_,
+            #        **self.pEM_)
+
+            #if lm_msk_e is not None:
+            #    lm_msk_e = lm_msk_e[:,0].astype(np.bool)
+            #    lm_idx_e = np.where(lm_msk_e)[0]
+            #    print('landmark concensus : {}/{}'.format(len(lm_idx_e), lm_msk_e.size))
+
+            cor_delta = (pt2_lm_c[lm_idx][i1] - pt2_u_c[idx_er][i2])
+            cor_delta = np.linalg.norm(cor_delta, axis=-1)
+            lm_msk_e = (cor_delta < 64.0) # distance-based filter
             lm_idx_e = np.where(lm_msk_e)[0]
 
-            #cor_delta = (pt2_lm_c[lm_msk][i1] - pt2_u_c[msk_e][msk_r][i2])
-            #cor_delta = np.linalg.norm(cor_delta, axis=-1)
-            #lm_msk_e = (cor_delta < 64.0) # distance-based filter
-
-            print('landmark concensus : {}/{}'.format(len(lm_idx_e), lm_msk_e.size))
 
             ## == visualize projection error ==
             # global tfig
@@ -398,9 +417,6 @@ class ClassicalVO(object):
             #if not ax.yaxis_inverted():
             #    ax.invert_yaxis()
             # ====================================
-        else:
-            lm_msk_e = np.ones(len(i1), dtype=np.bool)
-            lm_idx_e = np.where(lm_msk_e)[0]
 
         # landmark correspondences
         p_lm_0 = self.landmarks_.pos[lm_idx][i1][lm_idx_e] # map-frame lm pos
@@ -496,6 +512,12 @@ class ClassicalVO(object):
 
             self.landmarks_.pos[midx] = x_k[...,0]
             self.landmarks_.var[midx] = P_k
+
+            # Add correspondences to BA Cache
+            self.cache_BA(
+                    lmk_idx=lm_idx[i1][lm_idx_e],
+                    lmk_pt2=pt2_u_c[idx_er][i2][lm_idx_e]
+                    )
 
         if False: # == if USE_PNP
             pt_world = self.landmarks_.pos[lm_idx][i1]#[lm_msk_e]
@@ -617,10 +639,22 @@ class ClassicalVO(object):
         # TODO : the problem here is that the landmarks are inserted eagerly,
         # and therefore interferes with pose rectification that requires
         # offsets to be consistent.
+
+        li_0 = self.landmarks_.size_
         self.landmarks_.append(
                 pos_new, var_new,
                 des_new, ang_new,
                 col_new)
+        li_1 = self.landmarks_.size_
+
+        # NOTE : using undistorted version of pt2.
+        # WARN : pt2_u_c = undistort( pt2_c[idx_t])
+        # for whatever reason, indexing was somewhat messed up.
+        self.cache_BA(
+                lmk_idx=np.arange(li_0, li_1),
+                lmk_pt2=pt2_u_c[idx_e][idx_r][lm_new_idx][idx_n]
+                )
+
         return scale, msg
 
     def pRt2pose(self, p, R, t):
@@ -640,7 +674,197 @@ class ClassicalVO(object):
 
         return np.float32([x_c,y_c,h_c])
 
-    def __call__(self, img, pose, scale=1.0):
+    """ all BA Stuff """
+    def cache_BA(self, lmk_idx, lmk_pt2):
+        if not self.ba_en_:
+            return
+        # called for both newly registered landmarks
+        # and re-observed landmarks.
+
+        i = len(self.ba_pos_) # current pose index for BA
+        n = len(lmk_idx)
+
+        # --> convert to [i,i,i,i,...], [l0,l1,l2,...], [pt0,pt1,...]
+        c_i = np.full(n, i) # == (n,)
+        l_i = lmk_idx # == (n,)
+        pt2 = lmk_pt2 # == (n,2) array of points
+        # NOTE : prefer to pass in undistorted points to avoid
+        # repeated applications of distortions in reprojections
+
+        self.ba_ci_.append( c_i )
+        self.ba_li_.append( l_i )
+        self.ba_p2_.append( pt2 )
+
+    def project_BA(self, cam, lmk):
+        """
+        cam = np.array(Nx3) camera 2d pose (x,y,h) (WARN: actually base_link pose)
+        lmk = np.array(Nx3) landmark position (x,y,z) in <map> coordinates
+        """
+        n = len(cam)
+
+        x = cam[:,0]
+        y = cam[:,1]
+        h = cam[:,2]
+
+        # z-axis heading
+        c = np.cos(h)
+        s = np.sin(h)
+
+        # directly construct batchwise T_o2b
+        T_o2b = np.zeros((n,4,4), dtype=np.float32)
+
+        # Rotation Part
+        T_o2b[:,0,0] = c
+        T_o2b[:,0,1] = s
+        T_o2b[:,1,0] = -s
+        T_o2b[:,1,1] = c
+        T_o2b[:,2,2] = 1
+
+        # Translation part
+        T_o2b[:,0,3] = -y*s - x*c
+        T_o2b[:,1,3] = x*s - y*c
+
+        # Homogeneous part
+        T_o2b[:,3,3] = 1
+
+        lmk_h = self.cvt_.pt_to_pth(lmk)
+        pt2_h = reduce(np.matmul,[
+            self.K_,
+            self.cvt_.T_b2c_[:3],
+            T_o2b,
+            self.cvt_.T_c2b_,
+            lmk_h[...,None]])[...,0]
+        pt2 = self.cvt_.pth_to_pt(pt2_h)
+        return pt2
+
+    def residual_BA(self, params,
+            n_camera, n_landmark,
+            c_i, l_i,
+            obs_pt2):
+        pos = params[:n_camera*3].reshape(-1, 3) # camera 2d pose (x,y,h)
+        lmk = params[n_camera*3:].reshape(-1, 3) # landmark positions
+        # c_i = [N_obs] array of camera indices
+        # l_i = [N_obs] array of landmark indices
+        # obs_pt2 = [N_obsx3] array of projected landmark points
+        # pos[c_i] --> [N_obsx3]
+        # lmk[c_i] --> [N_obsx3]
+        prj_pt2 = self.project_BA(pos[c_i], lmk[l_i])
+        return (prj_pt2 - obs_pt2).ravel()
+
+    def sparsity_BA(self, n_c, n_l, ci, li):
+        m = len(ci) * 2 # number of observations x projected observation size
+        n = n_c * 3 + n_l * 3 # number of parameters
+        A = lil_matrix((m,n), dtype=int) # TODO: dtype=bool?
+
+        ci3 = ci*3
+        li3 = li*3 # offsets for interleaving
+
+        i = np.arange(len(ci))
+        for s in range(3):
+            A[2*i,   ci3+s] = 1
+            A[2*i+1, ci3+s] = 1
+            A[2*i,   li3+(n_c*3+s)] = 1
+            A[2*i+1, li3+(n_c*3+s)] = 1
+        # from here, the constraint is expressed
+        # that the format of parameters is
+        # [cx0,cy0,ch0, cx1,cy1,ch1, ... lx0,ly0,lz0, lx1,ly1,lz1, ...]
+        # and the format of output is
+        # [px0,py0,px1,py1, ...] (flattened points2d array)
+        return A
+
+    def jac_BA(self, params,
+            n_camera, n_landmark,
+            c_i, l_i,
+            obs_pt2):
+        """
+        Currently unused due to being slow;
+        Also, I'm not quite sure if the current implementation is correct.
+        TODO : optimize and/or validate
+        """
+        pos = params[:n_camera*3].reshape(-1, 3) # camera 2d pose (x,y,h)
+        lmk = params[n_camera*3:].reshape(-1, 3) # landmark positions
+        J = ba_J(pos[c_i], lmk[l_i], self.K_, self.cvt_.T_b2c_, self.cvt_.T_c2b_)
+
+        n_obs = len(c_i)
+        J_res = np.zeros((2*n_obs, len(params))).reshape(
+                2*n_obs, -1, 3)
+
+        print len(c_i), n_obs
+        J_res[:, c_i, :] += J[:, :3*n_obs].reshape(2*n_obs,-1,3)
+        J_res[:, l_i, :] += J[:, 3*n_obs:].reshape(2*n_obs,-1,3)
+        return J_res.reshape(2*n_obs, -1)
+
+    def run_BA(self):
+        """
+        Sources:
+            https://scipy-cookbook.readthedocs.io/items/bundle_adjustment.html
+            https://github.com/jahdiel/pySBA/blob/master/PySBA.py
+        """
+
+        if not self.ba_en_:
+            return
+
+        # === options : format inputs ==========
+        # --- opt1 : naively format inputs -----
+        # ci = np.concatenate(self.ba_ci_, axis=0)
+        # li = np.concatenate(self.ba_li_, axis=0)
+        # p2 = np.concatenate(self.ba_p2_, axis=0)
+        # x0 = np.concatenate([
+        #    self.ba_pos_,
+        #    self.landmarks_.pos])
+        # --- opt2 : re-format landmarks input -
+        # (only the landmarks of interest should be used)
+
+        # create np arrays
+        p0 = np.stack(self.ba_pos_, axis=0)
+        ci = np.concatenate(self.ba_ci_, axis=0)
+        li = np.concatenate(self.ba_li_, axis=0)
+        p2 = np.concatenate(self.ba_p2_, axis=0)
+
+        # gather stats
+        n_c = len(self.ba_pos_)
+        n_l = self.landmarks_.size_
+
+        # filter
+        li_u, li = np.unique(li, return_inverse=True) # WARN: li override
+        n_l = len(li_u)
+        x0 = np.concatenate([
+            p0.ravel(),
+            self.landmarks_.pos[li_u].ravel()
+            ])
+
+        # compute BA sparsity structure
+        A  = self.sparsity_BA(n_c, n_l, ci, li)
+
+        # actually run BA
+        res = least_squares(
+                self.residual_BA, x0,
+                jac_sparsity=A, verbose=2,
+                ftol=1e-4,
+                #x_scale='jac', -- landmark @ pose should be about equivalent
+                method='trf',
+                args=(n_c, n_l, ci, li, p2) )
+
+        # format ...
+        pos_opt = res.x[:n_c*3].reshape(-1,3)
+        lmk_opt = res.x[n_c*3:].reshape(-1,3)
+
+        #print('initial latest pose',  self.ba_pos_[-1])
+        #print('optimized latest pose', pos_opt[-1])
+
+        # apply BA results
+        # TODO : revive this
+        self.landmarks_.pos[li_u] = lmk_opt
+
+        # reset BA cache
+        self.ba_pos_ = []
+        self.ba_ci_ = []
+        self.ba_li_ = []
+        self.ba_p2_ = []
+
+        return pos_opt[-1]
+
+    def __call__(self, img, pose, scale=1.0, pose_p=None):
         msg = ''
         # suffix designations:
         # o/0 = origin (i=0)
@@ -655,10 +879,15 @@ class ClassicalVO(object):
         kpt_c, des_c = self.cvt_.img_kpt_to_kpt_des(img_c, kpt_c)
 
         # update history
-        self.hist_.append( (kpt_c, des_c, img_c, pose_c) )
+        self.hist_.append( [kpt_c, des_c, img_c, pose_c] )
         if len(self.hist_) <= 1:
             return True, None
-        kpt_p, des_p, img_p, pose_p = self.hist_[-2] # query data from previous time-frame
+        kpt_p, des_p, img_p, pose_p_h = self.hist_[-2] # query data from previous time-frame
+
+        if pose_p is None:
+            # NOTE : using rectified result from ukf input.
+            # i.e. result after ukf.update() rather than ukf.predict()
+            pose_p = pose_p_h
 
         # frame-to-frame processing
         pt2_p = self.cvt_.kpt_to_pt(kpt_p)
@@ -820,8 +1049,22 @@ class ClassicalVO(object):
 
         x_c = pose_c_r[:2]
         h_c = pose_c_r[2]
-            
         print('\t\t pose-f2f : {}.{}'.format(x_c, h_c))
+
+        # NOTE!! this vvvv must be called after all cache_BA calls
+        # have been completed.
+
+        force_update = None
+        if self.ba_en_:
+            self.ba_pos_.append( pose_c_r.copy() ) # cache BA
+            if len(self.ba_pos_) >= self.ba_freq_: # TODO: configure BA frame
+                # run BA every 16 frames
+                pose_c_r = self.run_BA()
+                force_update = (pose_c_r)
+                # retrodictive UKF?
+                # somehow apply the optimized trajectory back to UKF results...
+
+        ## === FROM THIS POINT ALL VIZ === 
 
         # construct visualizations
 
@@ -864,7 +1107,6 @@ class ClassicalVO(object):
         sel = np.random.choice(len(pt3_m), size=n_show, replace=(len(pt3_m) > n_show))
         pt3_m = pt3_m[sel]
         col_m = col_m[sel]
-
         # ================================
 
         # convert to base_link coordinates
@@ -876,7 +1118,7 @@ class ClassicalVO(object):
         # landmark correspondence scale estimation status,
         # landmark updates (#additions), etc.
 
-        return True, (mim, h_c, x_c, pt2_c_rec, pt3_m, col_m, msg)
+        return True, (mim, h_c, x_c, pt2_c_rec, pt3_m, col_m, msg, force_update)
 
 def main():
     K = np.float32([500,0,320,0,500,240,0,0,1]).reshape(3,3)
