@@ -20,16 +20,12 @@ except ImportError:
   from pathlib2 import Path  # python 2 backport
 
 from vo3 import ClassicalVO
-from ukf import build_ukf, build_ekf
 from gui import VoGUI
 
 sys.path.append('../')
 from utils.vo_utils import add_p3d, sub_p3d
 from utils.kitti_utils import KittiLoader
 from misc import Rmat
-
-
-# ukf = (x,y,h,v,w)
 
 class CVORunner(object):
     def __init__(self, imgs, stamps, odom, scan=None):
@@ -51,7 +47,7 @@ class CVORunner(object):
 
         self.map_ = np.empty((0, 2), dtype=np.float32)
         self.vo_ = ClassicalVO()
-        self.ukf_ = build_ukf()
+
         self.vo_(imgs[0], [0,0,0]) # initialize GUI
 
         self.tx_ = []
@@ -102,7 +98,6 @@ class CVORunner(object):
         scan   = self.scan_
         stamps = self.stamps_
         imgs  = self.imgs_
-        ukf   = self.ukf_
         vo    = self.vo_
         tx, ty, th = self.tx_, self.ty_, self.th_
 
@@ -138,39 +133,6 @@ class CVORunner(object):
         self.fig_.canvas.draw()
         self.fig_.suptitle(msg)
 
-    def get_QR(self, pose, dt):
-        # Get appropriate Q/R Matrices from current pose.
-        # Mostly just deals with getting the right orientation.
-        Q0 = np.diag(np.square([5e-2, 5e-2, 6e-2, 2.5e-2, 2.5e-2, 8e-2]))
-        R0 = np.diag(np.square([5e-2, 7e-2, 4e-2]))
-        T = Rmat(pose[-1])
-
-        Q = Q0.copy()
-
-        # constant acceleration model?
-        # NOTE : currently results in non-positive-definite matrix
-        #g = [dt**2/2, dt]
-        #G = np.outer(g,g)
-        # x-part
-        # Q[np.ix_([0,3],[0,3])] = G * (0.3)**2 # 10 cm/s^2
-        # Q[np.ix_([1,4],[1,4])] = G * (0.1)**2 # 2 cm/s^2
-        # Q[np.ix_([2,5],[2,5])] = G * (0.5)**2 # ~ 6 deg/s^2
-
-        # apply rotation to translational parts
-        Q[:2,:2] = T.dot(Q[:2,:2]).dot(T.T)
-        #Q[3:5,3:5] = T.dot(Q[3:5,3:5]).dot(T.T)
-        #NOTE: vx-vy components are invariant to current pose
-
-        #Q = (Q+Q.T)/2.0
-        #if np.any(Q<0):
-        #    Q -= np.min(Q)
-
-        # R has nothing to do with time
-        R = R0.copy()
-        R[:2,:2] = T.dot(R[:2,:2]).dot(T.T)
-
-        return Q, R
-
     def step(self):
         i = self.index_
         n = self.n_
@@ -184,7 +146,6 @@ class CVORunner(object):
         scan   = self.scan_
         stamps = self.stamps_
         imgs  = self.imgs_
-        ukf   = self.ukf_
         vo    = self.vo_
         tx, ty, th = self.tx_, self.ty_, self.th_
 
@@ -203,28 +164,15 @@ class CVORunner(object):
         # TODO : estimate scale from points + camera height?
         dps_gt = sub_p3d(odom[i], odom[i-1])
         s = np.linalg.norm(dps_gt[:2])
-        #s = 0.2
 
-        Q,R = self.get_QR(ukf.x[:3], dt)
-        ukf.Q=Q
-        ukf.R=R
-
-        #ukf.P=np.abs(ukf.P)
-
-        prv = ukf.x[:3].copy()
-        ukf.predict(dt=dt)
-        cur = ukf.x[:3]
-
-        # override scale, since initialization is complete
-        if i >= 2:
-            # TODO : set flag to track scale initialization instead
-            scale = np.linalg.norm(cur[:2] - prv[:2])
+        scale = None
+        if i <= 2:
+            # TODO : check?
+            # scale initialization is required
+            scale = s
 
         # TODO : currently passing 'ground-truth' position
-        #suc, res = vo(img, odom[i], s=s)
-        suc, res = vo(img, ukf.x[:3].copy(), scale=s,
-                pose_p = prv
-                )
+        suc, res = vo(img, dt, scale=scale)
         if not suc:
             print('Visual Odometry Aborted!')
             return
@@ -233,23 +181,13 @@ class CVORunner(object):
             # skip filter updates
             return
 
-        (aimg, vo_h, vo_t, pts_r, pts3, col_p, msg, pos_ba) = res
-        #dps = np.float32([dt[0], dt[1], dh])
-        #print('dh', np.rad2deg(dh))
+        (aimg, vo_pos, pts_r, pts3, col_p, msg) = res
         #print('(pred-gt) {} vs {}'.format(dps, dps_gt) )
-        #pos = add_p3d(prv, dps)
-        pos = [vo_t[0], vo_t[1], vo_h]
-        ukf.update(pos)
-        if pos_ba is not None:
-            # WARN: HARD override
-            ukf.x[:3] = pos_ba
+        pos = vo_pos
 
-        tx.append( float(ukf.x[0]) )
-        ty.append( float(ukf.x[1]) )
-        th.append( float(ukf.x[2]) )
-        #tx.append( vo_t[0] )
-        #ty.append( vo_t[1] )
-        #th.append( vo_h    )
+        tx.append(pos[0])
+        ty.append(pos[1])
+        th.append(pos[2])
 
         pts2 = pts3[:,:2]
         self.map_ = np.concatenate([self.map_, pts2], axis=0)
@@ -259,8 +197,10 @@ class CVORunner(object):
             scan_c = None
 
         ### EVERYTHING FROM HERE IS PLOTTING + VIZ ###
-        if (i % 1) == 0:
-            self.show(aimg, pts3, pts2, scan_c, pts_r, ukf.P, col_p, ('[%d/%d] '%(i,n)) + msg)
+        if (i % 16) == 0:
+            # TODO : pass positional covariance from ClassicalVO
+            P = self.vo_.ukf_l_.P
+            self.show(aimg, pts3, pts2, scan_c, pts_r, P, col_p, ('[%d/%d] '%(i,n)) + msg)
 
     def quit(self):
         self.quit_ = True
@@ -275,14 +215,14 @@ class CVORunner(object):
                     self.index_ += 1
                     self.step()
                 plt.pause(0.001)
-                #plt.savefig('/tmp/{:03d}.png'.format(self.index_))
+                plt.savefig('/tmp/{:03d}.png'.format(self.index_))
         else:
             plt.show()
 
 def main():
     np.set_printoptions(precision=4)
     #idx = np.random.choice(8)
-    idx = 25
+    idx = 27
     print('idx', idx)
 
     # load data

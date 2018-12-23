@@ -5,7 +5,41 @@ from filterpy.kalman import MerweScaledSigmaPoints, JulierSigmaPoints
 
 import sys
 sys.path.append('../')
+from misc import Rmat
 from utils.vo_utils import add_p3d, sub_p3d
+
+def get_QR(pose, dt):
+    # Get appropriate Q/R Matrices from current pose.
+    # Mostly just deals with getting the right orientation.
+    Q0 = np.diag(np.square([5e-2, 5e-2, 6e-2, 2.5e-2, 2.5e-2, 8e-2]))
+    R0 = np.diag(np.square([5e-2, 7e-2, 4e-2]))
+    T = Rmat(pose[-1])
+
+    Q = Q0.copy()
+
+    # constant acceleration model?
+    # NOTE : currently results in non-positive-definite matrix
+    #g = [dt**2/2, dt]
+    #G = np.outer(g,g)
+    # x-part
+    # Q[np.ix_([0,3],[0,3])] = G * (0.3)**2 # 10 cm/s^2
+    # Q[np.ix_([1,4],[1,4])] = G * (0.1)**2 # 2 cm/s^2
+    # Q[np.ix_([2,5],[2,5])] = G * (0.5)**2 # ~ 6 deg/s^2
+
+    # apply rotation to translational parts
+    Q[:2,:2] = T.dot(Q[:2,:2]).dot(T.T)
+    #Q[3:5,3:5] = T.dot(Q[3:5,3:5]).dot(T.T)
+    #NOTE: vx-vy components are invariant to current pose
+
+    #Q = (Q+Q.T)/2.0
+    #if np.any(Q<0):
+    #    Q -= np.min(Q)
+
+    # R has nothing to do with time
+    R = R0.copy()
+    R[:2,:2] = T.dot(R[:2,:2]).dot(T.T)
+
+    return Q, R
 
 def ukf_fx(s, dt):
     x,y,h,vx,vy,w = s

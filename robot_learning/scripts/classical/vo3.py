@@ -19,6 +19,7 @@ from mpl_toolkits.mplot3d import Axes3D
 from scipy.sparse import lil_matrix
 from scipy.optimize import least_squares
 
+from ukf import build_ukf, build_ekf, get_QR
 from ba import ba_J
 
 tfig = None
@@ -227,13 +228,16 @@ class ClassicalVO(object):
     VO_USE_BA        = 1<<5 # Use Bundle Adjustment
     VO_USE_HOMO      = 1<<6 # Use Homography Fallback
     VO_USE_F2M       = 1<<7 # Use Frame-To-Map Information
+    VO_USE_LM_KF     = 1<<8 # Use Landmark Kalman Filter
 
     VO_DEFAULT = VO_USE_FM_COR | VO_USE_TRACK | VO_USE_SCALE_GP | \
-            VO_USE_BA | VO_USE_HOMO | VO_USE_F2M
+            VO_USE_BA | VO_USE_HOMO | VO_USE_F2M | \
+            VO_USE_LM_KF
 
     def __init__(self):
         # define configuration
         self.flag_ = ClassicalVO.VO_DEFAULT
+        self.flag_ &= ~ClassicalVO.VO_USE_HOMO
 
         # define constant parameters
         Ks = (1.0 / 1.0)
@@ -310,8 +314,14 @@ class ClassicalVO(object):
         self.landmarks_ = Landmarks()
         self.hist_ = deque(maxlen=100)
 
+        # pnp
         self.pnp_p_ = None
         self.pnp_h_ = None
+
+        # UKF
+        self.ukf_l_  = build_ukf()
+        self.ukf_g_  = build_ukf()
+        self.ukf_dt_ = []
 
         # bundle adjustment
         self.ba_freq_ = 16 # empirically pretty good
@@ -396,6 +406,7 @@ class ClassicalVO(object):
             pt2_u_p, pt2_u_c,
             pt3,
             img_c, pt2_c,
+            h_override,
             msg
             ):
 
@@ -421,7 +432,6 @@ class ClassicalVO(object):
 
         # select useful descriptor based on current viewpoint
         des_p_m = des_p[idx_ter]
-
         i1, i2 = self.cvt_.des_des_to_match(
                 self.landmarks_.des[lm_idx],
                 des_p_m)
@@ -440,11 +450,14 @@ class ClassicalVO(object):
             lm_idx_d = np.where(lm_msk_d)[0]
 
             # second estimate
-            _, lm_msk_e = cv2.findEssentialMat(
-                    pt2_lm_c[lm_idx][i1][lm_idx_d],
-                    pt2_u_c[idx_er][i2][lm_idx_d],
-                    self.K_,
-                    **self.pEM_)
+            try:
+                _, lm_msk_e = cv2.findEssentialMat(
+                        pt2_lm_c[lm_idx][i1][lm_idx_d],
+                        pt2_u_c[idx_er][i2][lm_idx_d],
+                        self.K_,
+                        **self.pEM_)
+            except Exception as e:
+                lm_msk_e = None
 
             if lm_msk_e is not None:
                 # refine by Emat
@@ -572,7 +585,9 @@ class ClassicalVO(object):
             # implicit : scale = scale
             pass
 
-        if True: # == if USE_LM_KF
+        update_lm = self.flag_ & ClassicalVO.VO_USE_LM_KF
+
+        if update_lm and (not h_override):
             # update landmarks from computed correspondences
             p_lm_v2_c_s = p_lm_v2_c * scale_rel # apply est or rel ???
             var_lm_old = self.landmarks_.var[lm_idx][i1][lm_idx_e]
@@ -682,64 +697,71 @@ class ClassicalVO(object):
                 maxd=128.0
                 )
 
-        lm_sel_msk = np.zeros(len(des_p_m), dtype=np.bool)
-        lm_sel_msk[i2_lax] = True
-        lm_new_msk = ~lm_sel_msk
-        lm_new_idx = np.where(lm_new_msk)[0]
+        # update "invisible" landmarks that should have been visible
+        lm_filter_msk = np.ones(len(lm_idx), dtype=np.bool)
+        lm_filter_msk[i1_lax] = False
+        self.landmarks_.cnt[lm_idx][i1_lax] -= 1
 
-        n_new = len(lm_new_idx)
-        msk_n = np.ones(n_new, dtype=np.bool)
+        if not h_override:
+            # do not insert landmarks in h_override
+            lm_sel_msk = np.zeros(len(des_p_m), dtype=np.bool)
+            lm_sel_msk[i2_lax] = True
+            lm_new_msk = ~lm_sel_msk
+            lm_new_idx = np.where(lm_new_msk)[0]
 
-        if len(d_lm_old) > 0:
-            # filter insertion by proximity to existing landmarks
-            neigh = NearestNeighbors(n_neighbors=1)
-            neigh.fit(pt2_lm_c[lm_idx])
-            d, _ = neigh.kneighbors(pt2_u_c[idx_e][idx_r][lm_new_idx], return_distance=True)
-            msk_knn = (d < 16.0)[:,0] # TODO : magic number
+            n_new = len(lm_new_idx)
+            msk_n = np.ones(n_new, dtype=np.bool)
 
-            # dist to nearest landmark, less than 20px
-            msk_n[msk_knn] = False
-            n_new = msk_n.sum()
+            if len(d_lm_old) > 0:
+                # filter insertion by proximity to existing landmarks
+                neigh = NearestNeighbors(n_neighbors=1)
+                neigh.fit(pt2_lm_c[lm_idx])
+                d, _ = neigh.kneighbors(pt2_u_c[idx_e][idx_r][lm_new_idx], return_distance=True)
+                msk_knn = (d < 16.0)[:,0] # TODO : magic number
 
-        idx_n = np.where(msk_n)[0]
+                # dist to nearest landmark, less than 20px
+                msk_n[msk_knn] = False
+                n_new = msk_n.sum()
 
-        print('adding {} landmarks : {}->{}'.format(n_new,
-            len(self.landmarks_.pos), len(self.landmarks_.pos)+n_new
-            ))
-        pt3_new_c = scale * pt3[lm_new_idx][idx_n]
+            idx_n = np.where(msk_n)[0]
 
-        pos_new = self.cvt_.cam_to_map(
-                pt3_new_c,
-                pose) # TODO : use rectified pose here if available
+            print('adding {} landmarks : {}->{}'.format(n_new,
+                len(self.landmarks_.pos), len(self.landmarks_.pos)+n_new
+                ))
+            pt3_new_c = scale * pt3[lm_new_idx][idx_n]
 
-        des_new = des_p_m[lm_new_idx][idx_n]
-        ang_new = np.full((n_new,1), pose[-1], dtype=np.float32)
+            pos_new = self.cvt_.cam_to_map(
+                    pt3_new_c,
+                    pose) # TODO : use rectified pose here if available
 
-        var_new = self.initialize_landmark_variance(
-                pt3_new_c,
-                pose)
+            des_new = des_p_m[lm_new_idx][idx_n]
+            ang_new = np.full((n_new,1), pose[-1], dtype=np.float32)
 
-        col_new = get_points_color(img_c, pt2_c[idx_t][idx_e][idx_r][lm_new_idx][idx_n], w=1)
+            var_new = self.initialize_landmark_variance(
+                    pt3_new_c,
+                    pose)
 
-        # append new landmarks ...
-        # TODO : the problem here is that the landmarks are inserted eagerly,
-        # and therefore interferes with pose rectification that requires
-        # offsets to be consistent.
+            col_new = get_points_color(img_c, pt2_c[idx_t][idx_e][idx_r][lm_new_idx][idx_n], w=1)
 
-        li_0 = self.landmarks_.size_
-        self.landmarks_.append(
-                pos_new, var_new,
-                des_new, ang_new,
-                col_new)
-        li_1 = self.landmarks_.size_
+            # append new landmarks ...
+            # TODO : the problem here is that the landmarks are inserted eagerly,
+            # and therefore interferes with pose rectification that requires
+            # offsets to be consistent.
 
-        # NOTE : using undistorted version of pt2.
-        # WARN : pt2_u_c = undistort( pt2_c[idx_t])
-        # for whatever reason, indexing was somewhat messed up.
-        self.cache_BA(
-                lmk_idx=np.arange(li_0, li_1),
-                lmk_pt2=pt2_u_c[idx_e][idx_r][lm_new_idx][idx_n]
-                )
+            li_0 = self.landmarks_.size_
+            self.landmarks_.append(
+                    pos_new, var_new,
+                    des_new, ang_new,
+                    col_new)
+            li_1 = self.landmarks_.size_
+
+            # NOTE : using undistorted version of pt2.
+            # WARN : pt2_u_c = undistort( pt2_c[idx_t])
+            # for whatever reason, indexing was somewhat messed up.
+            self.cache_BA(
+                    lmk_idx=np.arange(li_0, li_1),
+                    lmk_pt2=pt2_u_c[idx_e][idx_r][lm_new_idx][idx_n]
+                    )
 
         return scale, msg
 
@@ -888,6 +910,8 @@ class ClassicalVO(object):
         """
         if not self.flag_ & ClassicalVO.VO_USE_BA:
             return
+        if len(self.ba_ci_) <= 0 or len(self.ba_pos_) <= 0:
+            return
 
         # === options : format inputs ==========
         # --- opt1 : naively format inputs -----
@@ -926,7 +950,7 @@ class ClassicalVO(object):
                 self.residual_BA, x0,
                 jac_sparsity=A, verbose=2,
                 ftol=1e-4,
-                #x_scale='jac', -- landmark @ pose should be about equivalent
+                x_scale='jac', # -- landmark @ pose should be about equivalent
                 method='trf',
                 args=(n_c, n_l, ci, li, p2) )
 
@@ -947,9 +971,9 @@ class ClassicalVO(object):
         self.ba_li_ = []
         self.ba_p2_ = []
 
-        return pos_opt[-1]
+        return pos_opt
 
-    def __call__(self, img, pose, scale=1.0, pose_p=None):
+    def __call__(self, img, dt, scale=None):
         msg = ''
         # suffix designations:
         # o/0 = origin (i=0)
@@ -959,20 +983,29 @@ class ClassicalVO(object):
         # process current frame
         # TODO : enable lazy evaluation
         # (currently very much eager)
-        img_c, pose_c = img, pose
+
+        img_c = img
         kpt_c = self.cvt_.img_to_kpt(img_c)
         kpt_c, des_c = self.cvt_.img_kpt_to_kpt_des(img_c, kpt_c)
 
         # update history
-        self.hist_.append( [kpt_c, des_c, img_c, pose_c] )
+        self.hist_.append( [kpt_c, des_c, img_c] )
         if len(self.hist_) <= 1:
             return True, None
-        kpt_p, des_p, img_p, pose_p_h = self.hist_[-2] # query data from previous time-frame
 
-        if pose_p is None:
-            # NOTE : using rectified result from ukf input.
-            # i.e. result after ukf.update() rather than ukf.predict()
-            pose_p = pose_p_h
+        # apply UKF
+        pose_p = self.ukf_l_.x[:3].copy()
+        Q, R = get_QR(pose_p, dt)
+        self.ukf_l_.Q = Q
+        self.ukf_l_.R = R
+        self.ukf_l_.predict(dt)
+        self.ukf_dt_.append(dt)
+        pose_c = self.ukf_l_.x[:3].copy()
+        if scale is None:
+            # initialize scale from UKF
+            scale = np.linalg.norm(pose_c[:2] - pose_p[:2])
+
+        kpt_p, des_p, img_p = self.hist_[-2] # query data from previous time-frame
 
         # frame-to-frame processing
         pt2_p = self.cvt_.kpt_to_pt(kpt_p)
@@ -1043,11 +1076,11 @@ class ClassicalVO(object):
             sF, msk_sf = score_F(pt2_u_c[idx_e], pt2_u_p[idx_e], F, self.cvt_)
 
             r_H = (sH / (sH + sF))
-            print('score determinant : {}'.format(r_H))
+            print('score determinant : {} -------------------------------> {}'.format(r_H, 'H' if r_H > 0.45 else 'E'))
 
         h_override = False
         if self.flag_ & ClassicalVO.VO_USE_HOMO:
-            h_override = (r_H > 0.45) and ( len(idx_h) > len(idx_e) )
+            h_override = (r_H > 0.45)# and ( len(idx_h) > len(idx_e) )
 
         if h_override:
             ## homography
@@ -1098,25 +1131,38 @@ class ClassicalVO(object):
             # unfortunately, there's far too few points on the ground plane
             # to compute a reasonable estimate.
 
-            # dh_thresh = 0.3
-            # gp_msk_lax = np.logical_and.reduce([
-            #     pt3_base[:,0] < (10.0 / scale),
-            #     pt3_base[:,2] < (-camera_height + dh_thresh) / scale,
-            #     (-camera_height - dh_thresh)/scale < pt3_base[:,2]
-            #     ])
+            ##dh_thresh = 0.3
 
-            # # get mask from plane estimation
-            # gp_fit, gp_err, gp_msk = estimate_plane_ransac(
-            #         pt3_base[gp_msk_lax],
-            #         1000,
-            #         0.999,
-            #         0.1 / scale, # ~ apply 10cm tolerance for ground
-            #         nvec = np.float32([0.0, 0.0, 1.0])
-            #         )
-            # #print 'gp dist', gp_fit[0].dot(gp_fit[1])
-            # #print 'gp nvec', gp_fit[1]
-            # gp_msk = gp_msk[:,0].astype(np.bool)
-            # pt_gp = pt3_base[gp_msk_lax][gp_msk]
+            #z_tol_lo = np.percentile(pt3_base[:,2], 40)
+            #z_tol_hi = np.percentile(pt3_base[:,2], 60)
+
+            #gp_msk_lax = np.logical_and.reduce([
+            #    z_tol_lo <= pt3_base[:,2],
+            #    pt3_base[:,2] < z_tol_hi
+            #    ])
+            #    #pt3_base[:,0] < 1000.0, #(10.0 / scale), # basic depth check
+            #    #pt3_base[:,2] < 0.0, #(-camera_height + dh_thresh) / scale,
+            #    #-1000.0 < pt3_base[:,2]
+            #    ##(-camera_height - dh_thresh)/scale < pt3_base[:,2]
+            #    #])
+
+            #z_tol = (z_tol_hi - z_tol_lo)
+            #print('z_tol', z_tol)
+
+            ## get mask from plane estimation
+            #gp_fit, gp_err, gp_msk = estimate_plane_ransac(
+            #        pt3_base[gp_msk_lax],
+            #        10000,
+            #        0.999,
+            #        z_tol, # ~ apply 10cm tolerance for ground
+            #        nvec = np.float32([0.0, 0.0, 1.0])
+            #        )
+            ##print 'gp dist', gp_fit[0].dot(gp_fit[1])
+            ##print 'gp nvec', gp_fit[1]
+            #print '??', gp_fit
+            #gp_msk = gp_msk[:,0].astype(np.bool)
+            #gp_idx = np.where(gp_msk)[0]
+            #pt_gp = pt3_base[gp_msk_lax][gp_msk]
 
             # visualize 
             #tmp = pt3_base[gp_msk_lax][gp_msk]
@@ -1132,7 +1178,7 @@ class ClassicalVO(object):
             #tfig.gca().set_ylabel('y')
             #tfig.gca().set_zlabel('z')
             print 'gp inl : {}/{}'.format(len(gp_idx), gp_msk.size)
-            if len(gp_idx) > 0:
+            if len(gp_idx) > 3: # at least 3 points
                 h_gp = robust_mean(-pt_gp[:,2])
                 #h_gp = - gp_fit[0].dot(gp_fit[1])[0]
                 #print 'gp height?', h_gp
@@ -1166,27 +1212,51 @@ class ClassicalVO(object):
                     pt2_u_p, pt2_u_c,
                     pt3,
                     img_c, pt2_c,
+                    h_override,
                     msg
                     )
             # recompute rectified pose_c_r
             pose_c_r = self.pRt2pose(pose_p, R, scale*t)
 
+        self.ukf_l_.update(pose_c_r)
+        pose_c_r = self.ukf_l_.x[:3].copy() # TODO : chronologically correct?
+
         # NOTE!! this vvvv must be called after all cache_BA calls
         # have been completed.
-        force_update = None
         if self.flag_ & ClassicalVO.VO_USE_BA:
             self.ba_pos_.append( pose_c_r.copy() ) # cache BA
             if len(self.ba_pos_) >= self.ba_freq_: # TODO: configure BA frame
                 # run BA every 16 frames
-                pose_c_r = self.run_BA()
-                force_update = (pose_c_r)
+                ba_res = self.run_BA()
+                if ba_res is not None:
+                    # naive version : just take last value
+
+                    # update global ukf
+                    for (g_dt, g_z) in zip(
+                            self.ukf_dt_[-self.ba_freq_:],
+                            ba_res):
+                        Q, R = get_QR(self.ukf_g_.x[:3], dt)
+                        self.ukf_g_.Q = Q
+                        self.ukf_g_.R = R
+                        self.ukf_g_.predict(g_dt)
+                        self.ukf_g_.update(g_z)
+
+                    # copy to local ukf
+                    self.ukf_l_.x = self.ukf_g_.x.copy()
+                    self.ukf_l_.P = self.ukf_g_.P.copy()
+
+                    # clear history (currently, just time data)
+                    self.ukf_dt_ = []
+
+                    # result
+                    pose_c_r = self.ukf_l_.x[:3].copy()
+
+                # TODO : currently pruning happens with BA
+                # in order to not mess up landmark indices.
                 self.landmarks_.prune()
                 # retrodictive UKF?
                 # somehow apply the optimized trajectory back to UKF results...
-
-        x_c = pose_c_r[:2]
-        h_c = pose_c_r[2]
-        print('\t\t pose-f2f : {}.{}'.format(x_c, h_c))
+        print('\t\t pose-f2f : {}'.format(pose_c_r))
         ## === FROM THIS POINT ALL VIZ === 
 
         # construct visualizations
@@ -1227,7 +1297,10 @@ class ClassicalVO(object):
 
         # subsample points to show
         n_show = min(len(pt3_m), 128)
-        sel = np.random.choice(len(pt3_m), size=n_show, replace=(len(pt3_m) > n_show))
+        if n_show <= 0:
+            sel = np.empty(0, dtype=np.int32)
+        else:
+            sel = np.random.choice(len(pt3_m), size=n_show, replace=(len(pt3_m) > n_show))
         pt3_m = pt3_m[sel]
         col_m = col_m[sel]
         # ================================
@@ -1241,7 +1314,7 @@ class ClassicalVO(object):
         # landmark correspondence scale estimation status,
         # landmark updates (#additions), etc.
 
-        return True, (mim, h_c, x_c, pt2_c_rec, pt3_m, col_m, msg, force_update)
+        return True, (mim, pose_c_r, pt2_c_rec, pt3_m, col_m, msg)
 
 def main():
     K = np.float32([500,0,320,0,500,240,0,0,1]).reshape(3,3)
