@@ -48,7 +48,7 @@ class CVORunner(object):
         self.map_ = np.empty((0, 2), dtype=np.float32)
         self.vo_ = ClassicalVO()
 
-        self.vo_(imgs[0], [0,0,0]) # initialize GUI
+        self.vo_(imgs[0], 0.0) # initialize GUI
 
         self.tx_ = []
         self.ty_ = []
@@ -167,18 +167,18 @@ class CVORunner(object):
 
         scale = None
         if i <= 2:
-            # TODO : check?
+            # TODO : maybe prefer vo.initialize_scale()
+            # rather than checking for index
             # scale initialization is required
             scale = s
-
-        # TODO : currently passing 'ground-truth' position
-        suc, res = vo(img, dt, scale=scale)
-        if not suc:
-            print('Visual Odometry Aborted!')
-            return
+        else:
+            # implicit : scale = None
+            pass
+        res = vo(img, dt, scale=scale)
 
         if res is None:
-            # skip filter updates
+            # vo aborted for some unknown reason
+            print('Visual Odometry Aborted!')
             return
 
         (aimg, vo_pos, pts_r, pts3, col_p, msg) = res
@@ -198,7 +198,6 @@ class CVORunner(object):
 
         ### EVERYTHING FROM HERE IS PLOTTING + VIZ ###
         if (i % 16) == 0:
-            # TODO : pass positional covariance from ClassicalVO
             P = self.vo_.ukf_l_.P
             self.show(aimg, pts3, pts2, scan_c, pts_r, P, col_p, ('[%d/%d] '%(i,n)) + msg)
 

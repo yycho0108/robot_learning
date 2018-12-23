@@ -908,9 +908,12 @@ class ClassicalVO(object):
             https://scipy-cookbook.readthedocs.io/items/bundle_adjustment.html
             https://github.com/jahdiel/pySBA/blob/master/PySBA.py
         """
+
         if not self.flag_ & ClassicalVO.VO_USE_BA:
             return
+
         if len(self.ba_ci_) <= 0 or len(self.ba_pos_) <= 0:
+            # unable to run BA (NO DATA!)
             return
 
         # === options : format inputs ==========
@@ -991,7 +994,7 @@ class ClassicalVO(object):
         # update history
         self.hist_.append( [kpt_c, des_c, img_c] )
         if len(self.hist_) <= 1:
-            return True, None
+            return None
 
         # apply UKF
         pose_p = self.ukf_l_.x[:3].copy()
@@ -1314,7 +1317,7 @@ class ClassicalVO(object):
         # landmark correspondence scale estimation status,
         # landmark updates (#additions), etc.
 
-        return True, (mim, pose_c_r, pt2_c_rec, pt3_m, col_m, msg)
+        return [mim, pose_c_r, pt2_c_rec, pt3_m, col_m, msg]
 
 def main():
     K = np.float32([500,0,320,0,500,240,0,0,1]).reshape(3,3)
