@@ -6,29 +6,14 @@ def print_Rt(R, t):
     print '\tR', np.round(np.rad2deg(tx.euler_from_matrix(R)), 2)
     print '\tt', np.round(t.ravel() / np.linalg.norm(t), 2)
 
-def recover_pose(E,K,
+def recover_pose_from_RT(perm, K,
         pt1, pt2,
         z_min = np.finfo(np.float32).eps,
         z_max = np.inf,
         log=False
         ):
-
     P1 = np.eye(3,4)
     P2 = np.eye(3,4)
-
-    R1, R2, t = cv2.decomposeEssentialMat(E)
-
-    perm = [
-            (R1, t),
-            (R2, t),
-            (R1, -t),
-            (R2, -t)]
-
-    perm_s = [
-            '(R1,t)',
-            '(R2,t)',
-            '(R1,-t)',
-            '(R2,-t)']
 
     msks = [None for _ in range(4)]
     pt3s = [None for _ in range(4)]
@@ -80,6 +65,22 @@ def recover_pose(E,K,
 
     return n_in, R, t, msk, pt3
 
+def recover_pose(E, K,
+        pt1, pt2,
+        z_min = np.finfo(np.float32).eps,
+        z_max = np.inf,
+        log=False
+        ):
+    R1, R2, t = cv2.decomposeEssentialMat(E)
+    perm = [
+            (R1, t),
+            (R2, t),
+            (R1, -t),
+            (R2, -t)]
+    return recover_pose_from_RT(perm, K,
+            pt1, pt2,
+            z_min, z_max, log
+            )
 
 def drawMatches(img1, img2, pt1, pt2, msk,
         radius = 3
@@ -272,6 +273,7 @@ class Landmarks(object):
         # TODO : ^ highly dependent on descriptor
         self.ang_ = np.empty((c,1), dtype=np.float32)
         self.col_ = np.empty((c,3), dtype=np.uint8)
+        self.cnt_ = np.empty((c,1), dtype=np.int32)
 
     def resize(self, c_new):
         print('-------landmarks resizing : {} -> {}'.format(self.capacity_, c_new))
@@ -280,16 +282,22 @@ class Landmarks(object):
         d = np.empty((c_new,self.n_des_), dtype=np.int32)
         a = np.empty((c_new,1), dtype=np.float32)
         c = np.empty((c_new,3), dtype=np.uint8)
+        c2 = np.empty((c_new,3), dtype=np.int32)
+
         p[:self.size_] = self.pos
         v[:self.size_] = self.var
         d[:self.size_] = self.des
         a[:self.size_] = self.ang
         c[:self.size_] = self.col
+        c2[:self.size_] = self.cnt
+
         self.pos_ = p
         self.var_ = v
         self.des_ = d
         self.ang_ = a
         self.col_ = c
+        self.cnt_ = c2
+
         self.capacity_ = c_new
 
     def append(self, p,v,d,a,c):
@@ -305,8 +313,22 @@ class Landmarks(object):
             self.des_[self.size_:self.size_+n] = d
             self.ang_[self.size_:self.size_+n] = a
             self.col_[self.size_:self.size_+n] = c
+            self.cnt_[self.size_:self.size_+n] = 1
             # update size
             self.size_ += n
+
+    def prune(self, min_cnt=3, min_keep=512):
+        # TODO : prune by confidence, etc.
+        msk_c = (self.cnt >= min_cnt)[...,0]
+        msk_t = np.arange(self.size_) > (self.size_ - min_keep)
+        msk = (msk_c | msk_t)
+        sz  = msk.sum()
+        self.pos[:sz] = self.pos[msk]
+        self.var[:sz] = self.var[msk]
+        self.des[:sz] = self.des[msk]
+        self.ang[:sz] = self.ang[msk]
+        self.col[:sz] = self.col[msk]
+        self.size_ = sz
 
     @property
     def pos(self):
@@ -323,6 +345,9 @@ class Landmarks(object):
     @property
     def col(self):
         return self.col_[:self.size_]
+    @property
+    def cnt(self):
+        return self.cnt_[:self.size_]
 
 class Conversions(object):
     """
@@ -335,6 +360,7 @@ class Conversions(object):
             match=None
             ):
         self.K_ = K
+        self.Ki_ = np.linalg.inv(K)
         self.D_ = D
         self.T_c2b_ = T_c2b
         self.T_b2c_ = tx.inverse_matrix(T_c2b)
@@ -545,6 +571,14 @@ class Conversions(object):
             ])
         pt_map = self.pth_to_pt(pt_map_h)
         return pt_map
+
+    def E_to_F(self, E):
+        return np.linalg.multi_dot([
+            self.Ki_.T, E, self.Ki_])
+
+    def F_to_E(self, F):
+        return np.linalg.multi_dot([
+            self.K_.T, F, self.K_])
 
     def __call__(self, ftype, *a, **k):
         return self.f_[ftype](*a, **k)

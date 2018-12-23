@@ -259,7 +259,7 @@ class CVORunner(object):
             scan_c = None
 
         ### EVERYTHING FROM HERE IS PLOTTING + VIZ ###
-        if (i % 16) == 0:
+        if (i % 1) == 0:
             self.show(aimg, pts3, pts2, scan_c, pts_r, ukf.P, col_p, ('[%d/%d] '%(i,n)) + msg)
 
     def quit(self):
@@ -282,7 +282,7 @@ class CVORunner(object):
 def main():
     np.set_printoptions(precision=4)
     #idx = np.random.choice(8)
-    idx = 25
+    idx = 24
     print('idx', idx)
 
     # load data

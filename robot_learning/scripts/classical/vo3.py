@@ -8,7 +8,7 @@ from tf import transformations as tx
 import cv2
 import numpy as np
 
-from vo_common import recover_pose, drawMatches
+from vo_common import recover_pose, drawMatches, recover_pose_from_RT
 from vo_common import robust_mean, oriented_cov, show_landmark_2d
 from vo_common import Landmarks, Conversions
 from matplotlib import pyplot as plt
@@ -157,6 +157,66 @@ def get_points_color(img, pts, w=1):
     #print 'cmax(post)', cols.max()
     return np.asarray(cols, dtype=img.dtype)
 
+def score_H(pt1, pt2, H, cvt, sigma=1.0):
+    """ Homography model symmetric transfer error. """
+    score = 0.0
+    th = 5.991 # ??? TODO : magic number
+    iss = (1.0 / (sigma*sigma))
+
+    Hi = np.linalg.inv(H)
+    pt2_r = cvt.pth_to_pt(cvt.pt_to_pth(pt1).dot(H.T))
+    pt1_r = cvt.pth_to_pt(cvt.pt_to_pth(pt2).dot(Hi.T))
+    e1 = np.square(pt1 - pt1_r).sum(axis=-1)
+    e2 = np.square(pt2 - pt2_r).sum(axis=-1)
+
+    #score = 1.0 / (e1.mean() + e2.mean())
+    chi_sq1 = e1 * iss
+    msk1 = (chi_sq1 <= th)
+    score += ((th - chi_sq1) * msk1).sum()
+
+    chi_sq2 = e2 * iss
+    msk2 = (chi_sq2 <= th)
+    score += ((th - chi_sq2) * msk2).sum()
+    return score, (msk1 & msk2)
+
+def score_F(pt1, pt2, F, cvt, sigma=1.0):
+    """
+    Fundamental Matrix symmetric transfer error.
+    reference:
+        https://github.com/opencv/opencv/blob/master/modules/calib3d/src/fundam.cpp#L728
+    """
+    score = 0.0
+    th = 3.841 # ??
+    th_score = 5.991 # ?? TODO : magic number
+    iss = (1.0 / (sigma*sigma))
+
+    pt1_h = cvt.pt_to_pth(pt1)
+    pt2_h = cvt.pt_to_pth(pt2)
+
+    x1, y1 = pt1.T
+    x2, y2 = pt2.T
+
+    a, b, c = pt1_h.dot(F.T).T # Nx3
+    s2 = 1./(a*a + b*b);
+    d2 = a * x2 + b * y2 + c
+    e2 = d2*d2*s2
+
+    a, b, c = pt2_h.dot(F).T
+    s1 = 1./(a*a + b*b);
+    d1 = a * x1 + b * y1 + c
+    e1 = d1*d1*s1
+
+    #score = 1.0 / (e1.mean() + e2.mean())
+    chi_sq2 = e2 * iss
+    msk2 = (chi_sq2 <= th)
+    score += ((th_score - chi_sq2) * msk2).sum()
+
+    chi_sq1 = e1* iss
+    msk1 = (chi_sq1 <= th)
+    score += ((th_score - chi_sq1) * msk1).sum()
+
+    return score, (msk1 & msk2)
+
 class ClassicalVO(object):
     def __init__(self):
         # define constant parameters
@@ -168,8 +228,9 @@ class ClassicalVO(object):
         self.D_ = np.float32([0.158661, -0.249478, -0.000564, 0.000157, 0.000000])
 
         # conversion from camera frame to base_link frame
+        # NOTE : extrinsic parameter anchor
         self.T_c2b_ = tx.compose_matrix(
-                angles=[-np.pi/2 - np.deg2rad(10),0.0,-np.pi/2],
+                angles=[-np.pi/2,0.0,-np.pi/2],
                 translate=[0.174,0,0.113])
 
         # Note that camera intrinsic+extrinsic parameters
@@ -198,15 +259,16 @@ class ClassicalVO(object):
                 )
         # TODO : what is FAST threshold?
         orb = cv2.ORB_create(
-                nfeatures=4096,
+                nfeatures=2048,
                 scaleFactor=1.2,
                 nlevels=8,
                 scoreType=cv2.ORB_FAST_SCORE,
                 )
-        det = cv2.FastFeatureDetector_create(
-                threshold=20, # I think this is the default
-                nonmaxSuppression=True
-                )
+        det = orb
+        #det = cv2.FastFeatureDetector_create(
+        #        threshold=20, # I think this is the default
+        #        nonmaxSuppression=True
+        #        )
         #det = cv2.MSER_create()
         #det = cv2.GFTTDetector.create(
         #        maxCorners=4096,
@@ -235,7 +297,7 @@ class ClassicalVO(object):
         self.pnp_h_ = None
 
         # bundle adjustment
-        self.ba_en_ = True
+        self.ba_en_ = False
         self.ba_freq_ = 16 # empirically pretty good
         self.ba_pos_ = []
         self.ba_ci_ = []
@@ -512,6 +574,7 @@ class ClassicalVO(object):
 
             self.landmarks_.pos[midx] = x_k[...,0]
             self.landmarks_.var[midx] = P_k
+            self.landmarks_.cnt[midx] += 1
 
             # Add correspondences to BA Cache
             self.cache_BA(
@@ -916,7 +979,7 @@ class ClassicalVO(object):
         pt2_u_c = self.cvt_.pt2_to_pt2u(pt2_c[idx_t])
 
         # NOTE : experimental
-        if False:#True: # == USE_FM_COR
+        if True:#True: # == USE_FM_COR
             # correct Matches
             F, msk_f = cv2.findFundamentalMat(
                     pt2_u_c,
@@ -935,19 +998,51 @@ class ClassicalVO(object):
             pt2_u_c = np.squeeze(pt2_u_c, axis=0)
             pt2_u_p = np.squeeze(pt2_u_p, axis=0)
 
+        # opt 1 : essential
         E, msk_e = cv2.findEssentialMat(pt2_u_c, pt2_u_p, self.K_,
                 **self.pEM_)
         msk_e = msk_e[:,0].astype(np.bool)
         idx_e = np.where(msk_e)[0]
         print('em : {}/{}'.format(len(idx_e), msk_e.size))
+        F = self.cvt_.E_to_F(E)
 
-        n_in, R, t, msk_r, pt3 = recover_pose(E, self.K_,
-                pt2_u_c[idx_e], pt2_u_p[idx_e], log=False,
-                #z_min = 0.01 / scale,
-                #z_max = 100.0 / scale
-                #z_max = 5000.0
-                # = usually ~10m
+        # opt 2 : homography
+        H, msk_h = cv2.findHomography(pt2_u_c, pt2_u_p,
+                method=self.pEM_['method'],
+                ransacReprojThreshold=self.pEM_['prob']
                 )
+        msk_h = msk_h[:,0].astype(np.bool)
+        idx_h = np.where(msk_h)[0]
+
+        # compare errors
+        sH, msk_sh = score_H(pt2_u_c[idx_h], pt2_u_p[idx_h], H, self.cvt_)
+        sF, msk_sf = score_F(pt2_u_c[idx_e], pt2_u_p[idx_e], F, self.cvt_)
+
+        r_H = (sH / (sH + sF))
+        print('score determinant : {}'.format(r_H))
+
+        if r_H > 0.45: # homography
+            idx_h = idx_h[msk_sh]
+            res_h, Hr, Ht, Hn = cv2.decomposeHomographyMat(H, self.K_)
+
+            perm = zip(Hr,Ht)
+            n_in, R, t, msk_r, pt3 = recover_pose_from_RT(perm, self.K_,
+                    pt2_u_c[idx_h], pt2_u_p[idx_h], log=False)
+            print('homography : {}/{}/{}'.format(n_in, len(idx_h), len(msk_h) ))
+
+            # TODO : fix legacy variable name
+            idx_e = idx_h
+        else:
+            idx_e = idx_e[msk_sf]
+            n_in, R, t, msk_r, pt3 = recover_pose(E, self.K_,
+                    pt2_u_c[idx_e], pt2_u_p[idx_e], log=False,
+                    #z_min = 0.01 / scale,
+                    #z_max = 100.0 / scale
+                    #z_max = 5000.0
+                    # = usually ~10m
+                    )
+            print('essentialmat : {}/{}/{}'.format(n_in, len(idx_e), len(msk_e) ))
+
         idx_r = np.where(msk_r)[0]
         #print( 'mr : {}/{}'.format(msk_r.sum(), msk_r.size))
         pt3 = pt3.T
@@ -1061,6 +1156,7 @@ class ClassicalVO(object):
                 # run BA every 16 frames
                 pose_c_r = self.run_BA()
                 force_update = (pose_c_r)
+                self.landmarks_.prune()
                 # retrodictive UKF?
                 # somehow apply the optimized trajectory back to UKF results...
 
