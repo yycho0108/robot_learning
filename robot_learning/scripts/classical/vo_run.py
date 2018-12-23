@@ -214,7 +214,7 @@ class CVORunner(object):
                     self.index_ += 1
                     self.step()
                 plt.pause(0.001)
-                plt.savefig('/tmp/{:03d}.png'.format(self.index_))
+                #plt.savefig('/tmp/{:04d}.png'.format(self.index_))
         else:
             plt.show()
 

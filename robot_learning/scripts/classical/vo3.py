@@ -312,7 +312,7 @@ class ClassicalVO(object):
         # data cache + flags
         #self.landmarks_ = []
         self.landmarks_ = Landmarks()
-        self.hist_ = deque(maxlen=100)
+        self.hist_ = deque(maxlen=2)
 
         # pnp
         self.pnp_p_ = None
@@ -324,7 +324,7 @@ class ClassicalVO(object):
         self.ukf_dt_ = []
 
         # bundle adjustment
-        self.ba_freq_ = 16 # empirically pretty good
+        self.ba_freq_ = 32 # empirically pretty good
         self.ba_pos_ = []
         self.ba_ci_ = []
         self.ba_li_ = []
