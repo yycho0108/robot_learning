@@ -302,7 +302,7 @@ class ClassicalVO(object):
         self.ukf_dt_ = []
 
         # bundle adjustment
-        self.ba_freq_ = 16 # empirically pretty good
+        self.ba_freq_ = 16# empirically pretty good
         self.ba_pos_ = []
         self.ba_ci_ = []
         self.ba_li_ = []
@@ -400,7 +400,7 @@ class ClassicalVO(object):
         if len(self.landmarks_.pos) > 0:
             # enter landmark processing
 
-            # preliminary filter for distance
+            # filter by distance (<10m for match)
             pose_tmp = self.cvt_.T_b2c_.dot([pose[0], pose[1], 0, 1]).ravel()[:3]
             delta    = np.linalg.norm(self.landmarks_.pos - pose_tmp[None,:], axis=-1)
             d_msk    = (delta < 10.0 / scale)
@@ -437,7 +437,7 @@ class ClassicalVO(object):
             # TODO : take advantage of the Emat here to some use?
 
             # first-order estimate: image-coordinate distance-based filter
-            cor_delta = (pt2_lm_c[i1] - pt2_u_c[idx_er][i2])
+            cor_delta = (pt2_lm_c[lm_idx][i1] - pt2_u_c[idx_er][i2])
             cor_delta = np.linalg.norm(cor_delta, axis=-1)
             lm_msk_d = (cor_delta < 64.0) 
             lm_idx_d = np.where(lm_msk_d)[0]
@@ -447,7 +447,7 @@ class ClassicalVO(object):
                 # TODO : maybe not the most efficient way to
                 # check landmark consensus?
                 _, lm_msk_e = cv2.findEssentialMat(
-                        pt2_lm_c[i1][lm_idx_d],
+                        pt2_lm_c[lm_idx][i1][lm_idx_d],
                         pt2_u_c[idx_er][i2][lm_idx_d],
                         self.K_,
                         **self.pEM_)
@@ -1268,8 +1268,8 @@ class ClassicalVO(object):
 
                 # TODO : currently pruning happens with BA
                 # in order to not mess up landmark indices.
-                #self.landmarks_.prune_nmx()
-                self.landmarks_.prune()
+                self.landmarks_.prune_nmx()
+                #self.landmarks_.prune()
 
         print('\t\t pose-f2f : {}'.format(pose_c_r))
         ## === FROM THIS POINT ALL VIZ === 
