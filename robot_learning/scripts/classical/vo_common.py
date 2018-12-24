@@ -1,6 +1,7 @@
 import numpy as np
 import cv2
 from tf import transformations as tx
+from sklearn.neighbors import NearestNeighbors
 
 def print_Rt(R, t):
     print '\tR', np.round(np.rad2deg(tx.euler_from_matrix(R)), 2)
@@ -341,6 +342,26 @@ class Landmarks(object):
         self.col[:sz] = self.col[msk]
         self.size_ = sz
 
+    def prune_nmx(self, k=5, radius=0.025):
+        v = np.linalg.norm(self.var[:,(0,1,2),(0,1,2)], axis=-1)
+        neigh = NearestNeighbors(n_neighbors=k)
+        neigh.fit(self.pos)
+        d, i = neigh.kneighbors(return_distance=True)
+        msk_d = np.min(d, axis=1) < radius
+        msk_v = np.all(v[i]>v[:,None], axis=1) # TODO : or np.sum() < 2?
+        msk = np.logical_or(
+                np.logical_and(msk_d, msk_v),
+                ~msk_d)
+        sz = msk.sum()
+        p,v,d,a,c = [e[msk] for e in 
+                [self.pos,self.var,self.des,self.ang,self.col]]
+        self.pos[:sz] = p
+        self.var[:sz] = v
+        self.des[:sz] = d
+        self.ang[:sz] = a
+        self.col[:sz] = c
+        self.size_ = sz
+
     @property
     def pos(self):
         return self.pos_[:self.size_]
@@ -491,7 +512,6 @@ class Conversions(object):
         pt2 = np.squeeze(pt2, axis=1)
 
         # valid visibility mask
-        lm_msk = (pt3_cam[:,2] > 1e-3) # z-positive
         lm_msk = np.logical_and.reduce([
             pt3_cam[:,2] > 1e-3, # z-positive
             0 <= pt2[:,0],
@@ -557,7 +577,8 @@ class Conversions(object):
         # copied
         return (pth[:, :-1] / pth[:, -1:])
 
-    def pose_to_T(self, pose):
+    @staticmethod
+    def pose_to_T(pose):
         x, y, h = pose
         # transform points from base_link to origin coordinate system.
         return tx.compose_matrix(

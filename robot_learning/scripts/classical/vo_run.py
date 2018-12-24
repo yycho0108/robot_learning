@@ -218,6 +218,17 @@ class CVORunner(object):
         else:
             plt.show()
 
+        # save ...
+        cam_pos = np.stack([self.tx_, self.ty_, self.th_], axis=-1)
+        lmk_pos = self.vo_.landmarks_.pos
+        lmk_var = self.vo_.landmarks_.var
+        lmk_col = self.vo_.landmarks_.col
+
+        np.save('/tmp/cam_pos.npy', cam_pos)
+        np.save('/tmp/lmk_pos.npy', lmk_pos)
+        np.save('/tmp/lmk_var.npy', lmk_var)
+        np.save('/tmp/lmk_col.npy', lmk_col)
+
 def main():
     np.set_printoptions(precision=4)
     #idx = np.random.choice(8)

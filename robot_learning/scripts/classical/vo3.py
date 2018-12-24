@@ -239,7 +239,7 @@ class ClassicalVO(object):
     def __init__(self):
         # define configuration
         self.flag_ = ClassicalVO.VO_DEFAULT
-        self.flag_ &= ~ClassicalVO.VO_USE_HOMO
+        self.flag_ &= ~ClassicalVO.VO_USE_HOMO # TODO : doesn't really work?
         #self.flag_ &= ~ClassicalVO.VO_USE_FM_COR # performance
 
         # define constant parameters
@@ -424,6 +424,7 @@ class ClassicalVO(object):
         if len(self.landmarks_.pos) > 0:
             # enter landmark processing
             # TODO : add preliminary filter by view angle
+            # TODO : incorrect????
             pt2_lm_c, lm_msk = self.cvt_.pt3_pose_to_pt2_msk(
                     self.landmarks_.pos, pose)
             # note that pt2_lm_c is undistorted.
@@ -810,7 +811,7 @@ class ClassicalVO(object):
         self.ba_li_.append( l_i )
         self.ba_p2_.append( pt2 )
 
-    def project_BA(self, cam, lmk):
+    def project_BA(self, cam, lmk, return_msk=False):
         """
         cam = np.array(Nx3) camera 2d pose (x,y,h) (WARN: actually base_link pose)
         lmk = np.array(Nx3) landmark position (x,y,z) in <map> coordinates
@@ -850,6 +851,12 @@ class ClassicalVO(object):
             self.cvt_.T_c2b_,
             lmk_h[...,None]])[...,0]
         pt2 = self.cvt_.pth_to_pt(pt2_h)
+        if return_msk:
+            # NOTE: mask only implements depth check,
+            # as out-of-bounds pixel coordinates are still meaningful
+            # for bundle adjustment.
+            msk = (pt2_h[...,-1] > 0.0)
+            return pt2, msk
         return pt2
 
     def residual_BA(self, params,
@@ -863,8 +870,13 @@ class ClassicalVO(object):
         # obs_pt2 = [N_obsx3] array of projected landmark points
         # pos[c_i] --> [N_obsx3]
         # lmk[c_i] --> [N_obsx3]
-        prj_pt2 = self.project_BA(pos[c_i], lmk[l_i])
-        return (prj_pt2 - obs_pt2).ravel()
+
+        # TODO : is it actually necessary to apply the mask?
+        prj_pt2, msk = self.project_BA(pos[c_i], lmk[l_i], return_msk=True)
+        err = (prj_pt2 - obs_pt2)
+        i_null = np.where(~msk)[0]
+        err[i_null] = 0
+        return err.ravel()
 
     def sparsity_BA(self, n_c, n_l, ci, li):
         m = len(ci) * 2 # number of observations x projected observation size
@@ -1267,7 +1279,7 @@ class ClassicalVO(object):
 
                 # TODO : currently pruning happens with BA
                 # in order to not mess up landmark indices.
-                self.landmarks_.prune()
+                self.landmarks_.prune_nmx()
 
         print('\t\t pose-f2f : {}'.format(pose_c_r))
         ## === FROM THIS POINT ALL VIZ === 
@@ -1288,8 +1300,8 @@ class ClassicalVO(object):
         #s_xy_r = s_xy / d_lm_c # relative conf.
         #idx  = np.argsort(s_xy_r)
         #pt3_m = self.landmarks_.pos_[idx[:512]]
-        pt3_m = self.landmarks_.pos_
-        col_m = self.landmarks_.col_
+        pt3_m = self.landmarks_.pos
+        col_m = self.landmarks_.col
 
         # filter by height
         # convert to base_link coordinates
@@ -1300,31 +1312,53 @@ class ClassicalVO(object):
         #pt3_m = pt3_m[pt3_viz_msk]
         #col_m = col_m[pt3_viz_msk]
 
-        pt2_c_rec, rec_msk = self.cvt_.pt3_pose_to_pt2_msk(pt3_m, pose_c_r, distort=True)
+        pt2_c_rec, front_msk = self.project_BA(np.asarray([pose_c_r]), pt3_m,
+                return_msk=True
+                )
+        rec_msk = np.logical_and.reduce([
+            front_msk,
+            0 <= pt2_c_rec[:,0],
+            pt2_c_rec[:,0] < 640,
+            0 <= pt2_c_rec[:,1],
+            pt2_c_rec[:,1] < 480
+            ])
+        #pt2_c_rec, rec_msk = self.cvt_.pt3_pose_to_pt2_msk(pt3_m, pose_c_r, distort=False)
         rec_idx = np.where(rec_msk)[0]
-
-        # filter by visibility
+        pt2_c_rec = pt2_c_rec[rec_idx]
         pt3_m = pt3_m[rec_idx]
         col_m = col_m[rec_idx]
-        pt2_c_rec = pt2_c_rec[rec_idx]
-
-        # subsample points to show
-        n_show = min(len(pt3_m), 128)
-        if n_show <= 0:
-            sel = np.empty(0, dtype=np.int32)
-        else:
-            # opt1 : random
-            sel = np.random.choice(len(pt3_m), size=n_show, replace=(len(pt3_m) > n_show))
-            # opt2 : high confidence
-            #lmk_var = np.linalg.norm(
-            #        self.landmarks_.var[:, (0,1,2), (0,1,2)],
-            #        axis=-1)
-            #idx = np.argsort(lmk_var)
-            #print 'idx', idx
-            #sel = idx[:n_show]
-            
-        pt3_m = pt3_m[sel]
-        col_m = col_m[sel]
+        
+        #if False: # == VIZ_ALL
+        #    # sort points by variance?
+        #    lmk_var = np.linalg.norm(
+        #            self.landmarks_.var[:, (0,1,2), (0,1,2)],
+        #            axis=-1)
+        #    lm_idx_s = np.argsort(-lmk_var)
+        #    # small variance listed last
+        #    # hopefully also gets drawn last
+        #    pt3_m = pt3_m[lm_idx_s]
+        #    col_m = col_m[lm_idx_s]
+        #elif False: # == VIZ_FOV
+        #    # filter by visibility
+        #    pt3_m = pt3_m[rec_idx]
+        #    col_m = col_m[rec_idx]
+        #elif False: # == VIZ_SUMSAMPLE
+        #    # subsample points to show
+        #    n_show = min(len(pt3_m), 128)
+        #    if n_show <= 0:
+        #        sel = np.empty(0, dtype=np.int32)
+        #    else:
+        #        # opt1 : random
+        #        sel = np.random.choice(len(pt3_m), size=n_show, replace=(len(pt3_m) > n_show))
+        #        # opt2 : high confidence
+        #        #lmk_var = np.linalg.norm(
+        #        #        self.landmarks_.var[:, (0,1,2), (0,1,2)],
+        #        #        axis=-1)
+        #        #idx = np.argsort(lmk_var)
+        #        #print 'idx', idx
+        #        #sel = idx[:n_show]
+        #    pt3_m = pt3_m[sel]
+        #    col_m = col_m[sel]
         # ================================
 
         # convert to base_link coordinates
