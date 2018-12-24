@@ -220,24 +220,27 @@ def score_F(pt1, pt2, F, cvt, sigma=1.0):
 
 class ClassicalVO(object):
     # define flags
-    VO_USE_FM_COR    = 1<<0 # Enable correctMatches()
-    VO_USE_TRACK     = 1<<1 # Correspondences by track vs. descriptor match
-    VO_USE_SCALE_A3D = 1<<2 # Estimate Scale from Affine3D
-    VO_USE_SCALE_GP  = 1<<3 # Estimate Scale from Ground-Plane
-    VO_USE_PNP       = 1<<4 # Compute Pose from PNP (TODO: NOT SUPPORTED)
-    VO_USE_BA        = 1<<5 # Use Bundle Adjustment
-    VO_USE_HOMO      = 1<<6 # Use Homography Fallback
-    VO_USE_F2M       = 1<<7 # Use Frame-To-Map Information
-    VO_USE_LM_KF     = 1<<8 # Use Landmark Kalman Filter
+    VO_USE_FM_COR    = 1<<0  # Enable correctMatches() (NOTE: time-consuming)
+    VO_USE_TRACK     = 1<<1  # Correspondences by track vs. descriptor match
+    VO_USE_SCALE_A3D = 1<<2  # Estimate Scale from Affine3D
+    VO_USE_SCALE_GP  = 1<<3  # Estimate Scale from Ground-Plane
+    VO_USE_PNP       = 1<<4  # Compute Pose from PNP (TODO: NOT SUPPORTED)
+    VO_USE_BA        = 1<<5  # Use Bundle Adjustment
+    VO_USE_HOMO      = 1<<6  # Use Homography Fallback
+    VO_USE_F2M       = 1<<7  # Use Frame-To-Map Information
+    VO_USE_LM_KF     = 1<<8  # Use Landmark Kalman Filter
+    VO_USE_KPT_SPX   = 1<<9  # Sub-pixel refinement (NOTE: time-consuming)
+    VO_USE_MXCHECK   = 1<<10 # Cross-Check Matches
 
     VO_DEFAULT = VO_USE_FM_COR | VO_USE_TRACK | VO_USE_SCALE_GP | \
             VO_USE_BA | VO_USE_HOMO | VO_USE_F2M | \
-            VO_USE_LM_KF
+            VO_USE_LM_KF | VO_USE_KPT_SPX | VO_USE_MXCHECK
 
     def __init__(self):
         # define configuration
         self.flag_ = ClassicalVO.VO_DEFAULT
         self.flag_ &= ~ClassicalVO.VO_USE_HOMO
+        #self.flag_ &= ~ClassicalVO.VO_USE_FM_COR # performance
 
         # define constant parameters
         Ks = (1.0 / 1.0)
@@ -434,7 +437,8 @@ class ClassicalVO(object):
         des_p_m = des_p[idx_ter]
         i1, i2 = self.cvt_.des_des_to_match(
                 self.landmarks_.des[lm_idx],
-                des_p_m)
+                des_p_m, cross=(self.flag_ & ClassicalVO.VO_USE_MXCHECK)
+                )
 
         lm_msk_e = np.ones(len(i1), dtype=np.bool)
         lm_idx_e = np.where(lm_msk_e)[0]
@@ -451,6 +455,8 @@ class ClassicalVO(object):
 
             # second estimate
             try:
+                # TODO : maybe not the most efficient way to
+                # check landmark consensus?
                 _, lm_msk_e = cv2.findEssentialMat(
                         pt2_lm_c[lm_idx][i1][lm_idx_d],
                         pt2_u_c[idx_er][i2][lm_idx_d],
@@ -694,7 +700,8 @@ class ClassicalVO(object):
                 self.landmarks_.des[lm_idx],
                 des_p_m,
                 lowe=1.0,
-                maxd=128.0
+                maxd=128.0,
+                cross=False
                 )
 
         # update "invisible" landmarks that should have been visible
@@ -988,7 +995,8 @@ class ClassicalVO(object):
         # (currently very much eager)
 
         img_c = img
-        kpt_c = self.cvt_.img_to_kpt(img_c)
+        kpt_c = self.cvt_.img_to_kpt(img_c,
+                subpix=(self.flag_ & ClassicalVO.VO_USE_KPT_SPX))
         kpt_c, des_c = self.cvt_.img_kpt_to_kpt_des(img_c, kpt_c)
 
         # update history
@@ -1014,16 +1022,18 @@ class ClassicalVO(object):
         pt2_p = self.cvt_.kpt_to_pt(kpt_p)
 
         # == obtain next-frame keypoints ==
-        # opt1 : points by track
-        pt2_c, idx_t = self.track(img_p, img_c, pt2_p)
-
-        # opt2 : points by match
-        # i1, i2 = self.cvt_.des_des_to_match(des_p, des_c)
-        # msk_t = np.zeros(len(pt2_p), dtype=np.bool)
-        # msk_t[i1] = True
-        # pt2_c = np.zeros_like(pt2_p)
-        # pt2_c[i1] = self.cvt_.kpt_to_pt(kpt_c[i2])
-
+        if self.flag_ & ClassicalVO.VO_USE_TRACK:
+            # opt1 : points by track
+            pt2_c, idx_t = self.track(img_p, img_c, pt2_p)
+        else:
+            # opt2 : points by match
+            i1, i2 = self.cvt_.des_des_to_match(des_p, des_c,
+                    cross=(self.flag_ & ClassicalVO.VO_USE_MXCHECK)
+                    )
+            msk_t = np.zeros(len(pt2_p), dtype=np.bool)
+            msk_t[i1] = True
+            pt2_c = np.zeros_like(pt2_p)
+            pt2_c[i1] = self.cvt_.kpt_to_pt(kpt_c[i2])
         # apply additional constraints
         # TODO : evaluate if the >1px constraint is necessary
         # msk_d = (np.max(np.abs(pt2_p - pt2_c), axis=-1) > 1.0) # enforce >1px difference
@@ -1031,7 +1041,8 @@ class ClassicalVO(object):
         # =================================
 
         #print 'mean delta', np.mean(pt2_c - pt2_p, axis=0) # -14 px
-        print('track : {}/{}'.format(len(pt2_c), len(idx_t)))
+        # TODO : also track landmark points?
+        print('track : {}/{}'.format(len(idx_t), len(pt2_p)))
 
         pt2_u_p = self.cvt_.pt2_to_pt2u(pt2_p[idx_t])
         pt2_u_c = self.cvt_.pt2_to_pt2u(pt2_c[idx_t])
@@ -1257,8 +1268,7 @@ class ClassicalVO(object):
                 # TODO : currently pruning happens with BA
                 # in order to not mess up landmark indices.
                 self.landmarks_.prune()
-                # retrodictive UKF?
-                # somehow apply the optimized trajectory back to UKF results...
+
         print('\t\t pose-f2f : {}'.format(pose_c_r))
         ## === FROM THIS POINT ALL VIZ === 
 
@@ -1303,7 +1313,16 @@ class ClassicalVO(object):
         if n_show <= 0:
             sel = np.empty(0, dtype=np.int32)
         else:
+            # opt1 : random
             sel = np.random.choice(len(pt3_m), size=n_show, replace=(len(pt3_m) > n_show))
+            # opt2 : high confidence
+            #lmk_var = np.linalg.norm(
+            #        self.landmarks_.var[:, (0,1,2), (0,1,2)],
+            #        axis=-1)
+            #idx = np.argsort(lmk_var)
+            #print 'idx', idx
+            #sel = idx[:n_show]
+            
         pt3_m = pt3_m[sel]
         col_m = col_m[sel]
         # ================================

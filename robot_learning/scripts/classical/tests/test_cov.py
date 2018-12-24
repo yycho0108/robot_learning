@@ -55,8 +55,15 @@ def oriented_cov(
     return C
 
 def cov_sum(a, b, va, vb):
+    """
+    from https://math.stackexchange.com/a/2414813
+    Doesn't really appear to be more efficient?
+    """
+
     vc = va+vb
     L = np.linalg.cholesky(vc)
+
+    # opt1 : batch processing
     rhs = np.concatenate([va, vb, a[:,None], b[:,None]], axis=1)
     lhs = np.linalg.solve(L, rhs)
     va_ = lhs[:, 0:3]
@@ -64,6 +71,7 @@ def cov_sum(a, b, va, vb):
     a_  = lhs[:, 6:7]
     b_  = lhs[:, 7:8]
 
+    # opt2 : solve each one
     #va_ = np.linalg.solve(L, va)
     #vb_ = np.linalg.solve(L, vb)
     #a_  = np.linalg.solve(L, a)
@@ -80,14 +88,6 @@ def cov_sum_kal(a, b, va, vb):
     x = a + K.dot(y)
     P = (np.eye(3) - K).dot(va)
     return x, P
-
-    #y_k = (p_lm_v2_0 - p_lm_0).reshape(-1,3,1)
-    #S_k = var_lm_new + var_lm_old # I think R_k = var_lm_new (measurement noise)
-    #K_k = np.matmul(var_lm_old, np.linalg.inv(S_k))
-    #x_k = p_lm_0.reshape(-1,3,1) + np.matmul(K_k, y_k)
-    #I = np.eye(3)[None,...] # (1,3,3)
-    #P_k = np.matmul(I - K_k, var_lm_old)
-
 
 def gen_pt(n, fov=1.15):
     phi   = np.random.uniform(-fov/2 ,fov/2, size=n)

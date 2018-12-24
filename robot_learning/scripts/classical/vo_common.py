@@ -6,6 +6,17 @@ def print_Rt(R, t):
     print '\tR', np.round(np.rad2deg(tx.euler_from_matrix(R)), 2)
     print '\tt', np.round(t.ravel() / np.linalg.norm(t), 2)
 
+def intersect2d(a, b):
+    """
+    from https://stackoverflow.com/a/8317403
+    """
+    nrows, ncols = a.shape
+    dtype={'names':['f{}'.format(i) for i in range(ncols)],
+        'formats':ncols * [a.dtype]}
+    c = np.intersect1d(a.view(dtype), b.view(dtype))
+    c = c.view(a.dtype).reshape(-1, ncols)
+    return c
+
 def recover_pose_from_RT(perm, K,
         pt1, pt2,
         z_min = np.finfo(np.float32).eps,
@@ -463,10 +474,9 @@ class Conversions(object):
     def pt3_pose_to_pt2_msk(self, pt3, pose, distort=False):
         # pose = (x,y,h)
         # NOTE: pose is specified w.r.t base_link, not camera.
-
         D = self.D_
         if not distort:
-            D *= 0.0
+            D = D * 0.0
         
         pt3_cam = self.map_to_cam(pt3, pose)
 
@@ -493,29 +503,44 @@ class Conversions(object):
 
     def des_des_to_match(self, des1, des2,
             lowe=0.75,
-            maxd=64.0
+            maxd=64.0,
+            cross=True
             ):
-        # TODO : support arbitrary matchers or something
-        # currently only supports wrapper around FLANN
-        match = self.match_(des1, des2) # cv2.DMatch
+        if cross:
+            # check bidirectional
+            i1_ab, i2_ab = self.des_des_to_match(des1, des2,
+                    lowe, maxd, cross=False)
+            i2_ba, i1_ba = self.des_des_to_match(des2, des1,
+                    lowe, maxd, cross=False)
+            m1 = np.stack([i1_ab, i2_ab], axis=-1)
+            m2 = np.stack([i1_ba, i2_ba], axis=-1)
+            m  = intersect2d(m1, m2)
+            i1, i2 = m.T
+            return i1, i2
+        else:
+            # TODO : support arbitrary matchers or something
+            # currently only supports wrapper around FLANN
+            if len(des1) <= 0 or len(des2) <= 0:
+                return np.int32([]), np.int32([])
+            match = self.match_(des1, des2) # cv2.DMatch
 
-        ## apply lowe + distance filter
-        good = []
-        for e in match:
-            if not len(e) == 2:
-                continue
-            (m, n) = e
-            # TODO : set threshold for lowe's filter
-            # TODO : set reasonable maxd for GFTT, for instance.
-            c_lowe = (m.distance <= lowe * n.distance)
-            c_maxd = (m.distance <= maxd)
-            if (c_lowe and c_maxd):
-                good.append(m)
+            ## apply lowe + distance filter
+            good = []
+            for e in match:
+                if not len(e) == 2:
+                    continue
+                (m, n) = e
+                # TODO : set threshold for lowe's filter
+                # TODO : set reasonable maxd for GFTT, for instance.
+                c_lowe = (m.distance <= lowe * n.distance)
+                c_maxd = (m.distance <= maxd)
+                if (c_lowe and c_maxd):
+                    good.append(m)
 
-        # extract indices
-        i1, i2 = np.int32([
-            (m.queryIdx, m.trainIdx) for m in good
-            ]).reshape(-1,2).T
+            # extract indices
+            i1, i2 = np.int32([
+                (m.queryIdx, m.trainIdx) for m in good
+                ]).reshape(-1,2).T
 
         return i1, i2
 
