@@ -43,6 +43,8 @@ def plot_trisurf(ax, args, facecolors,
         lightsource=None, **kwargs
         ):
     """
+    adapted from matplotlib plot_trisurf source code.
+
     ============= ================================================
     Argument      Description
     ============= ================================================
@@ -113,6 +115,20 @@ def plot_trisurf(ax, args, facecolors,
     xt = tri.x[triangles]
     yt = tri.y[triangles]
     zt = z[triangles]
+
+    # filter by tri size
+    pt = np.stack([xt,yt,zt], axis=1) # Nx3x3
+    dv1 = (pt[:,0] - pt[:,1])
+    dv2 = (pt[:,0] - pt[:,2])
+    ar = np.linalg.norm(np.cross(dv1, dv2), axis=-1)
+    c = np.percentile(ar, 75)
+
+    # apply filtered try
+    triangles = triangles[ar<=c]
+    xt = tri.x[triangles]
+    yt = tri.y[triangles]
+    zt = z[triangles]
+
     verts = np.stack((xt, yt, zt), axis=-1)
 
     polyc = art3d.Poly3DCollection(verts, *args, **kwargs)
@@ -173,7 +189,7 @@ def main():
     idx = np.where(lmk_pos[:,2] > 0.01) # plot above ground-plane
     lmk_pos, lmk_col, lmk_var = [e[idx] for e in (lmk_pos, lmk_col, lmk_var)]
 
-    idx = non_max_suppression(lmk_pos, lmk_var, k=16, radius=0.01)
+    idx = non_max_suppression(lmk_pos, lmk_var, k=16, radius=0.025)
     lmk_pos, lmk_col, lmk_var = [e[idx] for e in (lmk_pos, lmk_col, lmk_var)]
 
     lo = np.percentile(lmk_pos, 5, axis=0)
@@ -194,9 +210,6 @@ def main():
     hi = md + sc / 2.0
 
     xlim, ylim, zlim = zip(*[lo,hi])
-    print xlim
-    print ylim
-    print zlim
 
     fig = plt.figure()
     ax = fig.add_subplot(1,1,1, projection='3d')
@@ -204,13 +217,23 @@ def main():
     ax.set_ylim(ylim)
     ax.set_zlim(zlim)
 
-    #col = lmk_col[...,::-1]
     col = lmk_col[...,::-1]/255.
     col = col.astype(np.float32)
-    plot_trisurf(ax, [lmk_pos[:,0], lmk_pos[:,1], lmk_pos[:,2]],
-            facecolors = col
+
+    #plot_trisurf(ax, [lmk_pos[:,0], lmk_pos[:,1], lmk_pos[:,2]],
+    #        facecolors = col
+    #        )
+
+    ax.scatter(lmk_pos[:,0], lmk_pos[:,1], lmk_pos[:,2], 
+            marker='D',
+            c=col
             )
-    ax.scatter(lmk_pos[:,0], lmk_pos[:,1], lmk_pos[:,2], c=col)
+
+    # show origin
+    ax.plot([0,1],[0,0],[0,0], 'r-')
+    ax.plot([0,0],[0,1],[0,0], 'g-')
+    ax.plot([0,0],[0,0],[0,1], 'b-')
+
     plt.show()
 
 if __name__ == "__main__":
