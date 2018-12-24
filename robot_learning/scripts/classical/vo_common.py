@@ -171,7 +171,7 @@ def oriented_cov(
     C = np.matmul(np.matmul(R, cov0[None,...]), RT)
 
     # apply depth scale for variance
-    # C = d[...,None] * C
+    C = d[...,None] * C
     return C
 
 lmk_fig = None
