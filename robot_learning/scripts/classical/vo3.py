@@ -128,34 +128,10 @@ def get_points_color(img, pts, w=1):
 
     # opt 1 : naive mean
     # cols = np.mean(cols_w, axis=(1,2))
-
     cols = cols_w.astype(np.float32)
-    cols = np.sqrt(np.mean(np.square(cols),axis=(1,2)))
-    #cols = np.linalg.norm(cols_w, axis=(1,2))
-
-
     # opt 2 : rms
-    #cols = np.sqrt(np.mean(np.square(cols_w),axis=(1,2)))
-    #print 'stat-pre', cols_w.std(axis=(0,1,2))
-    #cols = np.linalg.norm(cols_w, axis=(1,2))
-    #csq  = np.square(cols_w) #R
-    #csum = np.mean(csq, axis=(1,2)) #M
-    #cols = np.sqrt(csum) #S
-    #print 'stat-post', cols.std(axis=0)
-    #cols = np.linalg.norm(cols_w, axis=(1,2)).astype(np.float32) # n,3
-
-    #for oi in range(-w,w+1):
-    #    for oj in range(-w,w+1):
-    #        img[pis-oi,pjs-oj]
-    #cs = []
-    #for (pi,pj) in zip(pis, pjs):
-    #    c = np.linalg.norm(img[pi-w:pi+w, pj-w:pj+w], axis=(0,1))
-    #    cs.append(c)
-
-    # vectorized method
+    cols = np.sqrt(np.mean(np.square(cols),axis=(1,2)))
     #cs = np.clip(cs, 0, 255) # TODO : evaluate if necessary
-    #print 'cmax(pre)', cols_w.max()
-    #print 'cmax(post)', cols.max()
     return np.asarray(cols, dtype=img.dtype)
 
 def score_H(pt1, pt2, H, cvt, sigma=1.0):
@@ -313,9 +289,8 @@ class ClassicalVO(object):
                 )
 
         # data cache + flags
-        #self.landmarks_ = []
         self.landmarks_ = Landmarks()
-        self.hist_ = deque(maxlen=2)
+        self.hist_ = deque(maxlen=3)
 
         # pnp
         self.pnp_p_ = None
@@ -327,7 +302,7 @@ class ClassicalVO(object):
         self.ukf_dt_ = []
 
         # bundle adjustment
-        self.ba_freq_ = 32 # empirically pretty good
+        self.ba_freq_ = 16 # empirically pretty good
         self.ba_pos_ = []
         self.ba_ci_ = []
         self.ba_li_ = []
@@ -414,6 +389,7 @@ class ClassicalVO(object):
             ):
 
         # build index combinationss
+        # TODO : tracking these indices are really getting quite ridiculous.
         idx_te = idx_t[idx_e]
         idx_ter = idx_te[idx_r]
         idx_er = idx_e[idx_r]
@@ -423,16 +399,28 @@ class ClassicalVO(object):
 
         if len(self.landmarks_.pos) > 0:
             # enter landmark processing
+
+            # preliminary filter for distance
+            pose_tmp = self.cvt_.T_b2c_.dot([pose[0], pose[1], 0, 1]).ravel()[:3]
+            delta    = np.linalg.norm(self.landmarks_.pos - pose_tmp[None,:], axis=-1)
+            d_msk    = (delta < 10.0 / scale)
+
             # TODO : add preliminary filter by view angle
-            # TODO : incorrect????
+
+            # filter by visibility
             pt2_lm_c, lm_msk = self.cvt_.pt3_pose_to_pt2_msk(
                     self.landmarks_.pos, pose)
-            # note that pt2_lm_c is undistorted.
-            print('visible landmarks : {}/{}'.format(lm_msk.sum(), lm_msk.size))
+            lm_msk = np.logical_and.reduce([
+                lm_msk,
+                d_msk
+                ])
+            lm_idx = np.where(lm_msk)[0]
         else:
+            # ==> empty
             lm_msk = np.ones((0), dtype=np.bool)
+            lm_idx = np.where(lm_msk)[0]
 
-        lm_idx = np.where(lm_msk)[0]
+        print('visible landmarks : {}/{}'.format(len(lm_idx), self.landmarks_.size_))
 
         # select useful descriptor based on current viewpoint
         des_p_m = des_p[idx_ter]
@@ -448,8 +436,8 @@ class ClassicalVO(object):
             # filter correspondences by Emat consensus
             # TODO : take advantage of the Emat here to some use?
 
-            # first-order estimate: distance-based filter
-            cor_delta = (pt2_lm_c[lm_idx][i1] - pt2_u_c[idx_er][i2])
+            # first-order estimate: image-coordinate distance-based filter
+            cor_delta = (pt2_lm_c[i1] - pt2_u_c[idx_er][i2])
             cor_delta = np.linalg.norm(cor_delta, axis=-1)
             lm_msk_d = (cor_delta < 64.0) 
             lm_idx_d = np.where(lm_msk_d)[0]
@@ -459,7 +447,7 @@ class ClassicalVO(object):
                 # TODO : maybe not the most efficient way to
                 # check landmark consensus?
                 _, lm_msk_e = cv2.findEssentialMat(
-                        pt2_lm_c[lm_idx][i1][lm_idx_d],
+                        pt2_lm_c[i1][lm_idx_d],
                         pt2_u_c[idx_er][i2][lm_idx_d],
                         self.K_,
                         **self.pEM_)
@@ -475,6 +463,7 @@ class ClassicalVO(object):
             else:
                 lm_msk_e = lm_msk_d
                 lm_idx_e = lm_idx_d
+
             print('landmark concensus : {}/{}'.format(len(lm_idx_e), lm_msk_e.size))
 
 
@@ -723,7 +712,7 @@ class ClassicalVO(object):
             if len(d_lm_old) > 0:
                 # filter insertion by proximity to existing landmarks
                 neigh = NearestNeighbors(n_neighbors=1)
-                neigh.fit(pt2_lm_c[lm_idx])
+                neigh.fit(pt2_lm_c)
                 d, _ = neigh.kneighbors(pt2_u_c[idx_e][idx_r][lm_new_idx], return_distance=True)
                 msk_knn = (d < 16.0)[:,0] # TODO : magic number
 
@@ -1279,7 +1268,8 @@ class ClassicalVO(object):
 
                 # TODO : currently pruning happens with BA
                 # in order to not mess up landmark indices.
-                self.landmarks_.prune_nmx()
+                #self.landmarks_.prune_nmx()
+                self.landmarks_.prune()
 
         print('\t\t pose-f2f : {}'.format(pose_c_r))
         ## === FROM THIS POINT ALL VIZ === 
@@ -1312,6 +1302,8 @@ class ClassicalVO(object):
         #pt3_m = pt3_m[pt3_viz_msk]
         #col_m = col_m[pt3_viz_msk]
 
+        # NOTE: pt2_c_rec will not be 100% accurate of the tracked positions,
+        # as (due to possible accuracy reasons) distortions have been disabled.
         pt2_c_rec, front_msk = self.project_BA(np.asarray([pose_c_r]), pt3_m,
                 return_msk=True
                 )
