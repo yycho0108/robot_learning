@@ -5,6 +5,16 @@ from tf import transformations as tx
 from sklearn.neighbors import NearestNeighbors
 from scipy.spatial import Delaunay
 
+def estimate_normals(p, k=20):
+    neigh = NearestNeighbors(n_neighbors=k)
+    neigh.fit(p)
+    _, indices = neigh.kneighbors()
+
+    dp = (p[indices] - p[:,None])
+    U, s, V = np.linalg.svd(dp.transpose(0,2,1))
+    nv = U[:, :, -1]
+    return nv / np.linalg.norm(nv, axis=-1, keepdims=True)
+
 def non_max_suppression(pos, var, k=16, radius=0.1):
     v = np.linalg.norm(var[:,(0,1,2),(0,1,2)], axis=-1)
     idx = np.argsort(v) # handle small variance first
@@ -37,6 +47,28 @@ from matplotlib.tri.triangulation import Triangulation
 from mpl_toolkits.mplot3d import art3d
 from mpl_toolkits.mplot3d import proj3d
 from mpl_toolkits.mplot3d import axis3d
+
+def write_ply(pos, col):
+    header = '\n'.join([
+        'ply',
+        'format ascii 1.0',
+        'element vertex {}'.format(len(pos)),
+        'property float x',
+        'property float y',
+        'property float z',
+        'property uchar red',
+        'property uchar green',
+        'property uchar blue',
+        'end_header'
+        ])
+    arr = np.concatenate([pos, col*255], axis=-1)
+    np.savetxt(
+            '/tmp/test.ply',
+            arr,
+            fmt='%f %f %f %d %d %d',
+            header=header,
+            comments='')
+
 
 def plot_trisurf(ax, args, facecolors,
         color=None, norm=None, vmin=None, vmax=None,
@@ -171,7 +203,7 @@ def main():
     lmk_pos = lmk_pos.dot(T_c2b_[:3,:3].T) + T_c2b_[:3,3:].T
     lmk_col = np.load('/tmp/lmk_col.npy')
     lmk_var = np.load('/tmp/lmk_var.npy')
-    cam_pos = np.load('/tmp/cam.npy')
+    cam_pos = np.load('/tmp/cam_pos.npy')
 
     ## basic thresholding filter
     #v = np.linalg.norm(lmk_var[:,(0,1,2),(0,1,2)], axis=-1)
@@ -186,7 +218,7 @@ def main():
     #lmk_var = lmk_var[v_idx]
     ##cam_pos = cam_pos[v_idx]
 
-    idx = np.where(lmk_pos[:,2] > 0.01) # plot above ground-plane
+    idx = np.where(lmk_pos[:,2] > -0.01) # plot above ground-plane
     lmk_pos, lmk_col, lmk_var = [e[idx] for e in (lmk_pos, lmk_col, lmk_var)]
 
     idx = non_max_suppression(lmk_pos, lmk_var, k=16, radius=0.025)
@@ -220,19 +252,42 @@ def main():
     col = lmk_col[...,::-1]/255.
     col = col.astype(np.float32)
 
-    #plot_trisurf(ax, [lmk_pos[:,0], lmk_pos[:,1], lmk_pos[:,2]],
-    #        facecolors = col
-    #        )
+    plot_trisurf(ax, [lmk_pos[:,0], lmk_pos[:,1], lmk_pos[:,2]],
+            facecolors = col,
+            zorder=0
+            )
+
+    write_ply(lmk_pos, col)
+
+    # normal vector color
+    lmk_nvc = estimate_normals(lmk_pos, k=10)
+    lmk_wtf = np.concatenate([lmk_pos, lmk_nvc], axis=-1)
+    np.savetxt('/tmp/lmk_wtf.txt', lmk_wtf)
+    #print lmk_nvc.min(axis=0), lmk_nvc.max(axis=0)
+    #col = (0.5 + lmk_nvc * 0.5)
+    #print col.min(axis=0), col.max(axis=0)
 
     ax.scatter(lmk_pos[:,0], lmk_pos[:,1], lmk_pos[:,2], 
             marker='D',
-            c=col
+            c=col,
+            zorder=1
+            )
+
+    ax.plot(cam_pos[:,0], cam_pos[:,1], 0*cam_pos[:,2], # index 2 is heading, not Z
+            'b--',
+            zorder=2
             )
 
     # show origin
-    ax.plot([0,1],[0,0],[0,0], 'r-')
-    ax.plot([0,0],[0,1],[0,0], 'g-')
-    ax.plot([0,0],[0,0],[0,1], 'b-')
+    ax.plot([0,1],[0,0],[0,0], 'r-',
+            zorder=3
+            )
+    ax.plot([0,0],[0,1],[0,0], 'g-',
+            zorder=3
+            )
+    ax.plot([0,0],[0,0],[0,1], 'b-',
+            zorder=3
+            )
 
     plt.show()
 

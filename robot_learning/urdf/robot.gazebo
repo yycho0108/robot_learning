@@ -1,9 +1,9 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://ros.org/wiki/xacro">
-	<xacro:property name="wm1" value="10.0"/>
-	<xacro:property name="wm2" value="5.0"/>
-	<xacro:property name="wkp" value="1e9"/>
-	<xacro:property name="wkd" value="2e5"/>
+	<xacro:property name="wm1" value="1.0"/>
+	<xacro:property name="wm2" value="1.0"/>
+	<xacro:property name="wkp" value="1e8"/>
+	<xacro:property name="wkd" value="2e4"/>
 	<xacro:property name="wmd" value="1e-2"/>
 
 	<gazebo>
@@ -27,8 +27,8 @@
 			-->
 
 			<!-- apply odom correction, see cmd_calib.py -->
-			<wheelSeparation>0.3</wheelSeparation>
-			<wheelDiameter>0.1</wheelDiameter>
+            <wheelSeparation>${wd}</wheelSeparation>
+            <wheelDiameter>${2*wr}</wheelDiameter>
 
 			<torque>1000</torque>
 			<commandTopic>cmd_vel</commandTopic>
@@ -151,12 +151,22 @@
 		<maxVel value="0"/>
 		<!--<maxContacts>1</maxContacts>-->
 	</gazebo>
-	<gazebo reference="chassis">
+	<gazebo reference="front_caster">
 		<material>Gazebo/Yellow</material>
 		<mu1 value="0.0"/>
 		<mu2 value="0.0"/>
-		<kp value="1e9" />
-		<kd value="2e5" />
+        <kp value="${wkp}" />
+        <kd value="${wkd}" />
+		<!--<fdir1 value="1 0 0"/>-->
+		<!--<minDepth value="${wmd/2}"/>-->
+		<!--<maxContacts>0</maxContacts>-->
+	</gazebo>
+	<gazebo reference="back_caster">
+		<material>Gazebo/Yellow</material>
+		<mu1 value="0.0"/>
+		<mu2 value="0.0"/>
+        <kp value="${wkp}" />
+        <kd value="${wkd}" />
 		<!--<fdir1 value="1 0 0"/>-->
 		<!--<minDepth value="${wmd/2}"/>-->
 		<!--<maxContacts>0</maxContacts>-->

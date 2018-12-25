@@ -207,15 +207,18 @@ class ClassicalVO(object):
     VO_USE_LM_KF     = 1<<8  # Use Landmark Kalman Filter
     VO_USE_KPT_SPX   = 1<<9  # Sub-pixel refinement (NOTE: time-consuming)
     VO_USE_MXCHECK   = 1<<10 # Cross-Check Matches
+    VO_USE_GP_RSC    = 1<<11 # Enable RANSAC Plane estimation for ground plane
 
     VO_DEFAULT = VO_USE_FM_COR | VO_USE_TRACK | VO_USE_SCALE_GP | \
             VO_USE_BA | VO_USE_HOMO | VO_USE_F2M | \
-            VO_USE_LM_KF | VO_USE_KPT_SPX | VO_USE_MXCHECK
+            VO_USE_LM_KF | VO_USE_KPT_SPX | VO_USE_MXCHECK | \
+            VO_USE_GP_RSC
 
     def __init__(self):
         # define configuration
         self.flag_ = ClassicalVO.VO_DEFAULT
         self.flag_ &= ~ClassicalVO.VO_USE_HOMO # TODO : doesn't really work?
+        #self.flag_ &= ~ClassicalVO.VO_USE_GP_RSC
         #self.flag_ &= ~ClassicalVO.VO_USE_FM_COR # performance
 
         # define constant parameters
@@ -297,8 +300,10 @@ class ClassicalVO(object):
         self.pnp_h_ = None
 
         # UKF
-        self.ukf_l_  = build_ukf()
-        self.ukf_g_  = build_ukf()
+        #self.ukf_l_  = build_ukf()
+        #self.ukf_g_  = build_ukf()
+        self.ukf_l_  = build_ekf()
+        self.ukf_g_  = build_ekf()
         self.ukf_dt_ = []
 
         # bundle adjustment
@@ -393,6 +398,7 @@ class ClassicalVO(object):
         idx_te = idx_t[idx_e]
         idx_ter = idx_te[idx_r]
         idx_er = idx_e[idx_r]
+        pt2_lm_c = None # ???
 
         # frame-to-map processing
         # (i.e. uses landmark data)
@@ -565,6 +571,7 @@ class ClassicalVO(object):
         if len(d_lm_old) > 0:
             print('estimated scale ratio : {}/{} = {}'.format(
                 scale_est, scale, scale_est/scale))
+            # TODO : tune scale interpolation alpha
             alpha = 0.5
             # override scale here
             # will smoothing over time hopefully prevent scale drift?
@@ -585,30 +592,14 @@ class ClassicalVO(object):
 
         if update_lm and (not h_override):
             # update landmarks from computed correspondences
-            p_lm_v2_c_s = p_lm_v2_c * scale_rel # apply est or rel ???
-            var_lm_old = self.landmarks_.var[lm_idx][i1][lm_idx_e]
+            # TODO: apply scale_est (aggregate) or rel (individual)?
+            p_lm_v2_c_s = p_lm_v2_c * scale
             var_lm_new = self.initialize_landmark_variance(p_lm_v2_c_s, pose)
             p_lm_v2_0 = self.cvt_.cam_to_map(p_lm_v2_c_s, pose)
 
-            # apply kalman filter
-            # (with transition & observation matrices F=I, H=I)
-            y_k = (p_lm_v2_0 - p_lm_0).reshape(-1,3,1)
-            S_k = var_lm_new + var_lm_old # I think R_k = var_lm_new (measurement noise)
-            K_k = np.matmul(var_lm_old, np.linalg.inv(S_k))
-            x_k = p_lm_0.reshape(-1,3,1) + np.matmul(K_k, y_k)
-            I = np.eye(3)[None,...] # (1,3,3)
-            P_k = np.matmul(I - K_k, var_lm_old)
-
-            # now try to apply the same transform to to-be-inserted landmarks
-            # cv2.estimateAffine3D(src, dst[, out[, inliers[, ransacThreshold[, confidence]]]])
-            # --> retval, out, inliers
-
-            midx = np.arange(len(self.landmarks_.pos))
+            midx = np.arange(self.landmarks_.size_)
             midx = midx[lm_idx][i1][lm_idx_e]
-
-            self.landmarks_.pos[midx] = x_k[...,0]
-            self.landmarks_.var[midx] = P_k
-            self.landmarks_.cnt[midx] += 1
+            self.landmarks_.update(midx, p_lm_v2_0, var_lm_new)
 
             # Add correspondences to BA Cache
             self.cache_BA(
@@ -682,7 +673,6 @@ class ClassicalVO(object):
         #         )
         # =================================
 
-
         # insert unselected landmarks
 
         # apply a lot more lenient matcher
@@ -700,7 +690,7 @@ class ClassicalVO(object):
         self.landmarks_.cnt[lm_idx][i1_lax] -= 1
 
         if not h_override:
-            # do not insert landmarks in h_override
+            # do not insert landmarks on h_override
             lm_sel_msk = np.zeros(len(des_p_m), dtype=np.bool)
             lm_sel_msk[i2_lax] = True
             lm_new_msk = ~lm_sel_msk
@@ -711,14 +701,15 @@ class ClassicalVO(object):
 
             if len(d_lm_old) > 0:
                 # filter insertion by proximity to existing landmarks
-                neigh = NearestNeighbors(n_neighbors=1)
-                neigh.fit(pt2_lm_c)
-                d, _ = neigh.kneighbors(pt2_u_c[idx_e][idx_r][lm_new_idx], return_distance=True)
-                msk_knn = (d < 16.0)[:,0] # TODO : magic number
+                if len(lm_new_idx) > 0:
+                    neigh = NearestNeighbors(n_neighbors=1)
+                    neigh.fit(pt2_lm_c)
+                    d, _ = neigh.kneighbors(pt2_u_c[idx_e][idx_r][lm_new_idx], return_distance=True)
+                    msk_knn = (d < 16.0)[:,0] # TODO : magic number
 
-                # dist to nearest landmark, less than 20px
-                msk_n[msk_knn] = False
-                n_new = msk_n.sum()
+                    # dist to nearest landmark, less than 20px
+                    msk_n[msk_knn] = False
+                    n_new = msk_n.sum()
 
             idx_n = np.where(msk_n)[0]
 
@@ -749,7 +740,7 @@ class ClassicalVO(object):
             self.landmarks_.append(
                     pos_new, var_new,
                     des_new, ang_new,
-                    col_new)
+                    col_new)#, kpt_new)
             li_1 = self.landmarks_.size_
 
             # NOTE : using undistorted version of pt2.
@@ -765,9 +756,8 @@ class ClassicalVO(object):
     def pRt2pose(self, p, R, t):
         x, y, h = p
 
-        dh = -tx.euler_from_matrix(R)[1]
-        #dx = s * np.float32([ np.abs(t[2]), 0*-t[1] ])
-        dx = np.float32([ t[2], -t[1] ])
+        dh = tx.euler_from_matrix(R)[2]
+        dx = np.float32([t[0], t[1]])
 
         c, s = np.cos(h), np.sin(h)
         R2_p = np.reshape([c,-s,s,c], [2,2]) # [2,2,N]
@@ -860,11 +850,11 @@ class ClassicalVO(object):
         # pos[c_i] --> [N_obsx3]
         # lmk[c_i] --> [N_obsx3]
 
-        # TODO : is it actually necessary to apply the mask?
         prj_pt2, msk = self.project_BA(pos[c_i], lmk[l_i], return_msk=True)
         err = (prj_pt2 - obs_pt2)
-        i_null = np.where(~msk)[0]
-        err[i_null] = 0
+        # TODO : is it actually necessary to apply the mask?
+        #i_null = np.where(~msk)[0]
+        #err[i_null] = 0
         return err.ravel()
 
     def sparsity_BA(self, n_c, n_l, ci, li):
@@ -924,17 +914,6 @@ class ClassicalVO(object):
             # unable to run BA (NO DATA!)
             return
 
-        # === options : format inputs ==========
-        # --- opt1 : naively format inputs -----
-        # ci = np.concatenate(self.ba_ci_, axis=0)
-        # li = np.concatenate(self.ba_li_, axis=0)
-        # p2 = np.concatenate(self.ba_p2_, axis=0)
-        # x0 = np.concatenate([
-        #    self.ba_pos_,
-        #    self.landmarks_.pos])
-        # --- opt2 : re-format landmarks input -
-        # (only the landmarks of interest should be used)
-
         # create np arrays
         p0 = np.stack(self.ba_pos_, axis=0)
         ci = np.concatenate(self.ba_ci_, axis=0)
@@ -945,7 +924,8 @@ class ClassicalVO(object):
         n_c = len(self.ba_pos_)
         n_l = self.landmarks_.size_
 
-        # filter
+        # filter by landmarks that were actually observed
+        # TODO : filter by cnt>=2?
         li_u, li = np.unique(li, return_inverse=True) # WARN: li override
         n_l = len(li_u)
         x0 = np.concatenate([
@@ -957,11 +937,12 @@ class ClassicalVO(object):
         A  = self.sparsity_BA(n_c, n_l, ci, li)
 
         # actually run BA
+        # TODO : use x_scale='jac'???
         res = least_squares(
                 self.residual_BA, x0,
                 jac_sparsity=A, verbose=2,
                 ftol=1e-4,
-                x_scale='jac', # -- landmark @ pose should be about equivalent
+                #x_scale='jac', # -- landmark @ pose should be about equivalent
                 method='trf',
                 args=(n_c, n_l, ci, li, p2) )
 
@@ -984,6 +965,125 @@ class ClassicalVO(object):
 
         return pos_opt
 
+    def run_ukf(self, dt, scale=None):
+        """ motion-based prediction """
+        pose_p = self.ukf_l_.x[:3].copy()
+        Q, R = get_QR(pose_p, dt)
+        self.ukf_l_.Q = Q
+        self.ukf_l_.R = R
+        self.ukf_l_.predict(dt)
+        self.ukf_dt_.append(dt)
+        pose_c = self.ukf_l_.x[:3].copy()
+        if scale is None:
+            # initialize scale from UKF
+            scale = np.linalg.norm(pose_c[:2] - pose_p[:2])
+        return pose_p, pose_c, scale
+
+    def run_gp(self, pt_c, pt_p, pt3=None, scale=None):
+        """
+        Scale estimation based on locating the ground plane.
+        if scale:=None, scale based on best z-plane will be returned.
+        """
+        if not (self.flag_ & ClassicalVO.VO_USE_SCALE_GP):
+            return scale
+        camera_height = self.T_c2b_[2, 3]
+
+        if self.flag_ & ClassicalVO.VO_USE_GP_RSC:
+            # opt1 : estimate ground-plane for projection
+            # unfortunately, there's far too few points on the ground plane
+            # to compute a reasonable estimate.
+
+            # camera pitch filter (NOTE: not 100% robust, but works in 2D)
+            y_min = np.linalg.multi_dot([
+                self.K_,
+                self.cvt_.T_b2c_[:3],
+                np.reshape([1,0,0,1], (4,1))])[1]
+
+            gp_msk = np.logical_and.reduce([
+                pt_c[:,1] >= y_min,
+                pt_p[:,1] >= y_min])
+
+            gp_idx = np.where(gp_msk)[0]
+
+            # NOTE: debug; show gp plane points correspondences
+            # gp_idx = np.random.choice(gp_idx, size=32)
+            # try:
+            #     fig = self.gfig_
+            #     ax  = fig.gca()
+            # except Exception:
+            #     self.gfig_ = plt.figure()
+            #     ax = self.gfig_.gca()
+            # col = np.random.uniform(0.0, 1.0, size=(len(gp_idx), 3)).astype(np.float32)
+            # ax.cla()
+            # ax.scatter(pt_c[gp_idx,0], pt_c[gp_idx,1], color=col)
+            # ax.scatter(pt_p[gp_idx,0], pt_p[gp_idx,1], color=col)
+            # if not ax.yaxis_inverted():
+            #     ax.invert_yaxis()
+
+            # ground plane is a plane, so homography can (and should) be applied here
+            H, msk_h = cv2.findHomography(pt_c[gp_idx], pt_p[gp_idx],
+                    method=self.pEM_['method'],
+                    ransacReprojThreshold=self.pEM_['threshold']
+                    )
+            idx_h = np.where(msk_h)[0]
+
+            print 'Ground Plane Homography : {}/{}'.format(msk_h.sum(), msk_h.size)
+
+            #Hr, Ht, Hn = self.cvt_.H_to_Rtn(H)
+            #Hn = np.float32(Hn)
+            #gp_z = (Hn[...,0].dot(self.T_c2b_[:3,:3].T))
+            #print 'custom', gp_z
+            #print np.ravel(Ht)
+
+            res_h, Hr, Ht, Hn = cv2.decomposeHomographyMat(H, self.K_)
+            Hn = np.float32(Hn)
+            Ht = np.float32(Ht)
+            Ht /= np.linalg.norm(Ht, axis=1, keepdims=True) # NOTE: Ht is N,3,1
+            gp_z = (Hn[...,0].dot(self.T_c2b_[:3,:3].T))
+
+            # filter by estimated plane z-norm
+            z_val = ( np.abs(np.dot(gp_z, [0,0,1])) > 0.9 )
+            z_idx = np.where(z_val)[0]
+            # NOTE: honestly don't know why I need to pre-filter by z-norm at all
+            perm = zip(Hr,Ht)
+            perm = [perm[i] for i in z_idx]
+            n_in, R, t, msk_r, gpt3, sel = recover_pose_from_RT(perm, self.K_,
+                    pt_c[idx_h], pt_p[idx_h], return_index=True, log=False)
+            gpt3 = gpt3.T
+
+            # convert w.r.t base_link
+            gpt3_base = gpt3.dot(self.cvt_.T_c2b_[:3,:3].T)
+            h_gp = robust_mean(-gpt3_base[:,2])
+            scale_gp = (camera_height / h_gp)
+            print 'gp-ransac scale', scale_gp
+            scale = scale_gp
+        else:
+            # opt2 : directly estimate ground plane by simple height filter
+
+            # only apply rotation: pt3_base still w.r.t camera offset @ base orientation
+            pt3_base = pt3.dot(self.cvt_.T_c2b_[:3,:3].T)
+
+            dh_thresh = 0.1
+            gp_msk = np.logical_and.reduce([
+                pt3_base[:,2] < (-camera_height + dh_thresh) / scale, # only filter for down-ness
+                (-camera_height -dh_thresh)/scale < pt3_base[:,2], # sanity check with large-ish height value
+                pt3_base[:,0] < 50.0 / scale  # sanity check with large-ish depth value
+                ])
+            gp_idx = np.where(gp_msk)[0]
+            pt_gp = pt3_base[gp_idx]
+
+            print 'gp inl : {}/{}'.format(len(gp_idx), gp_msk.size)
+
+            if len(gp_idx) > 3: # at least 3 points
+                h_gp = robust_mean(-pt_gp[:,2])
+                if not np.isnan(h_gp):
+                    scale_gp = camera_height / h_gp
+                    print 'scale_gp : {:.4f}/{:.4f}={:.2f}%'.format(scale_gp, scale,
+                            100 * scale_gp / scale)
+                    # use gp scale instead
+                    scale = scale_gp
+        return scale
+
     def __call__(self, img, dt, scale=None):
         msg = ''
         # suffix designations:
@@ -1004,20 +1104,12 @@ class ClassicalVO(object):
         self.hist_.append( [kpt_c, des_c, img_c] )
         if len(self.hist_) <= 1:
             return None
+        # query data from previous time-frame
+        # NOTE : -2 since -1 = current
+        kpt_p, des_p, img_p = self.hist_[-2]
 
-        # apply UKF
-        pose_p = self.ukf_l_.x[:3].copy()
-        Q, R = get_QR(pose_p, dt)
-        self.ukf_l_.Q = Q
-        self.ukf_l_.R = R
-        self.ukf_l_.predict(dt)
-        self.ukf_dt_.append(dt)
-        pose_c = self.ukf_l_.x[:3].copy()
-        if scale is None:
-            # initialize scale from UKF
-            scale = np.linalg.norm(pose_c[:2] - pose_p[:2])
-
-        kpt_p, des_p, img_p = self.hist_[-2] # query data from previous time-frame
+        # ukf
+        pose_p, pose_c, scale = self.run_ukf(dt, scale)
 
         # frame-to-frame processing
         pt2_p = self.cvt_.kpt_to_pt(kpt_p)
@@ -1035,22 +1127,22 @@ class ClassicalVO(object):
             msk_t[i1] = True
             pt2_c = np.zeros_like(pt2_p)
             pt2_c[i1] = self.cvt_.kpt_to_pt(kpt_c[i2])
+
         # apply additional constraints
         # TODO : evaluate if the >1px constraint is necessary
         # msk_d = (np.max(np.abs(pt2_p - pt2_c), axis=-1) > 1.0) # enforce >1px difference
         # msk_t &= msk_d
-        # =================================
-
-        #print 'mean delta', np.mean(pt2_c - pt2_p, axis=0) # -14 px
-        # TODO : also track landmark points?
         print('track : {}/{}'.format(len(idx_t), len(pt2_p)))
+        # TODO : also track landmark points?
+        # =================================
 
         pt2_u_p = self.cvt_.pt2_to_pt2u(pt2_p[idx_t])
         pt2_u_c = self.cvt_.pt2_to_pt2u(pt2_c[idx_t])
 
         # NOTE : experimental
         if self.flag_ & ClassicalVO.VO_USE_FM_COR:
-            # correct Matches
+            # correct Matches by RANSAC consensus
+            # NOTE : cannot apply undistort() after correction
             F, msk_f = cv2.findFundamentalMat(
                     pt2_u_c,
                     pt2_u_p,
@@ -1080,7 +1172,7 @@ class ClassicalVO(object):
             # opt 2 : homography
             H, msk_h = cv2.findHomography(pt2_u_c, pt2_u_p,
                     method=self.pEM_['method'],
-                    ransacReprojThreshold=self.pEM_['prob']
+                    ransacReprojThreshold=self.pEM_['threshold']
                     )
             msk_h = msk_h[:,0].astype(np.bool)
             idx_h = np.where(msk_h)[0]
@@ -1107,7 +1199,7 @@ class ClassicalVO(object):
             perm = zip(Hr,Ht)
             n_in, R, t, msk_r, pt3 = recover_pose_from_RT(perm, self.K_,
                     pt2_u_c[idx_h], pt2_u_p[idx_h], log=False)
-            t /= np.linalg.norm(t)
+            #t /= np.linalg.norm(t)
             print('homography : {}/{}/{}'.format(n_in, len(idx_h), len(msk_h) ))
 
             # TODO : fix legacy variable name
@@ -1122,92 +1214,20 @@ class ClassicalVO(object):
                     # = usually ~10m
                     )
             print('essentialmat : {}/{}/{}'.format(n_in, len(idx_e), len(msk_e) ))
+
+        # convert R,t to base_link frame
+        R = np.linalg.multi_dot([
+            self.cvt_.T_c2b_[:3,:3],
+            R,
+            self.cvt_.T_c2b_[:3,:3].T
+            ])
+        t = self.cvt_.T_c2b_[:3,:3].dot(t)
+
         idx_r = np.where(msk_r)[0]
         pt3 = pt3.T
         print('triangulation : {}/{}'.format(len(idx_r), msk_r.size))
 
-        if self.flag_ & ClassicalVO.VO_USE_SCALE_GP:
-            # == process ground plane ==
-            camera_height = 0.113 # TODO : hardcoded
-            pt3_base = pt3.dot(self.cvt_.T_c2b_[:3,:3].T)
-            # only apply rotation: pt3_base still w.r.t camera offset @ base orientation
-
-            # opt1 : directly estimate ground plane by filtering height
-            dh_thresh = 0.1
-            gp_msk = np.logical_and.reduce([
-                pt3_base[:,2] < (-camera_height + dh_thresh) / scale, # only filter for down-ness
-                (-camera_height -dh_thresh)/scale < pt3_base[:,2], # sanity check with large-ish height value
-                pt3_base[:,0] < 50.0 / scale  # sanity check with large-ish depth value
-                ])
-            gp_idx = np.where(gp_msk)[0]
-            pt_gp = pt3_base[gp_idx]
-
-            # opt2 : estimate ground-plane for projection
-            # unfortunately, there's far too few points on the ground plane
-            # to compute a reasonable estimate.
-
-            ##dh_thresh = 0.3
-
-            #z_tol_lo = np.percentile(pt3_base[:,2], 40)
-            #z_tol_hi = np.percentile(pt3_base[:,2], 60)
-
-            #gp_msk_lax = np.logical_and.reduce([
-            #    z_tol_lo <= pt3_base[:,2],
-            #    pt3_base[:,2] < z_tol_hi
-            #    ])
-            #    #pt3_base[:,0] < 1000.0, #(10.0 / scale), # basic depth check
-            #    #pt3_base[:,2] < 0.0, #(-camera_height + dh_thresh) / scale,
-            #    #-1000.0 < pt3_base[:,2]
-            #    ##(-camera_height - dh_thresh)/scale < pt3_base[:,2]
-            #    #])
-
-            #z_tol = (z_tol_hi - z_tol_lo)
-            #print('z_tol', z_tol)
-
-            ## get mask from plane estimation
-            #gp_fit, gp_err, gp_msk = estimate_plane_ransac(
-            #        pt3_base[gp_msk_lax],
-            #        10000,
-            #        0.999,
-            #        z_tol, # ~ apply 10cm tolerance for ground
-            #        nvec = np.float32([0.0, 0.0, 1.0])
-            #        )
-            ##print 'gp dist', gp_fit[0].dot(gp_fit[1])
-            ##print 'gp nvec', gp_fit[1]
-            #print '??', gp_fit
-            #gp_msk = gp_msk[:,0].astype(np.bool)
-            #gp_idx = np.where(gp_msk)[0]
-            #pt_gp = pt3_base[gp_msk_lax][gp_msk]
-
-            # visualize 
-            #tmp = pt3_base[gp_msk_lax][gp_msk]
-            #global tfig
-            #if tfig is None:
-            #    tfig = plt.figure()
-            #    tax  = tfig.add_subplot(1,1,1, projection='3d')
-
-            #tfig.gca().cla()
-            #tfig.gca().plot(tmp[:,0],tmp[:,1],tmp[:,2],'.')
-            #axisEqual3D(tfig.gca())
-            #tfig.gca().set_xlabel('x')
-            #tfig.gca().set_ylabel('y')
-            #tfig.gca().set_zlabel('z')
-            print 'gp inl : {}/{}'.format(len(gp_idx), gp_msk.size)
-            if len(gp_idx) > 3: # at least 3 points
-                h_gp = robust_mean(-pt_gp[:,2])
-                #h_gp = - gp_fit[0].dot(gp_fit[1])[0]
-                #print 'gp height?', h_gp
-                #h_gp = np.median(pt_gp[:,1])
-
-                #print 'ground-plane {}/{}'.format(gp_msk.sum(), gp_msk.size)
-                #print (pt_gp.min(axis=0), pt_gp.max(axis=0), pt_gp.mean(axis=0))
-                if not np.isnan(h_gp):
-                    scale_gp = camera_height / h_gp
-                    print 'scale_gp : {:.4f}/{:.4f}={:.2f}%'.format(scale_gp, scale,
-                            100 * scale_gp / scale)
-                    # use gp scale instead
-                    scale = scale_gp
-            # ========================== 
+        self.run_gp(pt2_u_c[idx_e], pt2_u_p[idx_e], pt3, scale)
 
         msk = np.zeros(len(pt2_p), dtype=np.bool)
         msk[idx_t[idx_e[idx_r]]] = True
@@ -1250,9 +1270,9 @@ class ClassicalVO(object):
                     for (g_dt, g_z) in zip(
                             self.ukf_dt_[-self.ba_freq_:],
                             ba_res):
-                        Q, R = get_QR(self.ukf_g_.x[:3], dt)
-                        self.ukf_g_.Q = Q
-                        self.ukf_g_.R = R
+                        ukf_Q, ukf_R = get_QR(self.ukf_g_.x[:3], dt)
+                        self.ukf_g_.Q = ukf_Q
+                        self.ukf_g_.R = ukf_R
                         self.ukf_g_.predict(g_dt)
                         self.ukf_g_.update(g_z)
 

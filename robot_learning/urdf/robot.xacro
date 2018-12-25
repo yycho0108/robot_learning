@@ -1,8 +1,5 @@
 <?xml version='1.0'?>
 <robot name="robot" xmlns:xacro="http://ros.org/wiki/xacro">
-    <xacro:include filename="$(find robot_learning)/urdf/common.xacro"/>
-    <xacro:include filename="$(find robot_learning)/urdf/robot.gazebo"/>
-
 	<!-- body -->
     <xacro:property name="br" value="${6.5*inch}"/>
     <xacro:property name="bh" value="${2.5*inch}"/>
@@ -14,6 +11,9 @@
 
 	<!-- caster -->
 	<xacro:property name="cr" value="0.04"/>
+
+    <xacro:include filename="$(find robot_learning)/urdf/common.xacro"/>
+    <xacro:include filename="$(find robot_learning)/urdf/robot.gazebo"/>
 
     <link name="base_link"></link>
 

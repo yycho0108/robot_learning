@@ -22,6 +22,26 @@ try:
 except ImportError:
   from pathlib2 import Path  # python 2 backport
 
+#class Dataset(object):
+#    def __init__(self, shapes=None, dtypes=None):
+#        self.data_ = []
+#        if (shapes is not None) and (dtypes is not None):
+#            for (s,d) in zip(shapes, dtypes):
+#                self.data_.append(np.empty( (0,) + tuple(s), d))
+#        self.size_     = 0
+#        self.capacity_ = 0
+#
+#    def resize(self, n_c):
+#        if len(self.data_) <= 0:
+#            raise ValueError("Cannot Resize without initialization")
+#        n_d = len(self.data_)
+#
+#    def append(self, *args):
+#        if (self.capacity_ == 0):
+#            self.size_     = 0
+#            self.capacity_ = 1
+#            self.data_     = [e.reshape(1,-1) for e in args]
+
 class DataCollector(object):
     """Handles ROS I/O communications and conversions.
 
@@ -59,7 +79,8 @@ class DataCollector(object):
         self.img_  = None
         self.odom_ = None
         self.scan_ = None
-        self.dataset_ = []
+        #self.dataset_ = []
+        self.dataset_ = 
         self.new_data_ = False
         self.last_data_ = None
 

@@ -9,9 +9,6 @@ from matplotlib import pyplot as plt
 from matplotlib import gridspec
 from mpl_toolkits.mplot3d import Axes3D
 
-from tf import transformations as tx
-
-
 from collections import deque
 
 try:
@@ -197,7 +194,7 @@ class CVORunner(object):
             scan_c = None
 
         ### EVERYTHING FROM HERE IS PLOTTING + VIZ ###
-        if (i % 16) == 0:
+        if (i % 1) == 0:
             P = self.vo_.ukf_l_.P
             self.show(aimg, pts3, pts2, scan_c, pts_r, P, col_p, ('[%d/%d] '%(i,n)) + msg)
 

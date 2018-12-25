@@ -2,6 +2,7 @@ import numpy as np
 import cv2
 from tf import transformations as tx
 from sklearn.neighbors import NearestNeighbors
+from matplotlib import pyplot as plt
 
 def print_Rt(R, t):
     print '\tR', np.round(np.rad2deg(tx.euler_from_matrix(R)), 2)
@@ -22,13 +23,14 @@ def recover_pose_from_RT(perm, K,
         pt1, pt2,
         z_min = np.finfo(np.float32).eps,
         z_max = np.inf,
+        return_index=False,
         log=False
         ):
     P1 = np.eye(3,4)
     P2 = np.eye(3,4)
 
-    msks = [None for _ in range(4)]
-    pt3s = [None for _ in range(4)]
+    msks = [None for _ in perm]
+    pt3s = [None for _ in perm]
 
     sel   = 0
     ctest = -np.inf
@@ -75,7 +77,10 @@ def recover_pose_from_RT(perm, K,
     pt3 = pt3s[sel][:,msk]
     n_in = msk.sum()
 
-    return n_in, R, t, msk, pt3
+    if return_index:
+        return n_in, R, t, msk, pt3, sel
+    else:
+        return n_in, R, t, msk, pt3
 
 def recover_pose(E, K,
         pt1, pt2,
@@ -279,40 +284,46 @@ class Landmarks(object):
         c = self.capacity_
         s = self.size_
 
+        # general data ...
         self.pos_ = np.empty((c,3), dtype=np.float32)
-        self.var_ = np.empty((c,3,3), dtype=np.float32)
         self.des_ = np.empty((c,n_des), dtype=np.int32)
         # TODO : ^ highly dependent on descriptor
         self.ang_ = np.empty((c,1), dtype=np.float32)
         self.col_ = np.empty((c,3), dtype=np.uint8)
+
+        # health ...
+        self.var_ = np.empty((c,3,3), dtype=np.float32)
         self.cnt_ = np.empty((c,1), dtype=np.int32)
+
+        # tracking ...
+        self.trk_ = np.empty((c,1), dtype=np.int32)
+        self.kpt_ = np.empty((c,2), dtype=np.float32)
+        # NOTE: self.rsp_ = [k.response_ for k ni kpt]
+
+        self.fields_ = ['pos_', 'des_', 'ang_', 'col_',
+                'var_', 'cnt_', 'trk_', 'kpt_']
 
     def resize(self, c_new):
         print('-------landmarks resizing : {} -> {}'.format(self.capacity_, c_new))
-        p = np.empty((c_new,3), dtype=np.float32)
-        v = np.empty((c_new,3,3), dtype=np.float32)
-        d = np.empty((c_new,self.n_des_), dtype=np.int32)
-        a = np.empty((c_new,1), dtype=np.float32)
-        c = np.empty((c_new,3), dtype=np.uint8)
-        c2 = np.empty((c_new,3), dtype=np.int32)
 
-        p[:self.size_] = self.pos
-        v[:self.size_] = self.var
-        d[:self.size_] = self.des
-        a[:self.size_] = self.ang
-        c[:self.size_] = self.col
-        c2[:self.size_] = self.cnt
+        d = vars(self)
+        for f in self.fields_:
+            # old data
+            c_old = self.size_
+            d_old = d[f][:c_old]
+            s_old = d_old.shape
 
-        self.pos_ = p
-        self.var_ = v
-        self.des_ = d
-        self.ang_ = a
-        self.col_ = c
-        self.cnt_ = c2
+            # new data
+            s_new = (c_new,) + tuple(s_old[1:])
+            d_new = np.empty(s_new, dtype=d[f].dtype)
+            d_new[:c_old] = d_old[:c_old]
 
+            # set data
+            d[f] = d_new
         self.capacity_ = c_new
 
-    def append(self, p,v,d,a,c):
+    def append(self, p, v, d, a, c):#, k):
+        # TODO : revive keypoint processing
         n = len(p)
         if self.size_ + n > self.capacity_:
             self.resize(self.capacity_ * 2)
@@ -320,14 +331,35 @@ class Landmarks(object):
             self.append(p,v,d,a,c)
         else:
             # assign
-            self.pos_[self.size_:self.size_+n] = p
-            self.var_[self.size_:self.size_+n] = v
-            self.des_[self.size_:self.size_+n] = d
-            self.ang_[self.size_:self.size_+n] = a
-            self.col_[self.size_:self.size_+n] = c
-            self.cnt_[self.size_:self.size_+n] = 1
+            i = np.s_[self.size_:self.size_+n]
+            self.pos_[i] = p
+            self.var_[i] = v
+            self.des_[i] = d
+            self.ang_[i] = a
+            self.col_[i] = c
+            #self.kpt_[i] = k
+
+            # auto initialized vars
+            self.cnt_[i] = 1
+            self.trk_[i] = True
             # update size
             self.size_ += n
+
+    def update(self, idx, pos_new, var_new):
+        pos_old = self.pos[idx]
+        var_old = self.var[idx]
+
+        # kalman filter (== multivariate product)
+        y_k = (pos_new - pos_old).reshape(-1,3,1)
+        S_k = var_new + var_old # I think R_k = var_lm_new (measurement noise)
+        K_k = np.matmul(var_old, np.linalg.inv(S_k))
+        x_k = pos_old.reshape(-1,3,1) + np.matmul(K_k, y_k)
+        I = np.eye(3)[None,...] # (1,3,3)
+        P_k = np.matmul(I - K_k, var_old)
+
+        self.pos[idx] = x_k[...,0]
+        self.var[idx] = P_k
+        self.cnt[idx] += 1
 
     def prune(self, min_cnt=3, min_keep=512):
         # TODO : prune by confidence, etc.
@@ -342,16 +374,24 @@ class Landmarks(object):
         self.col[:sz] = self.col[msk]
         self.size_ = sz
 
-    def prune_nmx(self, k=5, radius=0.025):
+    def prune_nmx(self, k=3, radius=0.025, min_keep=512):
+        # TODO : prune by descriptor
+        # response strength (kpt.response_)
+        # and tracking information
+
         v = np.linalg.norm(self.var[:,(0,1,2),(0,1,2)], axis=-1)
         neigh = NearestNeighbors(n_neighbors=k)
         neigh.fit(self.pos)
         d, i = neigh.kneighbors(return_distance=True)
         msk_d = np.min(d, axis=1) < radius
         msk_v = np.all(v[i]>v[:,None], axis=1) # TODO : or np.sum() < 2?
+        msk_t = np.arange(self.size_) > (self.size_ - min_keep)
+
         msk = np.logical_or(
                 np.logical_and(msk_d, msk_v),
-                ~msk_d)
+                ~msk_d,
+                msk_t
+                )
         sz = msk.sum()
         p,v,d,a,c = [e[msk] for e in 
                 [self.pos,self.var,self.des,self.ang,self.col]]
@@ -380,6 +420,12 @@ class Landmarks(object):
     @property
     def cnt(self):
         return self.cnt_[:self.size_]
+    @property
+    def trk(self):
+        return self.trk_[:self.size_]
+    @property
+    def kpt(self):
+        return self.kpt_[:self.size_]
 
 class Conversions(object):
     """
@@ -457,9 +503,6 @@ class Conversions(object):
     def img_to_kpt(self, img, subpix=True):
         # i->k
         kpt = self.det_.detect(img)
-        #kpt = self.det_.detect(img[240:])
-        #for k in kpt:
-        #    k.pt = tuple(k.pt[0]+240, k.pt[1])
 
         if subpix:
             # sub-pixel corner refinement
@@ -471,6 +514,11 @@ class Conversions(object):
                     criteria = crit)
             for k, pt in zip(kpt, spx_kpt):
                 k.pt = tuple(pt)
+
+        #plt.figure()
+        #plt.hist([e.response for e in kpt])
+        #plt.show()
+
         return kpt
 
     def img_kpt_to_kpt_des(self, img, kpt):
@@ -625,6 +673,87 @@ class Conversions(object):
     def F_to_E(self, F):
         return np.linalg.multi_dot([
             self.K_.T, F, self.K_])
+
+    def H_to_Rtn(self, H,
+            eps=1e-5
+            #eps=np.finfo(np.float32).eps
+            ):
+        """ from 
+        https://github.com/raulmur/ORB_SLAM/
+        vblob/ce199650a25653808f96b83557333bce3461d29f/
+        src/Initializer.cc#L570
+        """
+        A = np.linalg.multi_dot([
+            self.Ki_, H, self.K_])
+        U, w, Vt = np.linalg.svd(A)
+        V = Vt.T
+        # A = U . diag(s) . V
+        d1, d2, d3 = w
+        if (d1/d2 < (1+eps) or d2/d3 < (1+eps)):
+            return False
+        s = np.linalg.det(U) * np.linalg.det(Vt)
+
+        aux1 = np.sqrt( (d1*d1-d2*d2) / (d1*d1-d3*d3) )
+        aux3 = np.sqrt( (d2*d2-d3*d3) / (d1*d1-d3*d3) )
+        x1   = [aux1,aux1,-aux1,-aux1]
+        x3   = [aux3,-aux3,aux3,-aux3]
+        auxs = np.sqrt( (d1*d1-d2*d2)*(d2*d2-d3*d3)) / ((d1+d3)*d2)
+        ct   = (d2*d2+d1*d3) / ((d1+d3)*d2)
+        st   = [auxs,-auxs,-auxs,auxs]
+
+        vR, vt, vn = [], [], []
+
+        for i in range(4):
+            # rot
+            Rp = np.float32([
+                ct,0,-st[i],
+                0,1,0,
+                st[i],0,ct]).reshape(3,3)
+            R  = s * np.linalg.multi_dot([U,Rp,Vt])
+            vR.append(R)
+
+            # trans
+            tp = np.float32([x1[i], 0, -x3[i]]) * (d1-d3)
+            tp = tp.reshape(3,1)
+            t  = U.dot(tp)
+            t /= np.linalg.norm(t)
+            vt.append(t)
+
+            # norm
+            n_p = np.float32([x1[i],0,x3[i]]).reshape(3,1)
+            n  = V.dot(n_p)
+            if n[2] < 0:
+                n *= -1
+            vn.append(n)
+
+        aux_sp = np.sqrt( (d1*d1-d2*d2)*(d2*d2-d3*d3)) / ((d1-d3)*d2)
+        cp     = (d1*d3-d2*d2) / ((d1-d3)*d2)
+        sp     = [aux_sp, -aux_sp, -aux_sp, aux_sp]
+
+        for i in range(4):
+            # rot
+            Rp = np.float32([
+                cp, 0, sp[i],
+                0, -1, 0,
+                sp[i], 0, -cp]).reshape(3,3)
+            R = s * np.linalg.multi_dot([U,Rp,Vt])
+            vR.append(R)
+
+            # trans
+            tp = np.float32([x1[i], 0, x3[i]]) * (d1+d3)
+            tp = tp.reshape(3,1)
+            t  = U.dot(tp)
+            t /= np.linalg.norm(t)
+            vt.append(t)
+
+            # norm
+            n_p = np.float32([x1[i],0,x3[i]]).reshape(3,1)
+            n   = V.dot(n_p)
+            if n[2] < 0:
+                n *= -1
+            vn.append(n)
+
+        return vR, vt, vn
 
     def __call__(self, ftype, *a, **k):
         return self.f_[ftype](*a, **k)
