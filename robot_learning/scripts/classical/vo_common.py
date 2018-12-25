@@ -415,7 +415,8 @@ class Landmarks(object):
         self.var[idx] = P_k
         self.cnt[idx] += 1
 
-    def prune(self, k=3, radius=0.025, min_keep=1024):
+    def prune(self, k=3, radius=0.025, keep_last=1024):
+        # TODO : Tune keep_last parameter
         # TODO : Prune by tracking information and/or count
         v = np.linalg.norm(self.var[:,(0,1,2),(0,1,2)], axis=-1)
         neigh = NearestNeighbors(n_neighbors=k)
@@ -426,7 +427,7 @@ class Landmarks(object):
         # neighborhood count TODO : or np.sum() < 2?
         msk_v = np.all(v[i]>v[:,None], axis=1)
         # keep latest N landmarks
-        msk_t = np.arange(self.size_) > (self.size_ - min_keep)
+        msk_t = np.arange(self.size_) > (self.size_ - keep_last)
         # strong responses are preferrable and will be kept
         rsp = [k.response for k in self.kpt[:,0]]
         msk_r = np.greater(rsp, 48) # TODO : somewhat magical

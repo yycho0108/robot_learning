@@ -452,14 +452,15 @@ class ClassicalVO(object):
         self.pnp_h_ = None
 
         # bundle adjustment + loop closure
-        self.ba_pyr_  = np.sort([16, 64])[::-1] # == largest first
+        # sort ba pyramid by largest first
+        self.ba_pyr_  = np.sort([16, 64, 256])[::-1]
         self.graph_ = VGraph()
 
         # UKF
-        self.ukf_l_  = build_ekf() # local incremental UKF
-        self.ukf_h_  = build_ekf() # global historic UKF
         # NOTE : ALWAYS enforce s_hist_.maxlen >= self.ba_pyr_.max()
         # to avoid bugs due to circular buffer.
+        self.ukf_l_  = build_ekf() # local incremental UKF
+        self.ukf_h_  = build_ekf() # global historic UKF
         self.s_hist_ = StateHistory(maxlen=self.ba_pyr_.max()+1) # stores cache of prior.
 
     def track(self, img1, img2, pt1, pt2=None,
@@ -687,7 +688,7 @@ class ClassicalVO(object):
             """
             if (scale < 1e-2) and (scale_est / scale) > 2.0:
                 # disable scale interpolation
-                # most likely pure rotation
+                # most likely running into pure rotation
                 # implicit: scale=scale
                 pass
             else:
@@ -1147,10 +1148,12 @@ class ClassicalVO(object):
 
             # convert w.r.t base_link
             gpt3_base = gpt3.dot(self.cvt_.T_c2b_[:3,:3].T)
-            h_gp = robust_mean(np.abs(-gpt3_base[:,2])) # TODO : valid?
+            h_gp = robust_mean(-gpt3_base[:,2])
             scale_gp = (camera_height / h_gp)
             print 'gp-ransac scale', scale_gp
-            scale = scale_gp
+            if scale_gp > 0:
+                # project just in case scale < 0...
+                scale = scale_gp
         else:
             # opt2 : directly estimate ground plane by simple height filter
             # only works with "reasonable" initial scale guess.
