@@ -453,14 +453,16 @@ class ClassicalVO(object):
         self.pnp_p_ = None
         self.pnp_h_ = None
 
-        # UKF
-        self.ukf_l_  = build_ekf() # local incremental UKF
-        self.ukf_h_  = build_ekf() # global historic UKF
-        self.s_hist_ = StateHistory(maxlen=32) # stores cache of prior.
-
         # bundle adjustment + loop closure
         self.ba_pyr_  = np.sort([16, 64])[::-1] # == largest first
         self.graph_ = VGraph()
+
+        # UKF
+        self.ukf_l_  = build_ekf() # local incremental UKF
+        self.ukf_h_  = build_ekf() # global historic UKF
+        # NOTE : ALWAYS enforce s_hist_.maxlen >= self.ba_pyr_.max()
+        # to avoid bugs due to circular buffer.
+        self.s_hist_ = StateHistory(maxlen=self.ba_pyr_.max()+1) # stores cache of prior.
 
     def track(self, img1, img2, pt1, pt2=None,
             thresh=1.0
@@ -1025,7 +1027,7 @@ class ClassicalVO(object):
                 self.residual_BA, x0,
                 jac_sparsity=A, verbose=2,
                 ftol=1e-4,
-                #x_scale='jac', # -- landmark @ pose should be about equivalent
+                x_scale='jac', # -- landmark @ pose should be about equivalent
                 method='trf',
                 args=(n_c, n_l, ci, li, p2) )
 
@@ -1389,8 +1391,6 @@ class ClassicalVO(object):
                     for (h_dt, h_z) in zip(dts, ba_res):
                         xs.append( self.ukf_h_.x.copy() )
                         Ps.append( self.ukf_h_.P.copy() )
-                        # TODO : update ukf_R based on
-                        # BA having higher reliability than usual measurements
                         ukf_Q, ukf_R = get_QR(self.ukf_h_.x[:3], dt)
                         self.ukf_h_.Q = ukf_Q
                         self.ukf_h_.R = ukf_R
