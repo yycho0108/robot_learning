@@ -435,28 +435,33 @@ class ClassicalVO(object):
                 d_msk
                 ])
             lm_idx = np.where(lm_msk)[0]
+            pt2_lm_c = pt2_lm_c[lm_idx]
         else:
             # ==> empty
             lm_msk = np.ones((0), dtype=np.bool)
             lm_idx = np.where(lm_msk)[0]
+
+        # extract data from visible parts of the map
+        # NOTE : these data are referenced views, not copied
+        # modifying the below data in-place WILL alter the original value.
+        pos_lm = self.landmarks_.pos[lm_idx]
+        des_lm = self.landmarks_.des[lm_idx]
+        var_lm = self.landmarks_.var[lm_idx]
+        cnt_lm = self.landmarks_.cnt[lm_idx]
+
         print_ratio('visible landmarks', len(lm_idx), self.landmarks_.size_)
 
         # select useful descriptor based on current viewpoint
         des_p_m = des_p[idx_ter]
         i1, i2 = self.cvt_.des_des_to_match(
-                self.landmarks_.des[lm_idx],
+                des_lm,
                 des_p_m, cross=(self.flag_ & ClassicalVO.VO_USE_MXCHECK)
                 )
 
-        lm_msk_e = np.ones(len(i1), dtype=np.bool)
-        lm_idx_e = np.where(lm_msk_e)[0]
-
         if len(lm_idx) > 16:
             # filter correspondences by Emat consensus
-            # TODO : take advantage of the Emat here to some use?
-
             # first-order estimate: image-coordinate distance-based filter
-            cor_delta = (pt2_lm_c[lm_idx][i1] - pt2_u_c[idx_er][i2])
+            cor_delta = (pt2_lm_c[i1] - pt2_u_c[idx_er][i2])
             cor_delta = np.linalg.norm(cor_delta, axis=-1)
             lm_msk_d = (cor_delta < 64.0) 
             lm_idx_d = np.where(lm_msk_d)[0]
@@ -465,8 +470,9 @@ class ClassicalVO(object):
             try:
                 # TODO : maybe not the most efficient way to
                 # check landmark consensus?
+                # TODO : take advantage of the Emat here to some use?
                 _, lm_msk_e = cv2.findEssentialMat(
-                        pt2_lm_c[lm_idx][i1][lm_idx_d],
+                        pt2_lm_c[i1][lm_idx_d],
                         pt2_u_c[idx_er][i2][lm_idx_d],
                         self.K_,
                         **self.pEM_)
@@ -484,59 +490,21 @@ class ClassicalVO(object):
                 lm_idx_e = lm_idx_d
 
             print_ratio('landmark concensus', len(lm_idx_e), lm_msk_e.size)
-
-            ## == visualize projection error ==
-            # global tfig
-            # if tfig is None:
-            #     tfig = plt.figure()
-            #     ax  = tfig.add_subplot(1,1,1)
-
-            # ax = tfig.gca()
-            # ax.cla()
-            # viz_lmk = pt2_lm_c[lm_idx][i1][lm_idx_e] # landmark projections to current pose
-            # viz_cam = pt2_u_c[idx_er][i2][lm_idx_e] # camera correspondences
-            # ax.plot(viz_lmk[:,0],viz_lmk[:,1], 'ko', alpha=0.2) # where landmarks are supposed to be
-            # ax.plot(viz_cam[:,0],viz_cam[:,1], 'r+', alpha=0.2)
-            # ax.quiver(
-            #         viz_lmk[:,0], viz_lmk[:,1],
-            #         viz_cam[:,0]-viz_lmk[:,0], viz_cam[:,1]-viz_lmk[:,1],
-            #         scale_units='xy',
-            #         angles='xy',
-            #         scale=1,
-            #         color='b',
-            #         alpha=0.2
-            #         )
-            # tfig.canvas.draw()
-            # plt.pause(0.001)
-
-            ## apply consensus
-            #viz_lmk = viz_lmk[lm_msk_e]
-            #viz_cam = viz_cam[lm_msk_e]
-
-            ##plt.hist(viz_cam[:,0] - viz_lmk[:,0],
-            ##        bins=np.linspace(-100,100)
-            ##        )
-            #ax.plot(viz_lmk[:,0],viz_lmk[:,1], 'ko') # where landmarks are supposed to be
-            #ax.plot(viz_cam[:,0],viz_cam[:,1], 'r+')
-            #ax.quiver(
-            #        viz_lmk[:,0], viz_lmk[:,1],
-            #        viz_cam[:,0]-viz_lmk[:,0], viz_cam[:,1]-viz_lmk[:,1],
-            #        scale_units='xy',
-            #        angles='xy',
-            #        scale=1,
-            #        color='g'
-            #        )
-            #if not ax.yaxis_inverted():
-            #    ax.invert_yaxis()
-            # ====================================
+        else:
+            # use all available data, at the cost of maybe noise
+            # TODO : verify if abort is necessary instead
+            lm_msk_e = np.ones(len(i1), dtype=np.bool)
+            lm_idx_e = np.where(lm_msk_e)[0]
 
         # landmark correspondences
-        p_lm_0 = self.landmarks_.pos[lm_idx][i1][lm_idx_e] # map-frame lm pos
+        p_lm_0 = pos_lm[i1][lm_idx_e] # map-frame lm pos
         p_lm_c = self.cvt_.map_to_cam(p_lm_0, pose) # TODO : use rectified pose?
 
         p_lm_v2_c = pt3[i2][lm_idx_e] # current camera frame lm pos
 
         # estimate scale from landmark correspondences
+        # TODO : evaluate whether or not to use z-depthvalue or the full distance
+        # may not matter too much given that scale from either SHOULD be consistent.
         # opt1 : norm
         #d_lm_old = np.linalg.norm(p_lm_c, axis=-1)
         #d_lm_new = np.linalg.norm(p_lm_v2_c, axis=-1)
@@ -568,7 +536,7 @@ class ClassicalVO(object):
         else:
             if scale_rel_std < 0.3:
                 # scale weight by landmark variance
-                scale_w = (self.landmarks_.var[lm_idx][i1][lm_idx_e][:,(0,1,2),(0,1,2)])
+                scale_w = (var_lm[i1][lm_idx_e][:,(0,1,2),(0,1,2)])
                 scale_w = np.linalg.norm(scale_w, axis=-1) 
                 scale_w = np.sum(scale_w) / scale_w
                 scale_est = robust_mean(scale_rel, weight=scale_w)
@@ -618,19 +586,19 @@ class ClassicalVO(object):
             var_lm_new = self.initialize_landmark_variance(p_lm_v2_c_s, pose)
             p_lm_v2_0 = self.cvt_.cam_to_map(p_lm_v2_c_s, pose)
 
-            midx = np.arange(self.landmarks_.size_)
-            midx = midx[lm_idx][i1][lm_idx_e]
-            self.landmarks_.update(midx, p_lm_v2_0, var_lm_new)
+            u_idx = lm_idx[i1][lm_idx_e]
+            self.landmarks_.update(u_idx, p_lm_v2_0, var_lm_new)
 
             # Add correspondences to BA Cache
+            # wow, that's a lot of chained indices.
             self.cache_BA(
-                    lmk_idx=lm_idx[i1][lm_idx_e],
+                    lmk_idx=u_idx,
                     lmk_pt2=pt2_u_c[idx_er][i2][lm_idx_e]
                     )
 
         if self.flag_ & ClassicalVO.VO_USE_PNP: # == if USE_PNP
-            pt_world = self.landmarks_.pos[lm_idx][i1]#[lm_msk_e]
-            pt_cam   = pt2_u_c[idx_e][idx_r][i2]#[lm_msk_e]
+            pt_world = pos_lm[i1]#[lm_msk_e]
+            pt_cam   = pt2_u_c[idx_er][i2]#[lm_msk_e]
 
             if pt_world.size>0 and pt_cam.size>0:
                 # PNP is super unreliable
@@ -698,7 +666,7 @@ class ClassicalVO(object):
 
         # apply a lot more lenient matcher
         i1_lax, i2_lax = self.cvt_.des_des_to_match(
-                self.landmarks_.des[lm_idx],
+                des_lm,
                 des_p_m,
                 lowe=1.0,
                 maxd=128.0,
@@ -708,7 +676,7 @@ class ClassicalVO(object):
         # update "invisible" landmarks that should have been visible
         lm_filter_msk = np.ones(len(lm_idx), dtype=np.bool)
         lm_filter_msk[i1_lax] = False
-        self.landmarks_.cnt[lm_idx][i1_lax] -= 1
+        cnt_lm[i1_lax] -= 1
 
         if insert_lm:
             lm_sel_msk = np.zeros(len(des_p_m), dtype=np.bool)
