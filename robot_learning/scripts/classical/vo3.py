@@ -459,7 +459,7 @@ class ClassicalVO(object):
         self.s_hist_ = StateHistory(maxlen=32) # stores cache of prior.
 
         # bundle adjustment + loop closure
-        self.ba_pyr_  = np.sort([16, 4])[::-1] # == largest first
+        self.ba_pyr_  = np.sort([16, 64])[::-1] # == largest first
         self.graph_ = VGraph()
 
     def track(self, img1, img2, pt1, pt2=None,
