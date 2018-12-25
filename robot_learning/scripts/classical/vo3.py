@@ -24,6 +24,20 @@ from ba import ba_J
 
 tfig = None
 
+def print_ratio(msg, a, b):
+    as_int = np.issubdtype(type(a), np.integer)
+    if b == 0:
+        q = np.nan
+    else:
+        q = float(a) / b
+
+    if as_int:
+        print '{} : {}/{} = {:.2f}%'.format(
+                msg, a, b, 100 * q)
+    else:
+        print '{} : {:.4f}/{:.4f} = {:.2f}%'.format(
+                msg, a, b, 100 * q)
+
 def lerp(a,b,w):
     return (a*w) + (b*(1.0-w))
 
@@ -425,8 +439,7 @@ class ClassicalVO(object):
             # ==> empty
             lm_msk = np.ones((0), dtype=np.bool)
             lm_idx = np.where(lm_msk)[0]
-
-        print('visible landmarks : {}/{}'.format(len(lm_idx), self.landmarks_.size_))
+        print_ratio('visible landmarks', len(lm_idx), self.landmarks_.size_)
 
         # select useful descriptor based on current viewpoint
         des_p_m = des_p[idx_ter]
@@ -470,8 +483,7 @@ class ClassicalVO(object):
                 lm_msk_e = lm_msk_d
                 lm_idx_e = lm_idx_d
 
-            print('landmark concensus : {}/{}'.format(len(lm_idx_e), lm_msk_e.size))
-
+            print_ratio('landmark concensus', len(lm_idx_e), lm_msk_e.size)
 
             ## == visualize projection error ==
             # global tfig
@@ -569,8 +581,7 @@ class ClassicalVO(object):
                 scale_est = scale
 
         if len(d_lm_old) > 0:
-            print('estimated scale ratio : {}/{} = {}'.format(
-                scale_est, scale, scale_est/scale))
+            print_ratio('estimated scale ratio', scale_est, scale)
             # TODO : tune scale interpolation alpha
             alpha = 0.5
             # override scale here
@@ -590,9 +601,17 @@ class ClassicalVO(object):
             # implicit : scale = scale
             pass
 
-        update_lm = self.flag_ & ClassicalVO.VO_USE_LM_KF
+        # == scale_is_believable @ > 1e-2m translation
+        # TODO : figure out better heuristic?
+        run_lm = (scale >= 1e-2)
 
-        if update_lm and (not h_override):
+        # update existing landmarks
+        update_lm = (run_lm and self.flag_ & ClassicalVO.VO_USE_LM_KF)
+
+        # insert new landmarks
+        insert_lm = run_lm
+
+        if update_lm:
             # update landmarks from computed correspondences
             # TODO: apply scale_est (aggregate) or rel (individual)?
             p_lm_v2_c_s = p_lm_v2_c * scale
@@ -691,8 +710,7 @@ class ClassicalVO(object):
         lm_filter_msk[i1_lax] = False
         self.landmarks_.cnt[lm_idx][i1_lax] -= 1
 
-        if not h_override:
-            # do not insert landmarks on h_override
+        if insert_lm:
             lm_sel_msk = np.zeros(len(des_p_m), dtype=np.bool)
             lm_sel_msk[i2_lax] = True
             lm_new_msk = ~lm_sel_msk
@@ -1038,7 +1056,7 @@ class ClassicalVO(object):
                     ransacReprojThreshold=self.pEM_['threshold']
                     )
             idx_h = np.where(msk_h)[0]
-            print 'Ground Plane Homography : {}/{}'.format(len(idx_h), msk_h.size)
+            print_ratio('Ground-plane Homography', len(idx_h), msk_h.size)
 
             # update pt_c and pt_p
             pt_c = pt_c[idx_h]
@@ -1090,14 +1108,13 @@ class ClassicalVO(object):
             gp_idx = np.where(gp_msk)[0]
             pt_gp = pt3_base[gp_idx]
 
-            print 'gp inl : {}/{}'.format(len(gp_idx), gp_msk.size)
+            print_ratio('GP Inlier', len(gp_idx), gp_msk.size)
 
             if len(gp_idx) > 3: # at least 3 points
                 h_gp = robust_mean(-pt_gp[:,2])
                 if not np.isnan(h_gp):
                     scale_gp = camera_height / h_gp
-                    print 'scale_gp : {:.4f}/{:.4f}={:.2f}%'.format(scale_gp, scale,
-                            100 * scale_gp / scale)
+                    print_ratio('scale_gp', scale_gp, scale)
                     # use gp scale instead
                     scale = scale_gp
         return scale
@@ -1150,7 +1167,7 @@ class ClassicalVO(object):
         # TODO : evaluate if the >1px constraint is necessary
         # msk_d = (np.max(np.abs(pt2_p - pt2_c), axis=-1) > 1.0) # enforce >1px difference
         # msk_t &= msk_d
-        print('track : {}/{}'.format(len(idx_t), len(pt2_p)))
+        print_ratio('track', len(idx_t), len(pt2_p))
         # TODO : also track landmark points?
         # =================================
 
@@ -1183,7 +1200,7 @@ class ClassicalVO(object):
                 **self.pEM_)
         msk_e = msk_e[:,0].astype(np.bool)
         idx_e = np.where(msk_e)[0]
-        print('e_in : {}/{}'.format(len(idx_e), msk_e.size))
+        print_ratio('e_in', len(idx_e), msk_e.size)
         F = self.cvt_.E_to_F(E)
 
         if self.flag_ & ClassicalVO.VO_USE_HOMO:
@@ -1194,14 +1211,14 @@ class ClassicalVO(object):
                     )
             msk_h = msk_h[:,0].astype(np.bool)
             idx_h = np.where(msk_h)[0]
-            print('h_in : {}/{}'.format(len(idx_h), msk_h.size))
+            print_ratio('h_in', len(idx_h), msk_h.size)
 
             # compare errors
             sH, msk_sh = score_H(pt2_u_c[idx_h], pt2_u_p[idx_h], H, self.cvt_)
             sF, msk_sf = score_F(pt2_u_c[idx_e], pt2_u_p[idx_e], F, self.cvt_)
 
             r_H = (sH / (sH + sF))
-            print('score determinant : {} -------------------------------> {}'.format(r_H, 'H' if r_H > 0.45 else 'E'))
+            print_ratio('RH', sH, sH+sF)
 
         h_override = False
         if self.flag_ & ClassicalVO.VO_USE_HOMO:
@@ -1218,8 +1235,7 @@ class ClassicalVO(object):
             n_in, R, t, msk_r, pt3 = recover_pose_from_RT(perm, self.K_,
                     pt2_u_c[idx_h], pt2_u_p[idx_h], log=False)
             #t /= np.linalg.norm(t)
-            print('homography : {}/{}/{}'.format(n_in, len(idx_h), len(msk_h) ))
-
+            print_ratio('homography', len(idx_h), msk_h.size)
             # TODO : fix legacy variable name
             idx_e = idx_h
         else:
@@ -1231,7 +1247,7 @@ class ClassicalVO(object):
                     #z_max = 5000.0
                     # = usually ~10m
                     )
-            print('essentialmat : {}/{}/{}'.format(n_in, len(idx_e), len(msk_e) ))
+            print_ratio('essentialmat', len(idx_e), msk_e.size)
 
         # convert R,t to base_link frame
         R = np.linalg.multi_dot([
@@ -1246,7 +1262,7 @@ class ClassicalVO(object):
 
         idx_r = np.where(msk_r)[0]
         pt3 = pt3.T
-        print('triangulation : {}/{}'.format(len(idx_r), msk_r.size))
+        print_ratio('triangulation', len(idx_r), msk_r.size)
 
         scale = self.run_gp(pt2_u_c[idx_e], pt2_u_p[idx_e], pt3, scale)
 

@@ -161,6 +161,7 @@ class CVORunner(object):
         # TODO : estimate scale from points + camera height?
         dps_gt = sub_p3d(odom[i], odom[i-1])
         s = np.linalg.norm(dps_gt[:2])
+        print('Ground Truth Scale : [ {} ]'.format(s))
 
         scale = None
         if i <= 2:
