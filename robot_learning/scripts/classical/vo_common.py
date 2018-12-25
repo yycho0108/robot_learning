@@ -384,8 +384,10 @@ class Landmarks(object):
                 lsf = np.float32([self.s_pyr_[e.octave] for e in k])
                 mxd = dist * lsf
                 mnd = mxd / self.s_pyr_[-1]
-                self.maxd_[i] = mxd[:,None]
-                self.mind_[i] = mnd[:,None]
+                # NOTE : applying a small margin around mind/maxd
+                # accounting for error in initial dist estimate.
+                self.maxd_[i] = mxd[:,None] * self.s_fac_
+                self.mind_[i] = mnd[:,None] / self.s_fac_
             else:
                 # do not apply visibility
                 self.maxd_[i] = np.inf
@@ -405,6 +407,9 @@ class Landmarks(object):
         x_k = pos_old.reshape(-1,3,1) + np.matmul(K_k, y_k)
         I = np.eye(3)[None,...] # (1,3,3)
         P_k = np.matmul(I - K_k, var_old)
+
+        # TODO : maybe also update mind_ and maxd_
+        # bookkeeping self.src_ maybe?
 
         self.pos[idx] = x_k[...,0]
         self.var[idx] = P_k

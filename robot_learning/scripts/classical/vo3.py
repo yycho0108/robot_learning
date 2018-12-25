@@ -2,12 +2,10 @@
 Semi-Urgent TODOs:
     - memory management (masks/fancy indexing creates copies; reuse same-sized arrays etc.)
     - Loop Closure!!
-    - Support Pyramidal Local/Global BA?
     - Try to apply the homography model from ORB_SLAM??
     - Keyframes?
     - Incorporate Variance information in BA?
     - Refactor Camera Extrinsic/Intrinsic Params as input
-    - Landmark Pruning Logic with Keypoint Response Strength
 """
 
 from collections import namedtuple, deque
@@ -416,7 +414,7 @@ class ClassicalVO(object):
         # TODO : what is FAST threshold?
         # TODO : tune nfeatures; empirically 2048 is pretty good
         orb = cv2.ORB_create(
-                nfeatures=2048,
+                nfeatures=4096,
                 scaleFactor=1.2,
                 nlevels=8,
                 scoreType=cv2.ORB_FAST_SCORE,
@@ -687,9 +685,14 @@ class ClassicalVO(object):
             all of these estimates are un-intelligently
             combined to produce the final result.
             """
-            # TODO : is logarithmic interpolation really better?
-            scale = np.exp(lerp(np.log(scale), np.log(scale_est), alpha))
-            #scale = lerp(scale, scale_est, alpha)
+            if (scale < 1e-2) and (scale_est / scale) > 2.0:
+                # disable scale interpolation
+                # most likely pure rotation
+                # implicit: scale=scale
+                pass
+            else:
+                # logarithmic interpolation
+                scale = np.exp(lerp(np.log(scale), np.log(scale_est), alpha))
         else:
             # implicit : scale = scale
             pass
@@ -1371,7 +1374,7 @@ class ClassicalVO(object):
                 # if multiple pyramids satisfy the condition.
                 s_check = (len(self.graph_.pose_) >= win)
                 f_check = (len(self.graph_.pose_) % win == 0)
-                if s_check and f_check: # TODO: configure BA frame
+                if s_check and f_check:
                     ba_win = win
                     run_ba = True
                     break
