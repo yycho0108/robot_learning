@@ -414,7 +414,7 @@ class ClassicalVO(object):
         # TODO : what is FAST threshold?
         # TODO : tune nfeatures; empirically 2048 is pretty good
         orb = cv2.ORB_create(
-                nfeatures=4096,
+                nfeatures=2048,
                 scaleFactor=1.2,
                 nlevels=8,
                 scoreType=cv2.ORB_FAST_SCORE,
@@ -453,7 +453,8 @@ class ClassicalVO(object):
 
         # bundle adjustment + loop closure
         # sort ba pyramid by largest first
-        self.ba_pyr_  = np.sort([16, 64, 256])[::-1]
+        ba_pyr = [16] # [16,64]
+        self.ba_pyr_  = np.sort(ba_pyr)[::-1]
         self.graph_ = VGraph()
 
         # UKF
@@ -657,15 +658,13 @@ class ClassicalVO(object):
                 T_a3 = np.concatenate([T_a3, [[0,0,0,1]]], axis=0)
                 scale_est = tx.scale_from_matrix(T_a3)[0]
         else:
-            if scale_rel_std < 0.3:
+            if len(lm_idx_e) > 8 and scale_rel_std < 0.3:
                 # scale weight by landmark variance
                 scale_w = (var_lm[i1][lm_idx_e][:,(0,1,2),(0,1,2)])
                 scale_w = np.linalg.norm(scale_w, axis=-1) 
                 scale_w = np.sum(scale_w) / scale_w
                 # TODO : is logarithmic mean better than naive mean?
                 scale_est = np.exp(robust_mean(np.log(scale_rel), weight=scale_w))
-                #scale_est_2 = robust_mean(scale_rel)
-                #print('weighting diff : {} vs {}'.format(scale_est, scale_est_2))
             else:
                 # TODO : why does this happen?
                 # scale estimates are anticipated to be unstable.
@@ -1134,7 +1133,9 @@ class ClassicalVO(object):
             gp_z = (Hn[...,0].dot(self.T_c2b_[:3,:3].T))
 
             # filter by estimated plane z-norm
-            z_val = ( np.abs(np.dot(gp_z, [0,0,1])) > 0.9 )
+            # ~15-degree deviation from the anticipated z-vector (0,0,1)
+            # TODO : collect these heuristics params
+            z_val = ( np.abs(np.dot(gp_z, [0,0,1])) > np.cos(np.deg2rad(15)) )
             z_idx = np.where(z_val)[0]
             if len(z_idx) <= 0:
                 # abort ground-plane estimation.
