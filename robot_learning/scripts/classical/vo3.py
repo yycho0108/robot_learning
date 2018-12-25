@@ -1221,13 +1221,16 @@ class ClassicalVO(object):
             R,
             self.cvt_.T_c2b_[:3,:3].T
             ])
-        t = self.cvt_.T_c2b_[:3,:3].dot(t)
+        t = np.linalg.multi_dot([
+            self.cvt_.T_c2b_[:3,:3],
+            t.reshape(3,1),
+            ]).ravel()
 
         idx_r = np.where(msk_r)[0]
         pt3 = pt3.T
         print('triangulation : {}/{}'.format(len(idx_r), msk_r.size))
 
-        self.run_gp(pt2_u_c[idx_e], pt2_u_p[idx_e], pt3, scale)
+        scale = self.run_gp(pt2_u_c[idx_e], pt2_u_p[idx_e], pt3, scale)
 
         msk = np.zeros(len(pt2_p), dtype=np.bool)
         msk[idx_t[idx_e[idx_r]]] = True
