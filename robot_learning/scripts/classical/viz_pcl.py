@@ -157,7 +157,7 @@ def plot_trisurf(ax, args, facecolors,
     c = np.percentile(maxd, 90)
 
     # apply filtered try
-    triangles = triangles[ar<=c]
+    triangles = triangles[maxd<=c]
     xt = tri.x[triangles]
     yt = tri.y[triangles]
     zt = z[triangles]

@@ -254,50 +254,31 @@ def show_landmark_2d(pos, cov, clear=True, draw=True,
         lmk_fig.canvas.draw()
         plt.pause(0.001)
 
-class Landmark(object):
-    def __init__(self,
-            pos,
-            var,
-            des,
-            kpt,
-            trk,
-            ang
-            ):
-        self.pos_ = pos # 3D Position = [3]
-        self.var_ = var # Variance = [3x3]
-        self.des_ = des # Descriptor = [32?]
-        self.kpt_ = kpt # Keypoint = [cv2.KeyPoint]
-        self.trk_ = trk # Tracking = Bool
-        self.ang_ = ang # View Angle = Float - useful for loop closure
-
-    def update(self):
-        pass
-
-# manage multiple landmarks
-# for easier queries.
 class Landmarks(object):
-    def __init__(self, n_des=32):
-        self.n_des_=n_des
+    """ Landmarks management """
+    def __init__(self, descriptor):
+        # == auto unroll descriptor parameters ==
+        n_des = descriptor.descriptorSize()
+        # Not 100% sure, but don't want to take risks with unsigned math
+        t_des = (np.uint8 if descriptor.descriptorType() == cv2.CV_8U
+                else np.float32)
+        s_fac = descriptor.getScaleFactor()
+        n_lvl = descriptor.getNLevels()
+        # =======================================
+
         self.capacity_ = c = 1024
         self.size_ = s = 0
 
         c = self.capacity_
         s = self.size_
 
-        # WARNING : very very specific descriptor/alg-based parameter
-        # TODO : HARDCODED
-        self.s_fac_ = 1.2
-        self.n_lvl_ = 8
-        self.s_pyr_ = np.power(self.s_fac_, np.arange(self.n_lvl_))
-
         # general data ...
         self.pos_ = np.empty((c,3), dtype=np.float32)
-        self.des_ = np.empty((c,n_des), dtype=np.int32)
-        # TODO : ^ highly dependent on descriptor
+        self.des_ = np.empty((c,n_des), dtype=t_des)
         self.ang_ = np.empty((c,1), dtype=np.float32)
         self.col_ = np.empty((c,3), dtype=np.uint8)
 
-        # health ...
+        # landmark "health" ...
         self.var_ = np.empty((c,3,3), dtype=np.float32)
         self.cnt_ = np.empty((c,1), dtype=np.int32)
 
@@ -305,13 +286,24 @@ class Landmarks(object):
         self.trk_ = np.empty((c,1), dtype=np.int32)
         self.kpt_ = np.empty((c,1), dtype=cv2.KeyPoint)
 
+        # query filtering
+        # NOTE : maxd/mind scale filtering may be ORB-specific.
+        self.s_fac_ = s_fac
+        self.n_lvl_ = n_lvl
+        self.s_pyr_ = np.power(self.s_fac_, np.arange(self.n_lvl_))
         self.maxd_ = np.empty((c,1), dtype=np.float32)
         self.mind_ = np.empty((c,1), dtype=np.float32)
 
-        # NOTE: self.rsp_ = [k.response_ for k ni kpt]
+        # TODO : maybe decompose keypoints into more useful form
+        # self.pt2_ = [k.pt for k in kpt]
+        # self.rsp_ = [k.response for k in kpt]
+        # self.oct_ = [k.octave for k in kpt]
 
-        self.fields_ = ['pos_', 'des_', 'ang_', 'col_',
-                'var_', 'cnt_', 'trk_', 'kpt_', 'maxd_', 'mind_']
+        self.fields_ = [
+                'pos_', 'des_', 'ang_', 'col_',
+                'var_', 'cnt_',
+                'trk_', 'kpt_',
+                'maxd_', 'mind_']
 
         # store index for efficient pruning
         self.pidx_ = 0
@@ -445,8 +437,13 @@ class Landmarks(object):
 
         d = vars(self)
         for f in self.fields_:
+            # NOTE: using msk here instead of index,
+            # in order to purposefully make a copy.
             d[f][:sz] = d[f][:self.size_][msk]
         self.size_ = sz
+
+        # return pruned indices
+        return np.where(msk)[0]
 
     @property
     def pos(self):

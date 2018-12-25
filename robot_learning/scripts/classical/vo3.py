@@ -215,6 +215,105 @@ def score_F(pt1, pt2, F, cvt, sigma=1.0):
 
     return score, (msk1 & msk2)
 
+class VGraph(object):
+    """ Simple wrapper for visibility graph """
+    # TODO : unify dynamic container interface or something.
+    # (i.e. with Landmarks() )
+    def __init__(self, cap0=1024):
+        # list of poses (somewhat special)
+        self.pose_ = []
+
+        # pose index
+        self.pi_ = np.empty( (cap0,), dtype=np.int32 )
+        # landmark index
+        self.li_ = np.empty( (cap0,), dtype=np.int32 )
+        # point observation
+        self.p2_ = np.empty( (cap0, 2), dtype=np.float32)
+
+        self.size_     = 0
+        self.capacity_ = cap0
+        self.fields_ = ['pi_', 'li_', 'p2_']
+
+    def resize(self, c_new):
+        d = vars(self)
+        c_old = self.size_
+        for f in self.fields_:
+            d_old = d[f][:c_old]
+            s_old = d_old.shape
+            
+            s_new = (c_new,) + tuple(s_old[1:])
+            d_new = np.empty(s_new, dtype=d[f].dtype)
+            d_new[:c_old] = d_old[:c_old]
+
+            d[f] = d_new
+        self.capacity_ = c_new
+
+    def append(self, li, p2):
+        """
+        Add observation to lmk[li]
+        WARNING: .append() should be called AFTER add_pos().
+        """
+        # automatically figure out pose index.
+        # TODO : validate
+        pi = len(self.pose_)
+        n = len(li) # NOTE: in general, cannot use len(pi).
+        if self.size_ + n > self.capacity_:
+            self.resize(self.capacity_ * 2)
+            self.append(li, p2)
+        else:
+            i = np.s_[self.size_:self.size_+n]
+            self.pi_[i] = pi
+            self.li_[i] = li
+            self.p2_[i] = p2
+            self.size_ += n
+
+    def prune(self, keep_idx):
+        """ reindex graph with keep_idx """
+        # naive iterative version
+        #for (i_new, i_prv) in enumerate(keep_idx):
+        #    self.li_[ np.where(self.li_ == i_prv)[0] ] = i_new
+
+        # NOTE: lmk[li0[i0]] == lmk[keep_idx][i1]
+
+        # TODO : is the below code super inefficient?
+        keep_idx = np.int32(keep_idx)
+        i0, i1 = np.where(self.li[:,None] == keep_idx[None, :])
+
+        n = len(i0)
+        self.li_[:n] = i1
+        self.pi_[:n] = self.pi[i0].copy()
+        self.p2_[:n] = self.p2[i0].copy()
+        self.size_ = n
+
+    def query(self, t):
+        """ t = how much to look back """
+        # assume (0...,1...,2...,3...,4..,5..,6...)
+        # then self.pi[-1] = 6
+        # if t = 3, then desired result is [4...,5...,6...]
+        mx  = self.pi[-1]
+        msk = (self.pi >= (mx+1-t))
+        idx = np.where(msk)[0]
+
+        p0 = np.asarray(self.pose_[-t:])
+        pi = self.pi[idx] - self.pi[idx[0]]
+        li = self.li[idx]
+        p2 = self.p2[idx]
+
+        return p0, pi, li, p2
+    
+    def add_pos(self, v):
+        self.pose_.append(v)
+
+    @property
+    def pi(self):
+        return self.pi_[:self.size_]
+    @property
+    def li(self):
+        return self.li_[:self.size_]
+    @property
+    def p2(self):
+        return self.p2_[:self.size_]
+
 class ClassicalVO(object):
     # define flags
     VO_USE_FM_COR    = 1<<0  # Enable correctMatches() (NOTE: time-consuming)
@@ -239,8 +338,7 @@ class ClassicalVO(object):
         # define configuration
         self.flag_ = ClassicalVO.VO_DEFAULT
         self.flag_ &= ~ClassicalVO.VO_USE_HOMO # TODO : doesn't really work?
-        #self.flag_ &= ~ClassicalVO.VO_USE_GP_RSC
-        #self.flag_ &= ~ClassicalVO.VO_USE_FM_COR # performance
+        # self.flag_ &= ~ClassicalVO.VO_USE_FM_COR # performance
 
         # define constant parameters
         Ks = (1.0 / 1.0)
@@ -314,7 +412,7 @@ class ClassicalVO(object):
                 )
 
         # data cache + flags
-        self.landmarks_ = Landmarks()
+        self.landmarks_ = Landmarks(des)
         self.hist_ = deque(maxlen=3)
 
         # pnp
@@ -329,11 +427,9 @@ class ClassicalVO(object):
         self.ukf_dt_ = []
 
         # bundle adjustment
-        self.ba_freq_ = 16 # empirically pretty good
-        self.ba_pos_ = []
-        self.ba_ci_ = []
-        self.ba_li_ = []
-        self.ba_p2_ = []
+        self.ba_freq_ = 4 # empirically pretty good
+        # loop closure?
+        self.graph_ = VGraph()
 
     def track(self, img1, img2, pt1, pt2=None,
             thresh=1.0
@@ -409,23 +505,25 @@ class ClassicalVO(object):
         if len(self.landmarks_.pos) > 0:
             # enter landmark processing
 
-            # filter by distance (<10m for match)
+            # filter : by view angle
+            a_dif = np.abs((self.landmarks_.ang[:,0] - pose[-1] + np.pi)
+                    % (2*np.pi) - np.pi)
+            a_msk = np.less(a_dif, np.deg2rad(30.0)) # TODO : kind-of magic number
+
+            # filter : by min/max ORB distance
             pose_tmp = self.cvt_.T_b2c_.dot([pose[0], pose[1], 0, 1]).ravel()[:3]
             delta    = np.linalg.norm(self.landmarks_.pos - pose_tmp[None,:], axis=-1)
             d_msk    = np.logical_and.reduce([
-                #delta < (10.0 / scale), # max 10m
                 self.landmarks_.mind[:,0] <= delta,
                 delta <= self.landmarks_.maxd[:,0]
                 ])
-            #d_msk    = (delta < 10.0 / scale) # TODO : magic?
 
-            # TODO : add preliminary filter by view angle
-
-            # filter by visibility
+            # filter : by visibility
             pt2_lm_c, lm_msk = self.cvt_.pt3_pose_to_pt2_msk(
                     self.landmarks_.pos, pose)
             lm_msk = np.logical_and.reduce([
                 lm_msk,
+                a_msk,
                 d_msk
                 ])
             lm_idx = np.where(lm_msk)[0]
@@ -499,12 +597,12 @@ class ClassicalVO(object):
         # TODO : evaluate whether or not to use z-depthvalue or the full distance
         # may not matter too much given that scale from either SHOULD be consistent.
         # opt1 : norm
-        #d_lm_old = np.linalg.norm(p_lm_c, axis=-1)
-        #d_lm_new = np.linalg.norm(p_lm_v2_c, axis=-1)
+        d_lm_old = np.linalg.norm(p_lm_c, axis=-1)
+        d_lm_new = np.linalg.norm(p_lm_v2_c, axis=-1)
         # opt2 : take z-value in camera coordinates
         # z-value much more stable than norm?
-        d_lm_old = p_lm_c[:,2]
-        d_lm_new = p_lm_v2_c[:,2]
+        # d_lm_old = p_lm_c[:,2]
+        # d_lm_new = p_lm_v2_c[:,2]
 
         # validation : dot product (=cos(theta))
         #uv_lm_c = p_lm_c / d_lm_old[:, None] # Nx3
@@ -532,7 +630,8 @@ class ClassicalVO(object):
                 scale_w = (var_lm[i1][lm_idx_e][:,(0,1,2),(0,1,2)])
                 scale_w = np.linalg.norm(scale_w, axis=-1) 
                 scale_w = np.sum(scale_w) / scale_w
-                scale_est = robust_mean(scale_rel, weight=scale_w)
+                # TODO : is logarithmic mean better than naive mean?
+                scale_est = np.exp(robust_mean(np.log(scale_rel), weight=scale_w))
                 #scale_est_2 = robust_mean(scale_rel)
                 #print('weighting diff : {} vs {}'.format(scale_est, scale_est_2))
             else:
@@ -544,7 +643,7 @@ class ClassicalVO(object):
         if len(d_lm_old) > 0:
             print_ratio('estimated scale ratio', scale_est, scale)
             # TODO : tune scale interpolation alpha
-            alpha = 0.5
+            alpha = 0.8 # high trust in ground-plane/ukf based estimate
             # override scale here
             # will smoothing over time hopefully prevent scale drift?
             """
@@ -585,9 +684,8 @@ class ClassicalVO(object):
 
             # Add correspondences to BA Cache
             # wow, that's a lot of chained indices.
-            self.cache_BA(
-                    lmk_idx=u_idx,
-                    lmk_pt2=pt2_u_c[idx_er][i2][lm_idx_e]
+            self.graph_.append(u_idx,
+                    pt2_u_c[idx_er][i2][lm_idx_e]
                     )
 
         if self.flag_ & ClassicalVO.VO_USE_PNP: # == if USE_PNP
@@ -721,9 +819,8 @@ class ClassicalVO(object):
             # NOTE : using undistorted version of pt2.
             # WARN : pt2_u_c = undistort( pt2_c[idx_t])
             # for whatever reason, indexing was somewhat messed up.
-            self.cache_BA(
-                    lmk_idx=np.arange(li_0, li_1),
-                    lmk_pt2=pt2_u_c[idx_e][idx_r][lm_new_idx][idx_n]
+            self.graph_.append(np.arange(li_0, li_1),
+                    pt2_u_c[idx_e][idx_r][lm_new_idx][idx_n]
                     )
 
         return scale, msg
@@ -745,26 +842,6 @@ class ClassicalVO(object):
         return np.float32([x_c,y_c,h_c])
 
     """ all BA Stuff """
-    def cache_BA(self, lmk_idx, lmk_pt2):
-        if not (self.flag_ & ClassicalVO.VO_USE_BA):
-            return
-        # called for both newly registered landmarks
-        # and re-observed landmarks.
-
-        i = len(self.ba_pos_) # current pose index for BA
-        n = len(lmk_idx)
-
-        # --> convert to [i,i,i,i,...], [l0,l1,l2,...], [pt0,pt1,...]
-        c_i = np.full(n, i) # == (n,)
-        l_i = lmk_idx # == (n,)
-        pt2 = lmk_pt2 # == (n,2) array of points
-        # NOTE : prefer to pass in undistorted points to avoid
-        # repeated applications of distortions in reprojections
-
-        self.ba_ci_.append( c_i )
-        self.ba_li_.append( l_i )
-        self.ba_p2_.append( pt2 )
-
     def project_BA(self, cam, lmk, return_msk=False):
         """
         cam = np.array(Nx3) camera 2d pose (x,y,h) (WARN: actually base_link pose)
@@ -885,18 +962,18 @@ class ClassicalVO(object):
         if not self.flag_ & ClassicalVO.VO_USE_BA:
             return
 
-        if len(self.ba_ci_) <= 0 or len(self.ba_pos_) <= 0:
-            # unable to run BA (NO DATA!)
+        if self.graph_.size_ <= 0:
             return
 
+        #if len(self.ba_ci_) <= 0 or len(self.ba_pos_) <= 0:
+        #    # unable to run BA (NO DATA!)
+        #    return
+
         # create np arrays
-        p0 = np.stack(self.ba_pos_, axis=0)
-        ci = np.concatenate(self.ba_ci_, axis=0)
-        li = np.concatenate(self.ba_li_, axis=0)
-        p2 = np.concatenate(self.ba_p2_, axis=0)
+        p0, ci, li, p2 = self.graph_.query(self.ba_freq_)
 
         # gather stats
-        n_c = len(self.ba_pos_)
+        n_c = len(p0)
         n_l = self.landmarks_.size_
 
         # filter by landmarks that were actually observed
@@ -932,13 +1009,6 @@ class ClassicalVO(object):
         # TODO : can we INPUT variance information to scipy.least_squares?
         # TODO : can we extract variance information out of least_squares?
         self.landmarks_.pos[li_u] = lmk_opt
-
-        # reset BA cache
-        self.ba_pos_ = []
-        self.ba_ci_ = []
-        self.ba_li_ = []
-        self.ba_p2_ = []
-
         return pos_opt
 
     def run_ukf(self, dt, scale=None):
@@ -1249,11 +1319,15 @@ class ClassicalVO(object):
         self.ukf_l_.update(pose_c_r)
         pose_c_r = self.ukf_l_.x[:3].copy() # TODO : chronologically correct?
 
+        self.graph_.add_pos(pose_c_r.copy())
+
         # NOTE!! this vvvv must be called after all cache_BA calls
         # have been completed.
         if self.flag_ & ClassicalVO.VO_USE_BA:
-            self.ba_pos_.append( pose_c_r.copy() ) # cache BA
-            if len(self.ba_pos_) >= self.ba_freq_: # TODO: configure BA frame
+
+            s_check = (self.graph_.size_ > 0)
+            f_check = (self.graph_.size_ % self.ba_freq_ == 0)
+            if s_check and f_check: # TODO: configure BA frame
                 # run BA every 16 frames
                 ba_res = self.run_BA()
                 if ba_res is not None:
@@ -1279,7 +1353,8 @@ class ClassicalVO(object):
 
                 # TODO : currently pruning happens with BA
                 # in order to not mess up landmark indices.
-                self.landmarks_.prune()
+                keep_idx = self.landmarks_.prune()
+                self.graph_.prune(keep_idx)
 
         print('\t\t pose-f2f : {}'.format(pose_c_r))
         ## === FROM THIS POINT ALL VIZ === 
@@ -1371,7 +1446,6 @@ class ClassicalVO(object):
         # ground-plane projection status,
         # landmark correspondence scale estimation status,
         # landmark updates (#additions), etc.
-
         return [mim, pose_c_r, pt2_c_rec, pt3_m, col_m, msg]
 
 def main():
