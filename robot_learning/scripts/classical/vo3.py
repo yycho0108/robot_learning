@@ -1,9 +1,16 @@
 """
 Semi-Urgent TODOs:
     - memory management (masks/fancy indexing creates copies; reuse same-sized arrays etc.)
+    - Loop Closure!!
+    - Support Pyramidal Local/Global BA?
+    - Try to apply the homography model from ORB_SLAM??
+    - Keyframes?
+    - Incorporate Variance information in BA?
+    - Refactor Camera Extrinsic/Intrinsic Params as input
+    - Landmark Pruning Logic with Keypoint Response Strength
 """
+
 from collections import namedtuple, deque
-from filterpy.kalman import InformationFilter
 from tf import transformations as tx
 import cv2
 import numpy as np
@@ -275,6 +282,7 @@ class ClassicalVO(object):
                 #flags = cv2.SOLVEPNP_UPNP
                 )
         # TODO : what is FAST threshold?
+        # TODO : tune nfeatures; empirically 2048 is pretty good
         orb = cv2.ORB_create(
                 nfeatures=2048,
                 scaleFactor=1.2,
@@ -321,7 +329,7 @@ class ClassicalVO(object):
         self.ukf_dt_ = []
 
         # bundle adjustment
-        self.ba_freq_ = 16# empirically pretty good
+        self.ba_freq_ = 16 # empirically pretty good
         self.ba_pos_ = []
         self.ba_ci_ = []
         self.ba_li_ = []
@@ -403,7 +411,7 @@ class ClassicalVO(object):
             pt2_u_p, pt2_u_c,
             pt3,
             img_c, pt2_c,
-            h_override,
+            kpt_p,
             msg
             ):
 
@@ -414,6 +422,10 @@ class ClassicalVO(object):
         idx_er = idx_e[idx_r]
         pt2_lm_c = None # ???
 
+        # extract data
+        kpt_p_m = kpt_p[idx_ter]
+        des_p_m = des_p[idx_ter]
+
         # frame-to-map processing
         # (i.e. uses landmark data)
 
@@ -423,7 +435,7 @@ class ClassicalVO(object):
             # filter by distance (<10m for match)
             pose_tmp = self.cvt_.T_b2c_.dot([pose[0], pose[1], 0, 1]).ravel()[:3]
             delta    = np.linalg.norm(self.landmarks_.pos - pose_tmp[None,:], axis=-1)
-            d_msk    = (delta < 10.0 / scale)
+            d_msk    = (delta < 10.0 / scale) # TODO : magic?
 
             # TODO : add preliminary filter by view angle
 
@@ -452,7 +464,6 @@ class ClassicalVO(object):
         print_ratio('visible landmarks', len(lm_idx), self.landmarks_.size_)
 
         # select useful descriptor based on current viewpoint
-        des_p_m = des_p[idx_ter]
         i1, i2 = self.cvt_.des_des_to_match(
                 des_lm,
                 des_p_m, cross=(self.flag_ & ClassicalVO.VO_USE_MXCHECK)
@@ -569,13 +580,13 @@ class ClassicalVO(object):
             # implicit : scale = scale
             pass
 
-        # == scale_is_believable @ > 1e-2m translation
+        # == scale_is_believable @ >= 1e-2m translation
         # TODO : figure out better heuristic?
         run_lm = (scale >= 1e-2)
 
+        # control flags
         # update existing landmarks
         update_lm = (run_lm and self.flag_ & ClassicalVO.VO_USE_LM_KF)
-
         # insert new landmarks
         insert_lm = run_lm
 
@@ -597,6 +608,7 @@ class ClassicalVO(object):
                     )
 
         if self.flag_ & ClassicalVO.VO_USE_PNP: # == if USE_PNP
+            # PNP is currently horrible but may be required for loop closure.
             pt_world = pos_lm[i1]#[lm_msk_e]
             pt_cam   = pt2_u_c[idx_er][i2]#[lm_msk_e]
 
@@ -642,7 +654,6 @@ class ClassicalVO(object):
                     self.pnp_p_ = None
                     self.pnp_h_ = None
 
-
         # == visualize filtering process ==
         # n_show = 1
         # colors = np.random.uniform(size=(n_show,3))
@@ -674,8 +685,9 @@ class ClassicalVO(object):
                 )
 
         # update "invisible" landmarks that should have been visible
-        lm_filter_msk = np.ones(len(lm_idx), dtype=np.bool)
-        lm_filter_msk[i1_lax] = False
+        # TODO : something more than just count decrementing?
+        # TODO : also, some landmarks may be invisible due to obstacles.
+        # == (probably) filtering by view angle would help
         cnt_lm[i1_lax] -= 1
 
         if insert_lm:
@@ -711,6 +723,8 @@ class ClassicalVO(object):
                     pose) # TODO : use rectified pose here if available
 
             des_new = des_p_m[lm_new_idx][idx_n]
+            kpt_new = kpt_p_m[lm_new_idx][idx_n]
+
             ang_new = np.full((n_new,1), pose[-1], dtype=np.float32)
 
             var_new = self.initialize_landmark_variance(
@@ -728,7 +742,7 @@ class ClassicalVO(object):
             self.landmarks_.append(
                     pos_new, var_new,
                     des_new, ang_new,
-                    col_new)#, kpt_new)
+                    col_new, kpt_new)
             li_1 = self.landmarks_.size_
 
             # NOTE : using undistorted version of pt2.
@@ -942,7 +956,8 @@ class ClassicalVO(object):
         #print('optimized latest pose', pos_opt[-1])
 
         # apply BA results
-        # TODO : revive this
+        # TODO : can we INPUT variance information to scipy.least_squares?
+        # TODO : can we extract variance information out of least_squares?
         self.landmarks_.pos[li_u] = lmk_opt
 
         # reset BA cache
@@ -1188,11 +1203,11 @@ class ClassicalVO(object):
             r_H = (sH / (sH + sF))
             print_ratio('RH', sH, sH+sF)
 
-        h_override = False
+        use_h = False
         if self.flag_ & ClassicalVO.VO_USE_HOMO:
-            h_override = (r_H > 0.45)# and ( len(idx_h) > len(idx_e) )
+            use_h = (r_H > 0.45)# and ( len(idx_h) > len(idx_e) )
 
-        if h_override:
+        if use_h:
             ## homography
             #idx_h = idx_h[msk_sh]
             res_h, Hr, Ht, Hn = cv2.decomposeHomographyMat(H, self.K_)
@@ -1252,7 +1267,7 @@ class ClassicalVO(object):
                     pt2_u_p, pt2_u_c,
                     pt3,
                     img_c, pt2_c,
-                    h_override,
+                    kpt_p,
                     msg
                     )
             # recompute rectified pose_c_r
@@ -1269,8 +1284,6 @@ class ClassicalVO(object):
                 # run BA every 16 frames
                 ba_res = self.run_BA()
                 if ba_res is not None:
-                    # naive version : just take last value
-
                     # update global ukf
                     for (g_dt, g_z) in zip(
                             self.ukf_dt_[-self.ba_freq_:],

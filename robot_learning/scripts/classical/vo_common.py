@@ -297,11 +297,14 @@ class Landmarks(object):
 
         # tracking ...
         self.trk_ = np.empty((c,1), dtype=np.int32)
-        self.kpt_ = np.empty((c,2), dtype=np.float32)
+        self.kpt_ = np.empty((c,1), dtype=cv2.KeyPoint)
         # NOTE: self.rsp_ = [k.response_ for k ni kpt]
 
         self.fields_ = ['pos_', 'des_', 'ang_', 'col_',
                 'var_', 'cnt_', 'trk_', 'kpt_']
+
+        # store index for efficient pruning
+        self.pidx_ = 0
 
     def resize(self, c_new):
         print('-------landmarks resizing : {} -> {}'.format(self.capacity_, c_new))
@@ -322,13 +325,13 @@ class Landmarks(object):
             d[f] = d_new
         self.capacity_ = c_new
 
-    def append(self, p, v, d, a, c):#, k):
+    def append(self, p, v, d, a, c, k):
         # TODO : revive keypoint processing
         n = len(p)
         if self.size_ + n > self.capacity_:
             self.resize(self.capacity_ * 2)
             # retry append
-            self.append(p,v,d,a,c)
+            self.append(p,v,d,a,c,k)
         else:
             # assign
             i = np.s_[self.size_:self.size_+n]
@@ -337,7 +340,7 @@ class Landmarks(object):
             self.des_[i] = d
             self.ang_[i] = a
             self.col_[i] = c
-            #self.kpt_[i] = k
+            self.kpt_[i] = k[:,None]
 
             # auto initialized vars
             self.cnt_[i] = 1
@@ -379,19 +382,36 @@ class Landmarks(object):
         # response strength (kpt.response_)
         # and tracking information
 
+        # response viz
+        #cbins = [ [] for _ in range(1 + self.cnt.max()) ]
+        #for c,r in zip(self.cnt[:,0], rsp):
+        #    cbins[c].append(r)
+        #plt.figure()
+        ##plt.hist(rsp)
+        ##plt.plot(self.cnt, rsp, '+')
+        #plt.boxplot(cbins)
+        #plt.show()
+
         v = np.linalg.norm(self.var[:,(0,1,2),(0,1,2)], axis=-1)
         neigh = NearestNeighbors(n_neighbors=k)
         neigh.fit(self.pos)
         d, i = neigh.kneighbors(return_distance=True)
+        # filter results by non-max suppression radius
         msk_d = np.min(d, axis=1) < radius
-        msk_v = np.all(v[i]>v[:,None], axis=1) # TODO : or np.sum() < 2?
+        # neighborhood count TODO : or np.sum() < 2?
+        msk_v = np.all(v[i]>v[:,None], axis=1)
+        # keep latest N landmarks no matter what
         msk_t = np.arange(self.size_) > (self.size_ - min_keep)
+        # strong responses are preferrable and will be kept
+        rsp = [k.response for k in self.kpt[:,0]]
+        msk_r = np.greater(rsp, 48)
 
-        msk = np.logical_or(
+        msk = np.logical_or.reduce([
                 np.logical_and(msk_d, msk_v),
                 ~msk_d,
-                msk_t
-                )
+                msk_t,
+                msk_r
+                ])
         sz = msk.sum()
         p,v,d,a,c = [e[msk] for e in 
                 [self.pos,self.var,self.des,self.ang,self.col]]

@@ -43,17 +43,15 @@ def main():
     # convert lmk_pos --> map[base_link] coordinate
     # TODO : is this necessary?
 
-    lmk_pos_m = lmk_pos.dot(T_c2b[:3,:3].T) + T_c2b[:3,3:].T
-    lmk_xyzrgb = np.concatenate([lmk_pos_m, lmk_col], axis=-1)
-
-    np.savetxt('/tmp/lmk_xyzrgb.txt',
-            lmk_xyzrgb,
-            fmt='%f',
-            #header='CONTOUR',
-            delimiter=' ',
-            #comments=''
-            )
-    return
+    # lmk_pos_m = lmk_pos.dot(T_c2b[:3,:3].T) + T_c2b[:3,3:].T
+    # lmk_xyzrgb = np.concatenate([lmk_pos_m, lmk_col], axis=-1)
+    # np.savetxt('/tmp/lmk_xyzrgb.txt',
+    #         lmk_xyzrgb,
+    #         fmt='%f',
+    #         #header='CONTOUR',
+    #         delimiter=' ',
+    #         #comments=''
+    #         )
 
     # build projection matrix ...
     n_c = len(cam_pos)
@@ -102,9 +100,9 @@ def main():
     mkdir('/tmp/pmvs/txt')
     mkdir('/tmp/pmvs/visualize')
 
-    WRITE_PATH = False
-    WRITE_IMG  = False
-    WRITE_OPT  = False
+    WRITE_PATH = True
+    WRITE_IMG  = True
+    WRITE_OPT  = True
 
     if WRITE_PATH:
         for i in range(n_c):
