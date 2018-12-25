@@ -382,29 +382,6 @@ class ClassicalVO(object):
         idx = idx[msk]
         return pt2, idx
 
-    def initialize_landmark_variance(self, pt3_c, pose):
-        # initialize variance
-        var_rel = np.square([0.02, 0.02, 1.0]) # expected landmark variance @ ~ 1m
-        # TODO : ^ is a ballpark estimate.
-        var_rel = np.diag(var_rel) # 3x3
-        var_c = oriented_cov(pt3_c, var_rel) # Nx3x3
-
-        # now rotate camera-coordinate variance to map-coord variance
-        T_b2o = self.cvt_.pose_to_T(pose)
-        T_c2m = np.linalg.multi_dot([
-            self.cvt_.T_b2c_,
-            T_b2o,
-            self.cvt_.T_c2b_
-            ])
-        R_c2m = T_c2m[:3,:3]
-
-        var_m = np.matmul(
-                np.matmul(R_c2m[None,...], var_c),
-                R_c2m.T[None,...]
-                )
-
-        return var_m
-
     def proc_f2m(self, pose, scale,
             des_p, des_c,
             idx_t, idx_e, idx_r,
@@ -435,7 +412,12 @@ class ClassicalVO(object):
             # filter by distance (<10m for match)
             pose_tmp = self.cvt_.T_b2c_.dot([pose[0], pose[1], 0, 1]).ravel()[:3]
             delta    = np.linalg.norm(self.landmarks_.pos - pose_tmp[None,:], axis=-1)
-            d_msk    = (delta < 10.0 / scale) # TODO : magic?
+            d_msk    = np.logical_and.reduce([
+                #delta < (10.0 / scale), # max 10m
+                self.landmarks_.mind[:,0] <= delta,
+                delta <= self.landmarks_.maxd[:,0]
+                ])
+            #d_msk    = (delta < 10.0 / scale) # TODO : magic?
 
             # TODO : add preliminary filter by view angle
 
@@ -594,7 +576,8 @@ class ClassicalVO(object):
             # update landmarks from computed correspondences
             # TODO: apply scale_est (aggregate) or rel (individual)?
             p_lm_v2_c_s = p_lm_v2_c * scale
-            var_lm_new = self.initialize_landmark_variance(p_lm_v2_c_s, pose)
+            var_lm_new = self.landmarks_.lm_var(self.cvt_,
+                    pose, p_lm_v2_c_s)
             p_lm_v2_0 = self.cvt_.cam_to_map(p_lm_v2_c_s, pose)
 
             u_idx = lm_idx[i1][lm_idx_e]
@@ -718,19 +701,9 @@ class ClassicalVO(object):
                 ))
             pt3_new_c = scale * pt3[lm_new_idx][idx_n]
 
-            pos_new = self.cvt_.cam_to_map(
-                    pt3_new_c,
-                    pose) # TODO : use rectified pose here if available
-
             des_new = des_p_m[lm_new_idx][idx_n]
             kpt_new = kpt_p_m[lm_new_idx][idx_n]
-
             ang_new = np.full((n_new,1), pose[-1], dtype=np.float32)
-
-            var_new = self.initialize_landmark_variance(
-                    pt3_new_c,
-                    pose)
-
             col_new = get_points_color(img_c, pt2_c[idx_t][idx_e][idx_r][lm_new_idx][idx_n], w=1)
 
             # append new landmarks ...
@@ -739,10 +712,10 @@ class ClassicalVO(object):
             # offsets to be consistent.
 
             li_0 = self.landmarks_.size_
-            self.landmarks_.append(
-                    pos_new, var_new,
-                    des_new, ang_new,
-                    col_new, kpt_new)
+            self.landmarks_.append_from(
+                    self.cvt_, # requires Conversions handle
+                    pose, pt3_new_c,
+                    des_new, ang_new, col_new, kpt_new)
             li_1 = self.landmarks_.size_
 
             # NOTE : using undistorted version of pt2.
@@ -1306,8 +1279,7 @@ class ClassicalVO(object):
 
                 # TODO : currently pruning happens with BA
                 # in order to not mess up landmark indices.
-                self.landmarks_.prune_nmx()
-                #self.landmarks_.prune()
+                self.landmarks_.prune()
 
         print('\t\t pose-f2f : {}'.format(pose_c_r))
         ## === FROM THIS POINT ALL VIZ === 

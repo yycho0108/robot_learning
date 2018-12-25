@@ -284,6 +284,12 @@ class Landmarks(object):
         c = self.capacity_
         s = self.size_
 
+        # WARNING : very very specific descriptor/alg-based parameter
+        # TODO : HARDCODED
+        self.s_fac_ = 1.2
+        self.n_lvl_ = 8
+        self.s_pyr_ = np.power(self.s_fac_, np.arange(self.n_lvl_))
+
         # general data ...
         self.pos_ = np.empty((c,3), dtype=np.float32)
         self.des_ = np.empty((c,n_des), dtype=np.int32)
@@ -298,10 +304,14 @@ class Landmarks(object):
         # tracking ...
         self.trk_ = np.empty((c,1), dtype=np.int32)
         self.kpt_ = np.empty((c,1), dtype=cv2.KeyPoint)
+
+        self.maxd_ = np.empty((c,1), dtype=np.float32)
+        self.mind_ = np.empty((c,1), dtype=np.float32)
+
         # NOTE: self.rsp_ = [k.response_ for k ni kpt]
 
         self.fields_ = ['pos_', 'des_', 'ang_', 'col_',
-                'var_', 'cnt_', 'trk_', 'kpt_']
+                'var_', 'cnt_', 'trk_', 'kpt_', 'maxd_', 'mind_']
 
         # store index for efficient pruning
         self.pidx_ = 0
@@ -325,8 +335,39 @@ class Landmarks(object):
             d[f] = d_new
         self.capacity_ = c_new
 
-    def append(self, p, v, d, a, c, k):
-        # TODO : revive keypoint processing
+    @staticmethod
+    def lm_var(cvt, src, pos_c):
+        # initialize variance
+        var_rel = np.square([0.02, 0.02, 1.0]) # expected landmark variance @ ~ 1m
+        # TODO : ^ is a ballpark estimate.
+        var_rel = np.diag(var_rel) # 3x3
+        var_c = oriented_cov(pos_c, var_rel) # Nx3x3
+
+        # now rotate camera-coordinate variance to map-coord variance
+        T_b2o = cvt.pose_to_T(src)
+        R_c2m = np.linalg.multi_dot([
+            cvt.T_b2c_[:3,:3], #R-part
+            T_b2o[:3,:3],
+            cvt.T_c2b_[:3,:3]
+            ])
+
+        var_m = reduce(np.matmul,[
+            R_c2m, var_c, R_c2m.T])
+        return var_m
+
+    def append_from(self, cvt,
+            src, pos_c,
+            des, ang, col, kpt):
+        # compute expected variance from depth
+        pos = cvt.cam_to_map(pos_c, src)
+        var = self.lm_var(cvt, src, pos_c)
+        dis = np.linalg.norm(pos_c, axis=-1)
+        self.append(pos, var, des, ang, col, kpt,
+                dis)
+
+    def append(self, p, v, d, a, c, k,
+            dist=None
+            ):
         n = len(p)
         if self.size_ + n > self.capacity_:
             self.resize(self.capacity_ * 2)
@@ -345,6 +386,19 @@ class Landmarks(object):
             # auto initialized vars
             self.cnt_[i] = 1
             self.trk_[i] = True
+
+            if dist is not None:
+                # depth-based visibility according to ORB-SLAM
+                lsf = np.float32([self.s_pyr_[e.octave] for e in k])
+                mxd = dist * lsf
+                mnd = mxd / self.s_pyr_[-1]
+                self.maxd_[i] = mxd[:,None]
+                self.mind_[i] = mnd[:,None]
+            else:
+                # do not apply visibility
+                self.maxd_[i] = np.inf
+                self.mind_[i] = 0.0
+
             # update size
             self.size_ += n
 
@@ -364,34 +418,8 @@ class Landmarks(object):
         self.var[idx] = P_k
         self.cnt[idx] += 1
 
-    def prune(self, min_cnt=3, min_keep=512):
-        # TODO : prune by confidence, etc.
-        msk_c = (self.cnt >= min_cnt)[...,0]
-        msk_t = np.arange(self.size_) > (self.size_ - min_keep)
-        msk = (msk_c | msk_t)
-        sz  = msk.sum()
-        self.pos[:sz] = self.pos[msk]
-        self.var[:sz] = self.var[msk]
-        self.des[:sz] = self.des[msk]
-        self.ang[:sz] = self.ang[msk]
-        self.col[:sz] = self.col[msk]
-        self.size_ = sz
-
-    def prune_nmx(self, k=3, radius=0.025, min_keep=512):
-        # TODO : prune by descriptor
-        # response strength (kpt.response_)
-        # and tracking information
-
-        # response viz
-        #cbins = [ [] for _ in range(1 + self.cnt.max()) ]
-        #for c,r in zip(self.cnt[:,0], rsp):
-        #    cbins[c].append(r)
-        #plt.figure()
-        ##plt.hist(rsp)
-        ##plt.plot(self.cnt, rsp, '+')
-        #plt.boxplot(cbins)
-        #plt.show()
-
+    def prune(self, k=3, radius=0.025, min_keep=1024):
+        # TODO : Prune by tracking information and/or count
         v = np.linalg.norm(self.var[:,(0,1,2),(0,1,2)], axis=-1)
         neigh = NearestNeighbors(n_neighbors=k)
         neigh.fit(self.pos)
@@ -400,26 +428,24 @@ class Landmarks(object):
         msk_d = np.min(d, axis=1) < radius
         # neighborhood count TODO : or np.sum() < 2?
         msk_v = np.all(v[i]>v[:,None], axis=1)
-        # keep latest N landmarks no matter what
+        # keep latest N landmarks
         msk_t = np.arange(self.size_) > (self.size_ - min_keep)
         # strong responses are preferrable and will be kept
         rsp = [k.response for k in self.kpt[:,0]]
-        msk_r = np.greater(rsp, 48)
+        msk_r = np.greater(rsp, 48) # TODO : somewhat magical
 
-        msk = np.logical_or.reduce([
-                np.logical_and(msk_d, msk_v),
-                ~msk_d,
-                msk_t,
-                msk_r
-                ])
+        # below expression describes the following heuristic:
+        # if (latest_N) keep;
+        # else if (passed_non_max) keep;
+        # else if (strong_descriptor) keep;
+        msk = msk_t | (msk_d & msk_v) | (msk_r & ~msk_d)
+
         sz = msk.sum()
-        p,v,d,a,c = [e[msk] for e in 
-                [self.pos,self.var,self.des,self.ang,self.col]]
-        self.pos[:sz] = p
-        self.var[:sz] = v
-        self.des[:sz] = d
-        self.ang[:sz] = a
-        self.col[:sz] = c
+        print('Landmarks Pruning : {}->{}'.format(msk.size, sz))
+
+        d = vars(self)
+        for f in self.fields_:
+            d[f][:sz] = d[f][:self.size_][msk]
         self.size_ = sz
 
     @property
@@ -446,6 +472,12 @@ class Landmarks(object):
     @property
     def kpt(self):
         return self.kpt_[:self.size_]
+    @property
+    def mind(self):
+        return self.mind_[:self.size_]
+    @property
+    def maxd(self):
+        return self.maxd_[:self.size_]
 
 class Conversions(object):
     """

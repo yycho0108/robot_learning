@@ -149,11 +149,12 @@ def plot_trisurf(ax, args, facecolors,
     zt = z[triangles]
 
     # filter by tri size
-    pt = np.stack([xt,yt,zt], axis=1) # Nx3x3
-    dv1 = (pt[:,0] - pt[:,1])
-    dv2 = (pt[:,0] - pt[:,2])
-    ar = np.linalg.norm(np.cross(dv1, dv2), axis=-1)
-    c = np.percentile(ar, 75)
+    pt = np.stack([xt,yt,zt], axis=-1) # Nx3x3
+    dv1 = np.linalg.norm(pt[:,0] - pt[:,1], axis=-1)
+    dv2 = np.linalg.norm(pt[:,1] - pt[:,2], axis=-1)
+    dv3 = np.linalg.norm(pt[:,2] - pt[:,0], axis=-1)
+    maxd = np.max([dv1,dv2,dv3], axis=0)
+    c = np.percentile(maxd, 90)
 
     # apply filtered try
     triangles = triangles[ar<=c]
