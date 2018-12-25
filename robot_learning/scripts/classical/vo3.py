@@ -300,6 +300,9 @@ class VGraph(object):
         p2 = self.p2[idx]
 
         return p0, pi, li, p2
+
+    def update(self, t, pos):
+        self.pose_[-t:] = pos
     
     def add_pos(self, v):
         self.pose_.append(v)
@@ -313,6 +316,37 @@ class VGraph(object):
     @property
     def p2(self):
         return self.p2_[:self.size_]
+
+class StateHistory(object):
+    """
+    Circular Buffer of State History.
+    Minor Thing : Will NOT reject invalid queries,
+    such as ones without sufficient initialization
+    or overflow.
+    """
+    def __init__(self, maxlen=32):
+        self.i_ = 0
+        self.n_ = maxlen
+        self.x_ = np.empty((maxlen, 6))
+        self.P_ = np.empty((maxlen, 6, 6))
+        self.dt_ = np.empty((maxlen,))
+
+    def query(self, t):
+        i = np.arange(self.i_-t, self.i_) % self.n_
+        return self.x_[i], self.P_[i], self.dt_[i]
+
+    def update(self, t, x, P, dt):
+        i = np.arange(self.i_-t, self.i_) % self.n_
+        self.x_[i] = x
+        self.P_[i] = P
+        self.dt_[i] = dt
+
+    def append(self, x, P, dt):
+        i = self.i_
+        self.x_[i] = x
+        self.P_[i] = P
+        self.dt_[i] = dt
+        self.i_ = (self.i_ + 1) % self.n_
 
 class ClassicalVO(object):
     # define flags
@@ -420,15 +454,12 @@ class ClassicalVO(object):
         self.pnp_h_ = None
 
         # UKF
-        #self.ukf_l_  = build_ukf()
-        #self.ukf_g_  = build_ukf()
-        self.ukf_l_  = build_ekf()
-        self.ukf_g_  = build_ekf()
-        self.ukf_dt_ = []
+        self.ukf_l_  = build_ekf() # local incremental UKF
+        self.ukf_h_  = build_ekf() # global historic UKF
+        self.s_hist_ = StateHistory(maxlen=32) # stores cache of prior.
 
-        # bundle adjustment
-        self.ba_freq_ = 4 # empirically pretty good
-        # loop closure?
+        # bundle adjustment + loop closure
+        self.ba_pyr_  = np.sort([16, 4])[::-1] # == largest first
         self.graph_ = VGraph()
 
     def track(self, img1, img2, pt1, pt2=None,
@@ -952,7 +983,7 @@ class ClassicalVO(object):
         J_res[:, l_i, :] += J[:, 3*n_obs:].reshape(2*n_obs,-1,3)
         return J_res.reshape(2*n_obs, -1)
 
-    def run_BA(self):
+    def run_BA(self, win):
         """
         Sources:
             https://scipy-cookbook.readthedocs.io/items/bundle_adjustment.html
@@ -970,7 +1001,7 @@ class ClassicalVO(object):
         #    return
 
         # create np arrays
-        p0, ci, li, p2 = self.graph_.query(self.ba_freq_)
+        p0, ci, li, p2 = self.graph_.query(win)
 
         # gather stats
         n_c = len(p0)
@@ -1002,13 +1033,12 @@ class ClassicalVO(object):
         pos_opt = res.x[:n_c*3].reshape(-1,3)
         lmk_opt = res.x[n_c*3:].reshape(-1,3)
 
-        #print('initial latest pose',  self.ba_pos_[-1])
-        #print('optimized latest pose', pos_opt[-1])
-
         # apply BA results
         # TODO : can we INPUT variance information to scipy.least_squares?
         # TODO : can we extract variance information out of least_squares?
+        self.graph_.update(win, pos_opt) # TODO : or result from UKF? may not matter.
         self.landmarks_.pos[li_u] = lmk_opt
+
         return pos_opt
 
     def run_ukf(self, dt, scale=None):
@@ -1018,7 +1048,6 @@ class ClassicalVO(object):
         self.ukf_l_.Q = Q
         self.ukf_l_.R = R
         self.ukf_l_.predict(dt)
-        self.ukf_dt_.append(dt)
         pose_c = self.ukf_l_.x[:3].copy()
         if scale is None:
             # initialize scale from UKF
@@ -1170,6 +1199,12 @@ class ClassicalVO(object):
         kpt_p, des_p, img_p = self.hist_[-2]
 
         # ukf
+        # store priors
+        self.s_hist_.append(
+                self.ukf_l_.x,
+                self.ukf_l_.P,
+                dt)
+
         pose_p, pose_c, scale = self.run_ukf(dt, scale)
 
         # frame-to-frame processing
@@ -1315,38 +1350,61 @@ class ClassicalVO(object):
                     )
             # recompute rectified pose_c_r
             pose_c_r = self.pRt2pose(pose_p, R, scale*t)
-
         self.ukf_l_.update(pose_c_r)
-        pose_c_r = self.ukf_l_.x[:3].copy() # TODO : chronologically correct?
 
+        # pose_c_r is ukf posterior;
+        # self.graph_ contains pose posterior.
+        pose_c_r = self.ukf_l_.x[:3].copy()
         self.graph_.add_pos(pose_c_r.copy())
 
         # NOTE!! this vvvv must be called after all cache_BA calls
         # have been completed.
         if self.flag_ & ClassicalVO.VO_USE_BA:
+            ba_win = None
+            run_ba = False
 
-            s_check = (self.graph_.size_ > 0)
-            f_check = (self.graph_.size_ % self.ba_freq_ == 0)
-            if s_check and f_check: # TODO: configure BA frame
-                # run BA every 16 frames
-                ba_res = self.run_BA()
+            for win in self.ba_pyr_:
+                # Survey list of BA frequencies (windows)
+                # And run the largest possible BA
+                # if multiple pyramids satisfy the condition.
+                s_check = (len(self.graph_.pose_) >= win)
+                f_check = (len(self.graph_.pose_) % win == 0)
+                if s_check and f_check: # TODO: configure BA frame
+                    ba_win = win
+                    run_ba = True
+                    break
+
+            if run_ba:
+                # run BA every [win] frames
+                print('Running BA @ scale={}'.format(ba_win))
+                ba_res = self.run_BA(ba_win)
                 if ba_res is not None:
-                    # update global ukf
-                    for (g_dt, g_z) in zip(
-                            self.ukf_dt_[-self.ba_freq_:],
-                            ba_res):
-                        ukf_Q, ukf_R = get_QR(self.ukf_g_.x[:3], dt)
-                        self.ukf_g_.Q = ukf_Q
-                        self.ukf_g_.R = ukf_R
-                        self.ukf_g_.predict(g_dt)
-                        self.ukf_g_.update(g_z)
+                    # "historic" UKF
+                    xs, Ps, dts = self.s_hist_.query(ba_win)
+                    self.ukf_h_.x = xs[0]
+                    self.ukf_h_.P = Ps[0]
 
-                    # copy to local ukf
-                    self.ukf_l_.x = self.ukf_g_.x.copy()
-                    self.ukf_l_.P = self.ukf_g_.P.copy()
+                    xs = []
+                    Ps = []
+                    for (h_dt, h_z) in zip(dts, ba_res):
+                        xs.append( self.ukf_h_.x.copy() )
+                        Ps.append( self.ukf_h_.P.copy() )
+                        # TODO : update ukf_R based on
+                        # BA having higher reliability than usual measurements
+                        ukf_Q, ukf_R = get_QR(self.ukf_h_.x[:3], dt)
+                        self.ukf_h_.Q = ukf_Q
+                        self.ukf_h_.R = ukf_R
+                        self.ukf_h_.predict(h_dt)
+                        self.ukf_h_.update(h_z)
 
-                    # clear history (currently, just time data)
-                    self.ukf_dt_ = []
+                    # overwrite state history
+                    # note that self.s_hist_ only stores priors. (prv)
+                    # self.graph_ stores posteriors. (current)
+                    self.s_hist_.update(ba_win, xs, Ps, dts)
+
+                    # copy to local ukf posterior
+                    self.ukf_l_.x = self.ukf_h_.x.copy()
+                    self.ukf_l_.P = self.ukf_h_.P.copy()
 
                     # result
                     pose_c_r = self.ukf_l_.x[:3].copy()
@@ -1355,6 +1413,7 @@ class ClassicalVO(object):
                 # in order to not mess up landmark indices.
                 keep_idx = self.landmarks_.prune()
                 self.graph_.prune(keep_idx)
+
 
         print('\t\t pose-f2f : {}'.format(pose_c_r))
         ## === FROM THIS POINT ALL VIZ === 
