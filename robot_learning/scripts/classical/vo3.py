@@ -583,7 +583,9 @@ class ClassicalVO(object):
             all of these estimates are un-intelligently
             combined to produce the final result.
             """
-            scale = lerp(scale, scale_est, alpha)
+            # TODO : is logarithmic interpolation really better?
+            scale = np.exp(lerp(np.log(scale), np.log(scale_est), alpha))
+            #scale = lerp(scale, scale_est, alpha)
         else:
             # implicit : scale = scale
             pass
@@ -1004,6 +1006,16 @@ class ClassicalVO(object):
                 pt_p[:,1] >= y_min])
 
             gp_idx = np.where(gp_msk)[0]
+            #print('Pitch-based Pre-filter : {}/{}'.format(
+            #    len(gp_idx), gp_msk.size))
+
+            if len(gp_idx) <= 3: # TODO : magic
+                # too few points, abort gp estimate
+                return scale
+
+            # update pt_c and pt_p
+            pt_c = pt_c[gp_idx]
+            pt_p = pt_p[gp_idx]
 
             # NOTE: debug; show gp plane points correspondences
             # gp_idx = np.random.choice(gp_idx, size=32)
@@ -1021,19 +1033,20 @@ class ClassicalVO(object):
             #     ax.invert_yaxis()
 
             # ground plane is a plane, so homography can (and should) be applied here
-            H, msk_h = cv2.findHomography(pt_c[gp_idx], pt_p[gp_idx],
+            H, msk_h = cv2.findHomography(pt_c, pt_p,
                     method=self.pEM_['method'],
                     ransacReprojThreshold=self.pEM_['threshold']
                     )
             idx_h = np.where(msk_h)[0]
+            print 'Ground Plane Homography : {}/{}'.format(len(idx_h), msk_h.size)
 
-            print 'Ground Plane Homography : {}/{}'.format(msk_h.sum(), msk_h.size)
+            # update pt_c and pt_p
+            pt_c = pt_c[idx_h]
+            pt_p = pt_p[idx_h]
 
-            #Hr, Ht, Hn = self.cvt_.H_to_Rtn(H)
-            #Hn = np.float32(Hn)
-            #gp_z = (Hn[...,0].dot(self.T_c2b_[:3,:3].T))
-            #print 'custom', gp_z
-            #print np.ravel(Ht)
+            # TODO : lots of information is discarded here,
+            # Such as R/T from homography and the reconstructed 3D Points.
+            # Only Scale is propagated.
 
             res_h, Hr, Ht, Hn = cv2.decomposeHomographyMat(H, self.K_)
             Hn = np.float32(Hn)
@@ -1044,21 +1057,26 @@ class ClassicalVO(object):
             # filter by estimated plane z-norm
             z_val = ( np.abs(np.dot(gp_z, [0,0,1])) > 0.9 )
             z_idx = np.where(z_val)[0]
+            if len(z_idx) <= 0:
+                # abort ground-plane estimation.
+                return scale
             # NOTE: honestly don't know why I need to pre-filter by z-norm at all
             perm = zip(Hr,Ht)
             perm = [perm[i] for i in z_idx]
             n_in, R, t, msk_r, gpt3, sel = recover_pose_from_RT(perm, self.K_,
-                    pt_c[idx_h], pt_p[idx_h], return_index=True, log=False)
+                    pt_c, pt_p, return_index=True, log=False)
             gpt3 = gpt3.T
 
             # convert w.r.t base_link
             gpt3_base = gpt3.dot(self.cvt_.T_c2b_[:3,:3].T)
-            h_gp = robust_mean(-gpt3_base[:,2])
+            h_gp = robust_mean(np.abs(-gpt3_base[:,2])) # TODO : valid?
             scale_gp = (camera_height / h_gp)
             print 'gp-ransac scale', scale_gp
             scale = scale_gp
         else:
             # opt2 : directly estimate ground plane by simple height filter
+            # only works with "reasonable" initial scale guess.
+            # all it does is refine a good scale estimate to a potentially "better" one.
 
             # only apply rotation: pt3_base still w.r.t camera offset @ base orientation
             pt3_base = pt3.dot(self.cvt_.T_c2b_[:3,:3].T)
