@@ -25,7 +25,7 @@ from utils.kitti_utils import KittiLoader
 from misc import Rmat
 
 class CVORunner(object):
-    def __init__(self, imgs, stamps, odom, scan=None):
+    def __init__(self, imgs, stamps, odom, scan=None, cinfo=None):
         self.index_ = 0
         self.n_ = len(imgs)
         self.imgs_ = imgs
@@ -43,7 +43,7 @@ class CVORunner(object):
         self.ax4_ = plt.subplot2grid((3,3), (2,1), colspan=2)
 
         self.map_ = np.empty((0, 2), dtype=np.float32)
-        self.vo_ = ClassicalVO()
+        self.vo_ = ClassicalVO(cinfo)
 
         self.vo_(imgs[0], 0.0) # initialize GUI
 
@@ -231,7 +231,7 @@ class CVORunner(object):
 def main():
     np.set_printoptions(precision=4)
     #idx = np.random.choice(8)
-    idx = 27
+    idx = 34
     print('idx', idx)
 
     # load data
@@ -242,6 +242,13 @@ def main():
     #imgs = np.asarray([cv2.resize(e, None, fx=2, fy=2) for e in imgs])
     stamps = np.load('../../data/train/{}/stamp.npy'.format(idx))[i0::di]
     odom   = np.load('../../data/train/{}/odom.npy'.format(idx))[i0::di]
+
+    try:
+        cinfo  = np.load('../../data/train/{}/cinfo.npy'.format(idx)).item()
+    except Exception as e:
+        print('camera info does not exist')
+        cinfo = None
+
     try:
         scan   = np.load('../../data/train/{}/scan.npy'.format(idx))
     except Exception as e:
@@ -255,7 +262,7 @@ def main():
 
     stamps -= stamps[0] # t0 = 0
 
-    app = CVORunner(imgs, stamps, odom, scan)
+    app = CVORunner(imgs, stamps, odom, scan, cinfo)
     app.run(auto=True)
 
 if __name__ == "__main__":

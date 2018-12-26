@@ -10,7 +10,7 @@ import cv2
 from cv_bridge import CvBridge, CvBridgeError
 from nav_msgs.msg import Odometry
 from std_msgs.msg import ColorRGBA, Header
-from sensor_msgs.msg import LaserScan, Image
+from sensor_msgs.msg import LaserScan, Image, CameraInfo
 from geometry_msgs.msg import Pose, PoseStamped, PoseArray, Vector3
 from visualization_msgs.msg import Marker, MarkerArray
 import message_filters
@@ -89,8 +89,13 @@ class DataCollector(object):
         self.odom_sub_ = None
         self.img_sub_  = None
         self.sync_sub_ = None # for synchronized version
+        self.info_sub_ = None
         self.tfl_ = None
         self.br_  = CvBridge()
+
+        # Get Intrinsic/Extrinsic Parameters
+        self.cinfo_ = {'K':None, 'D':None, 'T':None}
+        self.info_sub_ = None
 
         if start:
             self.start()
@@ -106,6 +111,35 @@ class DataCollector(object):
     def odom_cb(self, msg):
         """ store odom msg """
         self.odom_ = msg
+
+    def info_cb(self, msg):
+        cfr = msg.header.frame_id
+
+        # intrinsic
+        if self.cinfo_['K'] is None:
+            self.cinfo_['K'] = np.reshape(msg.K, (3,3))
+        if self.cinfo_['D'] is None:
+            self.cinfo_['D'] = np.ravel(msg.D)
+
+        # extrinsic
+        if self.cinfo_['T'] is None:
+            try:
+                txn, rxn = self.tfl_.lookupTransform(
+                        'base_footprint',
+                        'camera_optical', # TODO : use cfr?
+                        rospy.Time(0))
+                self.cinfo_['T'] = tf.transformations.compose_matrix(
+                        translate = txn,
+                        angles = tf.transformations.euler_from_quaternion(rxn)
+                        )
+            except Exception as e:
+                rospy.loginfo_throttle(1.0,
+                        'Getting Extrinsic Param Failed; will keep trying... : {}'.format(e)
+                        )
+        if np.all([(e is not None) for e in self.cinfo_.values()]):
+            rospy.loginfo_throttle(1.0,
+                    'Finished Obtaining Camera Information')
+            self.info_sub_.unregister()
 
     def data_cb(self, *args):
         """ store synced scan/odom msg """
@@ -142,6 +176,7 @@ class DataCollector(object):
             self.scan_sub_ = rospy.Subscriber('scan', LaserScan, self.scan_cb)
             if not self.use_tf_:
                 self.odom_sub_ = rospy.Subscriber('odom', Odometry, self.odom_cb)
+        self.info_sub_ = rospy.Subscriber('/camera/camera_info', CameraInfo, self.info_cb)
         self.tfl_ = tf.TransformListener()
 
     def convert_translation_rotation_to_pose(self, p, q):
@@ -282,6 +317,8 @@ class DataCollector(object):
         np.save(os.path.join(path,'odom.npy'), odom)
         if self.collect_scan_:
             np.save(os.path.join(path,'scan.npy'), scan)
+        np.save(os.path.join(path,'cinfo.npy'),
+                self.cinfo_)
 
 def main():
     rospy.init_node('data_collector')

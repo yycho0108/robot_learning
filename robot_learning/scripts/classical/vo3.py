@@ -366,36 +366,35 @@ class ClassicalVO(object):
             VO_USE_LM_KF | VO_USE_KPT_SPX | VO_USE_MXCHECK | \
             VO_USE_GP_RSC
 
-    def __init__(self):
+    def __init__(self, cinfo=None):
         # define configuration
         self.flag_ = ClassicalVO.VO_DEFAULT
         self.flag_ &= ~ClassicalVO.VO_USE_HOMO # TODO : doesn't really work?
-        self.flag_ &= ~ClassicalVO.VO_USE_BA
+        # self.flag_ &= ~ClassicalVO.VO_USE_BA
         # self.flag_ &= ~ClassicalVO.VO_USE_FM_COR # performance
-
-        # define constant parameters
-        Ks = (1.0 / 1.0)
-        self.K_ = np.reshape([
-            499.114583 * Ks, 0.000000, 325.589216 * Ks,
-            0.000000, 498.996093 * Ks, 238.001597 * Ks,
-            0.000000, 0.000000, 1.000000], (3,3))
-        self.D_ = np.float32([0.158661, -0.249478, -0.000564, 0.000157, 0.000000])
-
-        # conversion from camera frame to base_link frame
-        # NOTE : extrinsic parameter anchor
-
-        self.T_c2b_ = tx.compose_matrix(
-                angles=[-np.pi/2-np.deg2rad(10),0.0,-np.pi/2],
-                #angles=[-np.pi/2,0.0,-np.pi/2],
-                translate=[0.174,0,0.113])
-        #self.T_c2b_ = tx.compose_matrix(
-        #        angles=[-np.deg2rad(100),0.0,0.0],
-        #        #angles=[-np.pi/2,0.0,-np.pi/2],
-        #        translate=[0.174,0.250,0.113])
 
         # Note that camera intrinsic+extrinsic parameters
         # i.e. K, D, T_c2b
         # are coupled with the data, rather than the algorithm.
+        if cinfo is not None:
+            self.K_ = cinfo['K']
+            self.D_ = cinfo['D']
+            self.T_c2b_ = cinfo['T']
+        else:
+            # define default constant parameters
+            Ks = (1.0 / 1.0)
+            self.K_ = np.reshape([
+                499.114583 * Ks, 0.000000, 325.589216 * Ks,
+                0.000000, 498.996093 * Ks, 238.001597 * Ks,
+                0.000000, 0.000000, 1.000000], (3,3))
+            self.D_ = np.float32([0.158661, -0.249478, -0.000564, 0.000157, 0.000000])
+            # NOTE: the following transform describes a frontal-looking camera,
+            # pitched 10 degrees downwards, offset +x=0.174m amd +z=0.113m from the base.
+            self.T_c2b_ = tx.compose_matrix(
+                    angles=[-np.pi/2-np.deg2rad(10),0.0,-np.pi/2],
+                    #angles=[-np.pi/2,0.0,-np.pi/2],
+                    translate=[0.174,0,0.113])
+
 
         # define "system" parameters
         self.pEM_ = dict(method=cv2.FM_RANSAC, prob=0.999, threshold=1.0)

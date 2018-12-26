@@ -427,6 +427,7 @@ class Landmarks(object):
         # neighborhood count TODO : or np.sum() < 2?
         msk_v = np.all(v[i]>v[:,None], axis=1)
 
+        # protect recent observations.
         # opt 1: keep latest N landmarks
         #msk_t = np.arange(self.size_) > (self.size_ - keep_last)
         # opt 2: keep all landmarks since last prune
