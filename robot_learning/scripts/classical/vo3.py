@@ -496,9 +496,9 @@ class ClassicalVO(object):
 
         # define "system" parameters
         self.pEM_ = dict(method=cv2.FM_RANSAC, prob=0.999, threshold=1.0)
-        self.pLK_ = dict(winSize = (51,13),
-                maxLevel = 16,
-                criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03),
+        self.pLK_ = dict(winSize = (32,16),
+                maxLevel = 4,
+                criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 100, 0.003),
                 flags = 0,
                 minEigThreshold = 1e-3 # TODO : disable eig?
                 )
@@ -1451,7 +1451,19 @@ class ClassicalVO(object):
         # <<-- initial guess, provided defaults in case of abort
         scale_c, R_c2, t_c2 = self.run_gp(pt2_u_c[idx_e], pt2_u_p[idx_e], pt3,
                 scale_c, R_c, t_c / scale_c) # note returned t_c is uvec
-        R_c, t_c = R_c2, t_c2
+
+        # un-intelligently resolve two measurements ...
+        # TODO : figure out confidence scaling or variance.
+        # TODO : CAN BE extremely wrong if triangulated results are negatives of each other.
+        #R_c, t_c = R_c2, t_c2
+        if np.dot(t_c2.ravel(), t_c.ravel()) < 0:
+            # facing opposite directions
+            # most often happens in pure-rotation scenarios
+            print 'WARNING : GP and EM Systems Disagree.'
+        r_c  = np.ravel(tx.euler_from_matrix(R_c))
+        r_c2 = np.ravel(tx.euler_from_matrix(R_c2))
+        R_c = tx.euler_matrix(*lerp(r_c, r_c2, 0.5))[:3,:3]
+        t_c = lerp(t_c, t_c2, 0.5)
 
         t_c *= scale_c
         R_b, t_b = self.dT_cam_to_base(R_c, t_c)

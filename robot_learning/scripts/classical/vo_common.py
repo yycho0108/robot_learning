@@ -406,7 +406,7 @@ class Landmarks(object):
 
     def query(self, src, cvt,
             atol = np.deg2rad(30.0),
-            dtol = 2.0
+            dtol = 1.2
             ):
         # unroll map query source (base frame)
         src_x, src_y, src_h = np.ravel(src)
@@ -468,7 +468,7 @@ class Landmarks(object):
         self.var[idx] = P_k
         self.cnt[idx] += 1
 
-    def prune(self, k=3, radius=0.05, keep_last=512):
+    def prune(self, k=5, radius=0.05, keep_last=512):
         """
         Non-max suppression based pruning.
         set k=1 to disable  nmx. --> TODO: verify this
@@ -502,7 +502,9 @@ class Landmarks(object):
         # if (new_landmark) keep;
         # else if (passed_non_max) keep;
         # else if (strong_descriptor) keep;
-        msk = msk_t | (msk_d & msk_v | ~msk_d) | (msk_r)
+        #msk = msk_t | (msk_d & msk_v | ~msk_d) | (msk_r & ~msk_d)
+        #msk = msk_t | ~msk_d | msk_v
+        msk = msk_t | (msk_d & msk_v) | (~msk_d & msk_r)
 
         sz = msk.sum()
         print('Landmarks Pruning : {}->{}'.format(msk.size, sz))
