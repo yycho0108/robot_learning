@@ -349,9 +349,15 @@ class Landmarks(object):
 
     def append_from(self, cvt,
             src, pos_c,
-            des, ang, col, kpt):
+            des, col, kpt):
         # compute expected variance from depth
+        # lmk pos w.r.t base
         pos = cvt.cam_to_map(pos_c, src)
+
+        # compute view angle
+        dpos = pos - np.float32([src[0], src[1], 0]).reshape(1,3)
+        ang  = np.arctan2(dpos[:,1], dpos[:,0])[:,None]
+
         var = self.lm_var(cvt, src, pos_c)
         dis = np.linalg.norm(pos_c, axis=-1)
         self.append(pos, var, des, ang, col, kpt,

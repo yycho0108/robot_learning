@@ -231,11 +231,11 @@ class CVORunner(object):
 def main():
     np.set_printoptions(precision=4)
     #idx = np.random.choice(8)
-    idx = 34
+    idx = 41
     print('idx', idx)
 
     # load data
-    i0 = 0
+    i0 = 50
     di = 1
 
     imgs   = np.load('../../data/train/{}/img.npy'.format(idx))[i0::di]

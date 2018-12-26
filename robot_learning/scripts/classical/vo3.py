@@ -16,6 +16,7 @@ import numpy as np
 from vo_common import recover_pose, drawMatches, recover_pose_from_RT
 from vo_common import robust_mean, oriented_cov, show_landmark_2d
 from vo_common import Landmarks, Conversions
+from vo_common import print_Rt
 from matplotlib import pyplot as plt
 from sklearn.neighbors import NearestNeighbors
 from matplotlib.patches import Ellipse
@@ -394,7 +395,6 @@ class ClassicalVO(object):
                     angles=[-np.pi/2-np.deg2rad(10),0.0,-np.pi/2],
                     #angles=[-np.pi/2,0.0,-np.pi/2],
                     translate=[0.174,0,0.113])
-
 
         # define "system" parameters
         self.pEM_ = dict(method=cv2.FM_RANSAC, prob=0.999, threshold=1.0)
@@ -845,7 +845,7 @@ class ClassicalVO(object):
 
             des_new = des_p_m[lm_new_idx][idx_n]
             kpt_new = kpt_p_m[lm_new_idx][idx_n]
-            ang_new = np.full((n_new,1), pose[-1], dtype=np.float32)
+            #ang_new = np.full((n_new,1), pose[-1], dtype=np.float32)
             col_new = get_points_color(img_c, pt2_c[idx_t][idx_e][idx_r][lm_new_idx][idx_n], w=1)
 
             # append new landmarks ...
@@ -857,7 +857,7 @@ class ClassicalVO(object):
             self.landmarks_.append_from(
                     self.cvt_, # requires Conversions handle
                     pose, pt3_new_c,
-                    des_new, ang_new, col_new, kpt_new)
+                    des_new, col_new, kpt_new)
             li_1 = self.landmarks_.size_
 
             # NOTE : using undistorted version of pt2.
@@ -1087,6 +1087,7 @@ class ClassicalVO(object):
             # to compute a reasonable estimate.
 
             # find y_min such that
+            # NOTE: assumes camera roll w.r.t ground plane = 0
             # z.T.(R_c2b.dot(K^{-1}.dot([[0,ymin,1]].T)) + t_c2b) == 0
             # more generalized version of y_min, yay!
             # probably super inefficient but doesn't really matter.
@@ -1104,8 +1105,6 @@ class ClassicalVO(object):
                 pt_p[:,1] >= y_min])
 
             gp_idx = np.where(gp_msk)[0]
-            #print('Pitch-based Pre-filter : {}/{}'.format(
-            #    len(gp_idx), gp_msk.size))
 
             if len(gp_idx) <= 3: # TODO : magic
                 # too few points, abort gp estimate
@@ -1116,17 +1115,29 @@ class ClassicalVO(object):
             pt_p = pt_p[gp_idx]
 
             # NOTE: debug; show gp plane points correspondences
-            # gp_idx = np.random.choice(gp_idx, size=32)
+            # vsel = np.random.choice(len(gp_idx), size=32)
             # try:
             #     fig = self.gfig_
             #     ax  = fig.gca()
             # except Exception:
             #     self.gfig_ = plt.figure()
             #     ax = self.gfig_.gca()
-            # col = np.random.uniform(0.0, 1.0, size=(len(gp_idx), 3)).astype(np.float32)
+            # col = np.random.uniform(0.0, 1.0, size=(len(vsel), 3)).astype(np.float32)
             # ax.cla()
-            # ax.scatter(pt_c[gp_idx,0], pt_c[gp_idx,1], color=col)
-            # ax.scatter(pt_p[gp_idx,0], pt_p[gp_idx,1], color=col)
+            # ax.scatter(pt_c[vsel,0], pt_c[vsel,1], color=col)
+            # ax.scatter(pt_p[vsel,0], pt_p[vsel,1], color=col)
+            # ax.quiver(
+            #         pt_p[vsel, 0], pt_p[vsel, 1],
+            #         pt_c[vsel, 0] - pt_p[vsel,0],
+            #         pt_c[vsel, 1] - pt_p[vsel,1],
+            #         angles='xy',
+            #         scale=1,
+            #         scale_units='xy',
+            #         color='g',
+            #         alpha=0.5
+            #         )
+            # ax.set_xlim(0, 640)
+            # ax.set_ylim(0, 480)
             # if not ax.yaxis_inverted():
             #     ax.invert_yaxis()
 
@@ -1165,7 +1176,7 @@ class ClassicalVO(object):
             perm = [perm[i] for i in z_idx]
             n_in, R, t, msk_r, gpt3, sel = recover_pose_from_RT(perm, self.K_,
                     pt_c, pt_p, return_index=True, log=False)
-            gpt3 = gpt3.T
+            gpt3 = gpt3.T # TODO : gpt3 not used
 
             # convert w.r.t base_link
             gpt3_base = gpt3.dot(self.cvt_.T_c2b_[:3,:3].T)
@@ -1378,8 +1389,10 @@ class ClassicalVO(object):
 
         # Estimate #2 : Based on Ground-Plane Estimation
         # <<-- initial guess, provided defaults in case of abort
-        scale_c, R_c, t_c = self.run_gp(pt2_u_c[idx_e], pt2_u_p[idx_e], pt3,
+        scale_c, R_c2, t_c2 = self.run_gp(pt2_u_c[idx_e], pt2_u_p[idx_e], pt3,
                 scale_c, R_c, t_c / scale_c) # note returned t_c is uvec
+        R_c, t_c = R_c2, t_c2
+
         t_c *= scale_c
         R_b, t_b = self.dT_cam_to_base(R_c, t_c)
         scale_b = np.linalg.norm(t_b)
