@@ -384,14 +384,14 @@ class ClassicalVO(object):
         # conversion from camera frame to base_link frame
         # NOTE : extrinsic parameter anchor
 
-        #self.T_c2b_ = tx.compose_matrix(
-        #        angles=[-np.pi/2-np.deg2rad(10),0.0,-np.pi/2],
-        #        #angles=[-np.pi/2,0.0,-np.pi/2],
-        #        translate=[0.174,0,0.113])
         self.T_c2b_ = tx.compose_matrix(
-                angles=[-np.deg2rad(100),0.0,0.0],
+                angles=[-np.pi/2-np.deg2rad(10),0.0,-np.pi/2],
                 #angles=[-np.pi/2,0.0,-np.pi/2],
-                translate=[0.174,0.250,0.113])
+                translate=[0.174,0,0.113])
+        #self.T_c2b_ = tx.compose_matrix(
+        #        angles=[-np.deg2rad(100),0.0,0.0],
+        #        #angles=[-np.pi/2,0.0,-np.pi/2],
+        #        translate=[0.174,0.250,0.113])
 
         # Note that camera intrinsic+extrinsic parameters
         # i.e. K, D, T_c2b
@@ -1087,15 +1087,18 @@ class ClassicalVO(object):
             # unfortunately, there's far too few points on the ground plane
             # to compute a reasonable estimate.
 
-            # camera pitch filter (NOTE: not 100% robust, but works in 2D)
-            # TODO : make below function work better under most configurations
-            # i.e. camera facing forwards vs. sideways
-            y_min = np.linalg.multi_dot([
-                self.K_,
-                self.cvt_.T_b2c_[:3],
-                np.reshape([0,1,0,1], (4,1))])[1]
-
-            # y_min += 32 # TODO: add buffer zone?
+            # find y_min such that
+            # z.T.(R_c2b.dot(K^{-1}.dot([[0,ymin,1]].T)) + t_c2b) == 0
+            # more generalized version of y_min, yay!
+            # probably super inefficient but doesn't really matter.
+            z = np.reshape([0,0,1], (3,1))
+            A_part = np.linalg.multi_dot([
+                z.T,
+                self.cvt_.T_c2b_[:3,:3],
+                self.cvt_.Ki_
+                ])
+            b_part = -z.T.dot(self.cvt_.T_c2b_[:3,3:])
+            y_min = (b_part[0,0] - A_part[0,2]) / A_part[0,1]
 
             gp_msk = np.logical_and.reduce([
                 pt_c[:,1] >= y_min,

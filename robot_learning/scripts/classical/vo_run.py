@@ -231,7 +231,7 @@ class CVORunner(object):
 def main():
     np.set_printoptions(precision=4)
     #idx = np.random.choice(8)
-    idx = 34
+    idx = 27
     print('idx', idx)
 
     # load data
