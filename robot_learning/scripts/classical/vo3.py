@@ -28,8 +28,6 @@ from scipy.optimize import least_squares
 from ukf import build_ukf, build_ekf, get_QR
 from ba import ba_J
 
-tfig = None
-
 def print_ratio(msg, a, b):
     as_int = np.issubdtype(type(a), np.integer)
     if b == 0:
@@ -134,7 +132,7 @@ def estimate_plane_ransac(pts,
     return best_fit, best_err, best_msk
 
 
-def get_points_color(img, pts, w=1):
+def get_points_color(img, pts, w=0):
     # iterative method
 
     n, m = img.shape[:2]
@@ -233,6 +231,9 @@ class VGraph(object):
         self.capacity_ = cap0
         self.fields_ = ['pi_', 'li_', 'p2_']
 
+        # TODO : handle persistent coloring more intelligently ...
+        self.viz_cols_ = np.random.uniform(size=(16384,3))
+
     def resize(self, c_new):
         d = vars(self)
         c_old = self.size_
@@ -294,7 +295,7 @@ class VGraph(object):
         idx = np.where(msk)[0]
 
         p0 = np.asarray(self.pose_[-t:])
-        pi = self.pi[idx] - self.pi[idx[0]]
+        pi = self.pi[idx] - self.pi[idx[0]] # return offset index for p0
         li = self.li[idx]
         p2 = self.p2[idx]
 
@@ -305,6 +306,103 @@ class VGraph(object):
     
     def add_pos(self, v):
         self.pose_.append(v)
+
+    def draw(self, ax, cvt, lmk):
+        p0, pi, li, p2 = self.query(t=len(self.pi))
+
+        # convert to map coord
+        lmk_m = lmk.pos.dot(cvt.T_c2b_[:3,:3].T) + cvt.T_c2b_[:3,3:].T
+        lmk_m = lmk_m[:, :2] # extract x-y indices
+
+        # count cutoff
+        # filter by the number of li appearances in history
+        # most "well-observed" landmarks
+        li_u, li_i, cnt = np.unique(li, return_inverse=True, return_counts=True)
+
+        # filter by > 16 connections
+        # TODO : probably requires better filtering for better visualization
+        # idx = np.where( cnt >= np.percentile(cnt, 99.0) )[0]
+
+        #if len(idx) >= 32:
+        #    idx = np.random.choice(idx, 32)
+
+        #if len(idx) <= 0:
+        #    # fallback to best 32
+        #    idx = np.argsort(cnt)[-32:] # or other heuristics
+        idx = np.argsort(cnt)[-32:] # or other heuristics
+
+        _, c_idx = np.where(li_i[None,:] == idx[:,None])
+
+        # apply cutoff
+        p = p0[pi][c_idx]
+        l = lmk_m[li][c_idx]
+        pcol = lmk.col[li][c_idx]
+        col = self.viz_cols_[li][c_idx]
+
+        # validation : x-y reprojection check
+        #x = p2[c_idx]
+        #y = [cvt.pt3_pose_to_pt2_msk(lmk.pos[li][c_idx], p_)[0][i]
+        #        for (i,p_) in enumerate(p)]
+        #print 'x', np.int32(x).reshape(-1,2)
+        #print 'y', np.int32(y).reshape(-1,2)
+
+        # where they are 'supposed to be'
+        # Nx2, image coordinates
+        g = p2[c_idx]
+        # Nx3, camera coordinates
+        g = cvt.pt_to_pth(g).dot(cvt.Ki_.T)
+        # Nx3, Normalize + apply depth
+        g /= np.linalg.norm(g, axis=-1, keepdims=True)
+        d = np.linalg.norm(l[:,:2] - p[:,:2], axis=-1, keepdims=True)
+        g *= d
+        # Nx3, camera->base coordinates
+        g = g.dot(cvt.T_c2b_[:3,:3].T) + cvt.T_c2b_[:3,3:].T
+        # Construct Z-axis rotation matrix
+        h = p[:,2]
+        c, s = np.cos(h), np.sin(h)
+        Rz = np.zeros((len(c),3,3), dtype=np.float32)
+        Rz[:,0,0] = c
+        Rz[:,0,1] = -s
+        Rz[:,1,0] = s
+        Rz[:,1,1] = c # Nx3x3
+        Rz[:,2,2] = 1
+        # Nx3, base -> map coordinates
+        g = np.matmul(Rz, g[...,None])[...,0]
+
+
+        ax.quiver(
+                p[:,0], p[:,1],
+                l[:,0]-p[:,0], l[:,1]-p[:,1],
+                angles='xy',
+                scale=1.0,
+                scale_units='xy',
+                color=col,
+                width=0.005,
+                alpha=0.25
+                )
+        ax.quiver(
+                p[:,0], p[:,1],
+                g[:,0], g[:,1],
+                angles='xy',
+                scale=1.0,
+                scale_units='xy',
+                color=col,
+                linestyle=':',
+                dashes=(0,(10, 20)),
+                width=0.0025,
+                alpha=0.5,
+                edgecolor=col,
+                facecolor='none',
+                linewidth=1
+                )
+        ax.plot(p[:,0], p[:,1], 'ro', fillstyle='none')
+        #ax.plot(l[:,0], l[:,1], 'bo', fillstyle='none')
+        ax.scatter(l[:,0], l[:,1],
+                color=pcol[...,::-1] / 255.0,
+                marker='^'
+                )
+
+        ax.set_aspect('equal', 'datalim')
 
     @property
     def pi(self):
@@ -526,60 +624,22 @@ class ClassicalVO(object):
             kpt_p,
             msg
             ):
+        # frame-to-map processing
+        # (i.e. uses landmark data)
 
         # build index combinationss
         # TODO : tracking these indices are really getting quite ridiculous.
         idx_te = idx_t[idx_e]
         idx_ter = idx_te[idx_r]
         idx_er = idx_e[idx_r]
-        pt2_lm_c = None # ???
 
         # extract data
         kpt_p_m = kpt_p[idx_ter]
         des_p_m = des_p[idx_ter]
 
-        # frame-to-map processing
-        # (i.e. uses landmark data)
-
-        if len(self.landmarks_.pos) > 0:
-            # enter landmark processing
-
-            # filter : by view angle
-            a_dif = np.abs((self.landmarks_.ang[:,0] - pose[-1] + np.pi)
-                    % (2*np.pi) - np.pi)
-            # TODO : kind-of magic number
-            a_msk = np.less(a_dif, np.deg2rad(30.0))
-
-            # filter : by min/max ORB distance
-            pose_tmp = self.cvt_.T_b2c_.dot([pose[0], pose[1], 0, 1]).ravel()[:3]
-            delta    = np.linalg.norm(self.landmarks_.pos - pose_tmp[None,:], axis=-1)
-            d_msk    = np.logical_and.reduce([
-                self.landmarks_.mind[:,0] <= delta,
-                delta <= self.landmarks_.maxd[:,0]
-                ])
-
-            # filter : by visibility
-            pt2_lm_c, lm_msk = self.cvt_.pt3_pose_to_pt2_msk(
-                    self.landmarks_.pos, pose)
-            lm_msk = np.logical_and.reduce([
-                lm_msk,
-                a_msk,
-                d_msk
-                ])
-            lm_idx = np.where(lm_msk)[0]
-            pt2_lm_c = pt2_lm_c[lm_idx]
-        else:
-            # ==> empty
-            lm_msk = np.ones((0), dtype=np.bool)
-            lm_idx = np.where(lm_msk)[0]
-
-        # extract data from visible parts of the map
-        # NOTE : these data are referenced views, not copied
-        # modifying the below data in-place WILL alter the original value.
-        pos_lm = self.landmarks_.pos[lm_idx]
-        des_lm = self.landmarks_.des[lm_idx]
-        var_lm = self.landmarks_.var[lm_idx]
-        cnt_lm = self.landmarks_.cnt[lm_idx]
+        # query visible points from landmarks database
+        qres = self.landmarks_.query(pose, self.cvt_, atol=np.deg2rad(30.0) )
+        pt2_lm, pos_lm, des_lm, var_lm, cnt_lm, lm_idx = qres
 
         print_ratio('visible landmarks', len(lm_idx), self.landmarks_.size_)
 
@@ -592,9 +652,9 @@ class ClassicalVO(object):
         if len(lm_idx) > 16: # TODO : MAGIC
             # filter correspondences by Emat consensus
             # first-order estimate: image-coordinate distance-based filter
-            cor_delta = (pt2_lm_c[i1] - pt2_u_c[idx_er][i2])
+            cor_delta = (pt2_lm[i1] - pt2_u_c[idx_er][i2])
             cor_delta = np.linalg.norm(cor_delta, axis=-1)
-            lm_msk_d = (cor_delta < 64.0)  # TODO : MAGIC
+            lm_msk_d = (cor_delta < 128.0)  # TODO : MAGIC
             lm_idx_d = np.where(lm_msk_d)[0]
 
             # second estimate
@@ -603,7 +663,7 @@ class ClassicalVO(object):
                 # check landmark consensus?
                 # TODO : take advantage of the Emat here to some use?
                 _, lm_msk_e = cv2.findEssentialMat(
-                        pt2_lm_c[i1][lm_idx_d],
+                        pt2_lm[i1][lm_idx_d],
                         pt2_u_c[idx_er][i2][lm_idx_d],
                         self.K_,
                         **self.pEM_)
@@ -729,7 +789,7 @@ class ClassicalVO(object):
             # Add correspondences to BA Cache
             # wow, that's a lot of chained indices.
             self.graph_.append(u_idx,
-                    pt2_u_c[idx_er][i2][lm_idx_e]
+                    pt2_u_c[idx_er[i2[lm_idx_e]]]
                     )
 
         if self.flag_ & ClassicalVO.VO_USE_PNP: # == if USE_PNP
@@ -823,29 +883,30 @@ class ClassicalVO(object):
 
             n_new = len(lm_new_idx)
             msk_n = np.ones(n_new, dtype=np.bool)
-
             if len(d_lm_old) > 0:
                 # filter insertion by proximity to existing landmarks
                 if len(lm_new_idx) > 0:
                     neigh = NearestNeighbors(n_neighbors=1)
-                    neigh.fit(pt2_lm_c)
+                    neigh.fit(pt2_lm)
                     d, _ = neigh.kneighbors(pt2_u_c[idx_e][idx_r][lm_new_idx], return_distance=True)
                     msk_knn = (d < 16.0)[:,0] # TODO : magic number
 
                     # dist to nearest landmark, less than 20px
                     msk_n[msk_knn] = False
-                    n_new = msk_n.sum()
-
             idx_n = np.where(msk_n)[0]
+
+            # filter by map point distance
+            lm_d   = np.linalg.norm(pt3[lm_new_idx][idx_n], axis=-1)
+            msk_d  = (lm_d < (20.0 / scale) ) # NOTE : heuristic to suppress super-far points
+            idx_n = idx_n[np.where(msk_d)[0]]
+            n_new = idx_n.size
 
             print('adding {} landmarks : {}->{}'.format(n_new,
                 len(self.landmarks_.pos), len(self.landmarks_.pos)+n_new
                 ))
             pt3_new_c = scale * pt3[lm_new_idx][idx_n]
-
             des_new = des_p_m[lm_new_idx][idx_n]
             kpt_new = kpt_p_m[lm_new_idx][idx_n]
-            #ang_new = np.full((n_new,1), pose[-1], dtype=np.float32)
             col_new = get_points_color(img_c, pt2_c[idx_t][idx_e][idx_r][lm_new_idx][idx_n], w=1)
 
             # append new landmarks ...
@@ -1288,7 +1349,6 @@ class ClassicalVO(object):
         pt2_u_p = self.cvt_.pt2_to_pt2u(pt2_p[idx_t])
         pt2_u_c = self.cvt_.pt2_to_pt2u(pt2_c[idx_t])
 
-        # NOTE : experimental
         if self.flag_ & ClassicalVO.VO_USE_FM_COR:
             # correct Matches by RANSAC consensus
             # NOTE : cannot apply undistort() after correction
@@ -1446,6 +1506,7 @@ class ClassicalVO(object):
 
             if run_ba:
                 # run BA every [win] frames
+
                 print('Running BA @ scale={}'.format(ba_win))
                 ba_res = self.run_BA(ba_win)
                 if ba_res is not None:
@@ -1477,11 +1538,24 @@ class ClassicalVO(object):
                     # result
                     pose_c_r = self.ukf_l_.x[:3].copy()
 
-                # TODO : currently pruning happens with BA
-                # in order to not mess up landmark indices.
+                ## TODO : currently pruning happens with BA
+                ## in order to not mess up landmark indices.
+
+                # draw pruned graph?
+                try:
+                    #ax = self.gfig.gca()
+                    ax = self.gfig.get_axes()
+                except Exception:
+                    self.gfig, ax = plt.subplots(1,2)
+                [e.cla() for e in ax]
+                self.graph_.draw(ax[0], self.cvt_, self.landmarks_) # pre-prune
+
                 keep_idx = self.landmarks_.prune()
                 self.graph_.prune(keep_idx)
+                self.graph_.draw(ax[1], self.cvt_, self.landmarks_) # post-prune
 
+                self.gfig.canvas.draw()
+                #plt.pause(0.001)
 
         print('\t\t pose-f2f : {}'.format(pose_c_r))
         ## === FROM THIS POINT ALL VIZ === 
@@ -1522,7 +1596,7 @@ class ClassicalVO(object):
         rec_msk = np.logical_and.reduce([
             front_msk,
             0 <= pt2_c_rec[:,0],
-            pt2_c_rec[:,0] < 640,
+            pt2_c_rec[:,0] < 640, #TODO: hardcoded
             0 <= pt2_c_rec[:,1],
             pt2_c_rec[:,1] < 480
             ])

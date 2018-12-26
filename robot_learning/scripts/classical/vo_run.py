@@ -196,7 +196,7 @@ class CVORunner(object):
             scan_c = None
 
         ### EVERYTHING FROM HERE IS PLOTTING + VIZ ###
-        if (i % 1) == 0:
+        if (i % 16) == 0:
             P = self.vo_.ukf_l_.P
             self.show(aimg, pts3, pts2, scan_c, pts_r, P, col_p, ('[%d/%d] '%(i,n)) + msg)
 
@@ -231,11 +231,12 @@ class CVORunner(object):
 def main():
     np.set_printoptions(precision=4)
     #idx = np.random.choice(8)
-    idx = 41
+    # 27, 34, 41 are currently used
+    idx = 27
     print('idx', idx)
 
     # load data
-    i0 = 50
+    i0 = 0
     di = 1
 
     imgs   = np.load('../../data/train/{}/img.npy'.format(idx))[i0::di]

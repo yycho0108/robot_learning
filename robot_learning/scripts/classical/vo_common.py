@@ -350,13 +350,15 @@ class Landmarks(object):
     def append_from(self, cvt,
             src, pos_c,
             des, col, kpt):
+        # unroll source
+        src_x, src_y, src_h = np.ravel(src)
         # compute expected variance from depth
         # lmk pos w.r.t base
         pos = cvt.cam_to_map(pos_c, src)
 
-        # compute view angle
-        dpos = pos - np.float32([src[0], src[1], 0]).reshape(1,3)
-        ang  = np.arctan2(dpos[:,1], dpos[:,0])[:,None]
+        # original pose-based view angle may be sufficient
+        # NOTE : if unreliable, consider rigorous validation
+        ang    = np.full((len(pos),1), src_h, dtype=np.float32)
 
         var = self.lm_var(cvt, src, pos_c)
         dis = np.linalg.norm(pos_c, axis=-1)
@@ -392,8 +394,8 @@ class Landmarks(object):
                 mnd = mxd / self.s_pyr_[-1]
                 # NOTE : applying a small margin around mind/maxd
                 # accounting for error in initial dist estimate.
-                self.maxd_[i] = mxd[:,None] * self.s_fac_
-                self.mind_[i] = mnd[:,None] / self.s_fac_
+                self.maxd_[i] = mxd[:,None]# * self.s_fac_
+                self.mind_[i] = mnd[:,None]# / self.s_fac_
             else:
                 # do not apply visibility
                 self.maxd_[i] = np.inf
@@ -401,6 +403,51 @@ class Landmarks(object):
 
             # update size
             self.size_ += n
+
+    def query(self, src, cvt,
+            atol = np.deg2rad(30.0),
+            dtol = 2.0
+            ):
+        # unroll map query source (base frame)
+        src_x, src_y, src_h = np.ravel(src)
+
+        # filter : by view angle
+        a_dif = np.abs((self.ang[:,0] - src_h + np.pi)
+                % (2*np.pi) - np.pi)
+        a_msk = np.less(a_dif, atol) # TODO : kind-of magic number
+
+        # filter : by min/max ORB distance
+        ptmp  = cvt.T_b2c_.dot([src_x, src_y, 0, 1]).ravel()[:3]
+        dist = np.linalg.norm(self.pos - ptmp[None,:], axis=-1)
+        d_msk = np.logical_and.reduce([
+            self.mind[:,0] / dtol <= dist,
+            dist <= self.maxd[:,0] * dtol
+            ])
+
+        # filter : by visibility
+        if self.pos.size <= 0:
+            # no data : soft fail
+            pt2   = np.empty((0,2), dtype=np.float32)
+            v_msk = np.empty((0,),  dtype=np.bool)
+        else:
+            pt2, v_msk = cvt.pt3_pose_to_pt2_msk(
+                    self.pos, src)
+
+        # merge filters
+        msk = np.logical_and.reduce([
+            v_msk,
+            a_msk,
+            d_msk
+            ])
+        idx = np.where(msk)[0]
+
+        # collect results + return
+        pt2 = pt2[idx]
+        pos = self.pos[idx]
+        des = self.des[idx]
+        var = self.var[idx]
+        cnt = self.cnt[idx]
+        return (pt2, pos, des, var, cnt, idx)
 
     def update(self, idx, pos_new, var_new):
         pos_old = self.pos[idx]
@@ -421,9 +468,17 @@ class Landmarks(object):
         self.var[idx] = P_k
         self.cnt[idx] += 1
 
-    def prune(self, k=3, radius=0.025, keep_last=512):
+    def prune(self, k=3, radius=0.05, keep_last=512):
+        """
+        Non-max suppression based pruning.
+        set k=1 to disable  nmx. --> TODO: verify this
+        """
         # TODO : Tune keep_last parameter
         # TODO : Prune by tracking information and/or count
+        # TODO : sometimes pruning can be too aggressive
+        # TODO : if(num_added_landmarks_since_last > x) == lots of new info
+        #             search_and_add_keyframe()
+        # and get rid of desirable landmarks.
         v = np.linalg.norm(self.var[:,(0,1,2),(0,1,2)], axis=-1)
         neigh = NearestNeighbors(n_neighbors=k)
         neigh.fit(self.pos)
@@ -437,7 +492,7 @@ class Landmarks(object):
         # opt 1: keep latest N landmarks
         #msk_t = np.arange(self.size_) > (self.size_ - keep_last)
         # opt 2: keep all landmarks since last prune
-        msk_t = np.arange(self.size_) > self.pidx_
+        msk_t = np.arange(self.size_) >= self.pidx_
 
         # strong responses are preferrable and will be kept
         rsp = [k.response for k in self.kpt[:,0]]
@@ -447,7 +502,7 @@ class Landmarks(object):
         # if (new_landmark) keep;
         # else if (passed_non_max) keep;
         # else if (strong_descriptor) keep;
-        msk = msk_t | (msk_d & msk_v) | (msk_r & ~msk_d)
+        msk = msk_t | (msk_d & msk_v | ~msk_d) | (msk_r)
 
         sz = msk.sum()
         print('Landmarks Pruning : {}->{}'.format(msk.size, sz))
