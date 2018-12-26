@@ -162,6 +162,7 @@ class CVORunner(object):
         dps_gt = sub_p3d(odom[i], odom[i-1])
         s = np.linalg.norm(dps_gt[:2])
         print('Ground Truth Scale : [ {} ]'.format(s))
+        print('Ground Truth Motion : {}'.format( dps_gt ))
 
         scale = None
         if i <= 2:
@@ -195,7 +196,7 @@ class CVORunner(object):
             scan_c = None
 
         ### EVERYTHING FROM HERE IS PLOTTING + VIZ ###
-        if (i % 16) == 0:
+        if (i % 1) == 0:
             P = self.vo_.ukf_l_.P
             self.show(aimg, pts3, pts2, scan_c, pts_r, P, col_p, ('[%d/%d] '%(i,n)) + msg)
 
@@ -230,7 +231,7 @@ class CVORunner(object):
 def main():
     np.set_printoptions(precision=4)
     #idx = np.random.choice(8)
-    idx = 27
+    idx = 34
     print('idx', idx)
 
     # load data

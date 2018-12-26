@@ -370,6 +370,7 @@ class ClassicalVO(object):
         # define configuration
         self.flag_ = ClassicalVO.VO_DEFAULT
         self.flag_ &= ~ClassicalVO.VO_USE_HOMO # TODO : doesn't really work?
+        self.flag_ &= ~ClassicalVO.VO_USE_BA
         # self.flag_ &= ~ClassicalVO.VO_USE_FM_COR # performance
 
         # define constant parameters
@@ -382,10 +383,15 @@ class ClassicalVO(object):
 
         # conversion from camera frame to base_link frame
         # NOTE : extrinsic parameter anchor
+
+        #self.T_c2b_ = tx.compose_matrix(
+        #        angles=[-np.pi/2-np.deg2rad(10),0.0,-np.pi/2],
+        #        #angles=[-np.pi/2,0.0,-np.pi/2],
+        #        translate=[0.174,0,0.113])
         self.T_c2b_ = tx.compose_matrix(
-                angles=[-np.pi/2-np.deg2rad(10),0.0,-np.pi/2],
+                angles=[-np.deg2rad(100),0.0,0.0],
                 #angles=[-np.pi/2,0.0,-np.pi/2],
-                translate=[0.174,0,0.113])
+                translate=[0.174,0.250,0.113])
 
         # Note that camera intrinsic+extrinsic parameters
         # i.e. K, D, T_c2b
@@ -502,7 +508,8 @@ class ClassicalVO(object):
                 np.greater_equal(pt2, [0,0]),
                 np.less(pt2, [w,h])), axis=-1)
         msk_st = st[:,0].astype(np.bool)
-        msk_err = (err < 1.0) # track reprojection error
+        # track reprojection error
+        msk_err = (err < thresh)
         msk = np.logical_and.reduce([
             msk_err,
             msk_in,
@@ -541,7 +548,8 @@ class ClassicalVO(object):
             # filter : by view angle
             a_dif = np.abs((self.landmarks_.ang[:,0] - pose[-1] + np.pi)
                     % (2*np.pi) - np.pi)
-            a_msk = np.less(a_dif, np.deg2rad(30.0)) # TODO : kind-of magic number
+            # TODO : kind-of magic number
+            a_msk = np.less(a_dif, np.deg2rad(30.0))
 
             # filter : by min/max ORB distance
             pose_tmp = self.cvt_.T_b2c_.dot([pose[0], pose[1], 0, 1]).ravel()[:3]
@@ -582,12 +590,12 @@ class ClassicalVO(object):
                 des_p_m, cross=(self.flag_ & ClassicalVO.VO_USE_MXCHECK)
                 )
 
-        if len(lm_idx) > 16:
+        if len(lm_idx) > 16: # TODO : MAGIC
             # filter correspondences by Emat consensus
             # first-order estimate: image-coordinate distance-based filter
             cor_delta = (pt2_lm_c[i1] - pt2_u_c[idx_er][i2])
             cor_delta = np.linalg.norm(cor_delta, axis=-1)
-            lm_msk_d = (cor_delta < 64.0) 
+            lm_msk_d = (cor_delta < 64.0)  # TODO : MAGIC
             lm_idx_d = np.where(lm_msk_d)[0]
 
             # second estimate
@@ -685,7 +693,8 @@ class ClassicalVO(object):
             all of these estimates are un-intelligently
             combined to produce the final result.
             """
-            if (scale < 1e-2) and (scale_est / scale) > 2.0:
+            if (scale < 5e-3) and (scale_est / scale) > 2.0:
+                # TODO : Magic ^^
                 # disable scale interpolation
                 # most likely running into pure rotation
                 # implicit: scale=scale
@@ -697,9 +706,9 @@ class ClassicalVO(object):
             # implicit : scale = scale
             pass
 
-        # == scale_is_believable @ >= 1e-2m translation
+        # == scale_is_believable @ >= 5e-3m translation
         # TODO : figure out better heuristic?
-        run_lm = (scale >= 1e-2)
+        run_lm = (scale >= 5e-3)
 
         # control flags
         # update existing landmarks
@@ -1030,7 +1039,7 @@ class ClassicalVO(object):
                 self.residual_BA, x0,
                 jac_sparsity=A, verbose=2,
                 ftol=1e-4,
-                x_scale='jac', # -- landmark @ pose should be about equivalent
+                #x_scale='jac', # -- landmark @ pose should be about equivalent
                 method='trf',
                 args=(n_c, n_l, ci, li, p2) )
 
@@ -1059,13 +1068,18 @@ class ClassicalVO(object):
             scale = np.linalg.norm(pose_c[:2] - pose_p[:2])
         return pose_p, pose_c, scale
 
-    def run_gp(self, pt_c, pt_p, pt3=None, scale=None):
+    def run_gp(self, pt_c, pt_p, pt3=None,
+            scale=None,
+            R=None,
+            t=None
+            ):
         """
         Scale estimation based on locating the ground plane.
         if scale:=None, scale based on best z-plane will be returned.
         """
         if not (self.flag_ & ClassicalVO.VO_USE_SCALE_GP):
-            return scale
+            return scale, R, t
+
         camera_height = self.T_c2b_[2, 3]
 
         if self.flag_ & ClassicalVO.VO_USE_GP_RSC:
@@ -1074,10 +1088,14 @@ class ClassicalVO(object):
             # to compute a reasonable estimate.
 
             # camera pitch filter (NOTE: not 100% robust, but works in 2D)
+            # TODO : make below function work better under most configurations
+            # i.e. camera facing forwards vs. sideways
             y_min = np.linalg.multi_dot([
                 self.K_,
                 self.cvt_.T_b2c_[:3],
-                np.reshape([1,0,0,1], (4,1))])[1]
+                np.reshape([0,1,0,1], (4,1))])[1]
+
+            # y_min += 32 # TODO: add buffer zone?
 
             gp_msk = np.logical_and.reduce([
                 pt_c[:,1] >= y_min,
@@ -1089,7 +1107,7 @@ class ClassicalVO(object):
 
             if len(gp_idx) <= 3: # TODO : magic
                 # too few points, abort gp estimate
-                return scale
+                return scale, R, t
 
             # update pt_c and pt_p
             pt_c = pt_c[gp_idx]
@@ -1139,7 +1157,7 @@ class ClassicalVO(object):
             z_idx = np.where(z_val)[0]
             if len(z_idx) <= 0:
                 # abort ground-plane estimation.
-                return scale
+                return scale, R, t
             # NOTE: honestly don't know why I need to pre-filter by z-norm at all
             perm = zip(Hr,Ht)
             perm = [perm[i] for i in z_idx]
@@ -1181,7 +1199,20 @@ class ClassicalVO(object):
                     print_ratio('scale_gp', scale_gp, scale)
                     # use gp scale instead
                     scale = scale_gp
-        return scale
+        return scale, R, t
+
+    def dT_cam_to_base(self, R, t):
+        T_c2c1 = np.eye(4)
+        T_c2c1[:3,:3] = R
+        T_c2c1[:3,3:] = t.reshape(3,1)
+        T_b2b1 = np.linalg.multi_dot([
+            self.cvt_.T_c2b_,
+            T_c2c1,
+            self.cvt_.T_b2c_
+            ])
+        R = T_b2b1[:3, :3]
+        t = T_b2b1[:3, 3:].ravel()
+        return R, t
 
     def __call__(self, img, dt, scale=None):
         msg = ''
@@ -1319,36 +1350,47 @@ class ClassicalVO(object):
                     )
             print_ratio('essentialmat', len(idx_e), msk_e.size)
 
-        # convert R,t to base_link frame
-        R = np.linalg.multi_dot([
-            self.cvt_.T_c2b_[:3,:3],
-            R,
-            self.cvt_.T_c2b_[:3,:3].T
-            ])
-        t = np.linalg.multi_dot([
-            self.cvt_.T_c2b_[:3,:3],
-            t.reshape(3,1),
-            ]).ravel()
-
         idx_r = np.where(msk_r)[0]
         pt3 = pt3.T
         print_ratio('triangulation', len(idx_r), msk_r.size)
 
-        scale = self.run_gp(pt2_u_c[idx_e], pt2_u_p[idx_e], pt3, scale)
-
+        # draw matches
         msk = np.zeros(len(pt2_p), dtype=np.bool)
         msk[idx_t[idx_e[idx_r]]] = True
         #print('final msk : {}/{}'.format(msk.sum(), msk.size))
-
         mim = drawMatches(img_p, img_c, pt2_p, pt2_c, msk)
+        # TODO (urgent) : fix current scaling architecture
+        # I think it theoretically, works, but is quite stupid.
 
-        # dh/dx in pose_p frame
-        pose_c_r = self.pRt2pose(pose_p, R, scale*t)
+        # Estimate #1 : Based on UKF Motion
+        scale_b = scale
+        R_c, t_c = R, t # Camera-frame u-trans
+        R_b, t_b = self.dT_cam_to_base(R_c, t_c) # Base-frame trans
+
+        # physical t_b/ t_c
+        scale_b_ = np.linalg.norm(t_b)
+        t_b *= scale_b / scale_b_
+        t_c *= scale_b / scale_b_ # == scale appropriately by transformed scale
+        scale_c = np.linalg.norm(t_c)
+        print 'scale_b #1', scale
+
+        # Estimate #2 : Based on Ground-Plane Estimation
+        # <<-- initial guess, provided defaults in case of abort
+        scale_c, R_c, t_c = self.run_gp(pt2_u_c[idx_e], pt2_u_p[idx_e], pt3,
+                scale_c, R_c, t_c / scale_c) # note returned t_c is uvec
+        t_c *= scale_c
+        R_b, t_b = self.dT_cam_to_base(R_c, t_c)
+        scale_b = np.linalg.norm(t_b)
+        print 'scale_b #2', scale_b
+
+        pose_c_r = self.pRt2pose(pose_p, R_b, t_b)
 
         if self.flag_ & ClassicalVO.VO_USE_F2M:
+            # Estimate #3 : Based on Landmarks
             # TODO : smarter way to incorporate ground-plane scale information??
             # estimate scale based on current pose guess
-            scale, msg = self.proc_f2m(pose_c_r, scale,
+            # and recompute rectified pose_c_r
+            scale_c, msg = self.proc_f2m(pose_c_r, scale_c,
                     des_p, des_c,
                     idx_t, idx_e, idx_r,
                     pt2_u_p, pt2_u_c,
@@ -1357,12 +1399,16 @@ class ClassicalVO(object):
                     kpt_p,
                     msg
                     )
-            # recompute rectified pose_c_r
-            pose_c_r = self.pRt2pose(pose_p, R, scale*t)
+            t_c *= scale_c / np.linalg.norm(t_c)
+            R_b, t_b  = self.dT_cam_to_base(R_c, t_c)
+            scale_b = np.linalg.norm(t_b)
+            print 'scale_b #3', scale_b
+            print 't_b', t_b.ravel()
+            pose_c_r = self.pRt2pose(pose_p, R_b, t_b)
         self.ukf_l_.update(pose_c_r)
 
-        # pose_c_r is ukf posterior;
-        # self.graph_ contains pose posterior.
+        # Estimate #4 : return Post-filter results as UKF Posterior
+        # NOTE: self.graph_ contains pose posterior.
         pose_c_r = self.ukf_l_.x[:3].copy()
         self.graph_.add_pos(pose_c_r.copy())
 
@@ -1375,7 +1421,7 @@ class ClassicalVO(object):
             for win in self.ba_pyr_:
                 # Survey list of BA frequencies (windows)
                 # And run the largest possible BA
-                # if multiple pyramids satisfy the condition.
+                # if multiple windows satisfy the condition.
                 s_check = (len(self.graph_.pose_) >= win)
                 f_check = (len(self.graph_.pose_) % win == 0)
                 if s_check and f_check:

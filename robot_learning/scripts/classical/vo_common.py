@@ -415,7 +415,7 @@ class Landmarks(object):
         self.var[idx] = P_k
         self.cnt[idx] += 1
 
-    def prune(self, k=3, radius=0.025, keep_last=1024):
+    def prune(self, k=3, radius=0.025, keep_last=512):
         # TODO : Tune keep_last parameter
         # TODO : Prune by tracking information and/or count
         v = np.linalg.norm(self.var[:,(0,1,2),(0,1,2)], axis=-1)
@@ -426,14 +426,18 @@ class Landmarks(object):
         msk_d = np.min(d, axis=1) < radius
         # neighborhood count TODO : or np.sum() < 2?
         msk_v = np.all(v[i]>v[:,None], axis=1)
-        # keep latest N landmarks
-        msk_t = np.arange(self.size_) > (self.size_ - keep_last)
+
+        # opt 1: keep latest N landmarks
+        #msk_t = np.arange(self.size_) > (self.size_ - keep_last)
+        # opt 2: keep all landmarks since last prune
+        msk_t = np.arange(self.size_) > self.pidx_
+
         # strong responses are preferrable and will be kept
         rsp = [k.response for k in self.kpt[:,0]]
         msk_r = np.greater(rsp, 48) # TODO : somewhat magical
 
         # below expression describes the following heuristic:
-        # if (latest_N) keep;
+        # if (new_landmark) keep;
         # else if (passed_non_max) keep;
         # else if (strong_descriptor) keep;
         msk = msk_t | (msk_d & msk_v) | (msk_r & ~msk_d)
@@ -447,6 +451,7 @@ class Landmarks(object):
             # in order to purposefully make a copy.
             d[f][:sz] = d[f][:self.size_][msk]
         self.size_ = sz
+        self.pidx_ = self.size_
 
         # return pruned indices
         return np.where(msk)[0]

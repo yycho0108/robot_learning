@@ -79,8 +79,8 @@ class DataCollector(object):
         self.img_  = None
         self.odom_ = None
         self.scan_ = None
-        #self.dataset_ = []
-        self.dataset_ = 
+        self.dataset_ = []
+        #self.dataset_ = 
         self.new_data_ = False
         self.last_data_ = None
 
