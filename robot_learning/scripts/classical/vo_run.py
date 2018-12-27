@@ -59,7 +59,7 @@ class CVORunner(object):
         if k in ['n', ' ', 'enter']:
             self.index_ += 1
             if self.index_ < self.n_:
-                self.step()
+                self.step(viz=True)
         if k in ['q', 'escape']:
             self.quit_ = True
             sys.exit(0)
@@ -130,7 +130,7 @@ class CVORunner(object):
         self.fig_.canvas.draw()
         self.fig_.suptitle(msg)
 
-    def step(self):
+    def step(self, viz=False):
         i = self.index_
         n = self.n_
         print('i : {}/{}'.format(i,n))
@@ -197,7 +197,8 @@ class CVORunner(object):
             scan_c = None
 
         ### EVERYTHING FROM HERE IS PLOTTING + VIZ ###
-        if (i % 1) == 0:
+        if viz:
+            print 'should show stuff'
             P = self.vo_.ukf_l_.P
             self.show(aimg, pts3, pts2, scan_c, pts_r, P, col_p, ('[%d/%d] '%(i,n)) + msg)
             plt.pause(0.001)
@@ -205,7 +206,7 @@ class CVORunner(object):
     def quit(self):
         self.quit_ = True
 
-    def run(self, auto=False):
+    def run(self, auto=False, vfreq=1):
         #self.gui_.run()
         self.fig_.canvas.mpl_connect('key_press_event', self.handle_key)
         self.fig_.canvas.mpl_connect('close_event', sys.exit)
@@ -213,7 +214,8 @@ class CVORunner(object):
             while not self.quit_:
                 if self.index_ < self.n_:
                     self.index_ += 1
-                    self.step()
+                    viz = ( (self.index_ % vfreq) == 0)
+                    self.step(viz=viz)
                 plt.pause(0.001)
                 #plt.savefig('/tmp/{:04d}.png'.format(self.index_))
         else:
@@ -231,6 +233,10 @@ class CVORunner(object):
         np.save('/tmp/lmk_col.npy', lmk_col)
 
 def main():
+    # convenience params defined here
+    auto  = True
+    vfreq = 16
+
     np.set_printoptions(precision=4)
     #idx = np.random.choice(8)
     # 27, 34, 41 are currently used
@@ -266,7 +272,7 @@ def main():
     stamps -= stamps[0] # t0 = 0
 
     app = CVORunner(imgs, stamps, odom, scan, cinfo)
-    app.run(auto=True)
+    app.run(auto=auto, vfreq=vfreq)
 
 if __name__ == "__main__":
     main()

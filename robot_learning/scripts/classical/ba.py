@@ -177,6 +177,51 @@ def ba_J(p, l,
     return j.todense()
     #return j.to_scipy_sparse()
 
+def ba_J_v2(p, l, K, R_b2c, t_b2c, pt_h):
+    P_b2c = np.concatenate([R_b2c, t_b2c], axis=-1) # 3x4
+
+    n = len(p)
+
+    # unroll input parameters
+    x,y,h = p[...,0], p[...,1], p[...,2]
+    c,s = np.cos(h), np.sin(h)
+    lx,ly,lz = l[...,0], l[...,1], l[...,2]
+    hx,hy,hs = pt_h[...,0], pt_h[...,1], pt_h[...,2]
+
+    R00,R01,R02,R10,R11,R12,R20,R21,R22 = R_b2c.ravel()
+    t00,t10,t20 = t_b2c.ravel()
+
+    # left jacobian ( homogeneous part )
+    hs_i = (1.0 / hs)
+    hs_i2 = hs_i * hs_i
+    J_l = np.zeros((n,2,3), dtype=np.float32)
+    J_l[:,0,0] = hs_i
+    J_l[:,0,2] = - hx * hs_i2
+    J_l[:,1,1] = hs_i
+    J_l[:,1,2] = - hy * hs_i2
+
+    # right jacobian ( all the other parts )
+    J_r = np.zeros((n,4,6), dtype=np.float32)
+    J_r[:,0,0] = -c
+    J_r[:,0,1] = -s
+    J_r[:,0,2] = -lx*(s*R00 - c*R01) - ly*(s*R10 - c*R11) - lz*(s*R20 - c*R21) + x*s - y*c - (R00*t00 + R10*t10 + R20*t20)*s + (R01*t00 + R11*t10 + R21*t20)*c
+    J_r[:,0,3] = s*R01 + c*R00
+    J_r[:,0,4] = s*R11 + c*R10
+    J_r[:,0,5] = s*R21 + c*R20
+    J_r[:,1,0] = s
+    J_r[:,1,1] = -c
+    J_r[:,1,2] = -lx*(s*R01 + c*R00) - ly*(s*R11 + c*R10) - lz*(s*R21 + c*R20) + x*c + y*s - (R00*t00 + R10*t10 + R20*t20)*c - (R01*t00 + R11*t10 + R21*t20)*s
+    J_r[:,1,3] = -s*R00 + c*R01
+    J_r[:,1,4] = -s*R10 + c*R11
+    J_r[:,1,5] = -s*R20 + c*R21
+    J_r[:,2,3] = R02
+    J_r[:,2,4] = R12
+    J_r[:,2,5] = R22
+
+    res = reduce(np.matmul,
+            [J_l, K, P_b2c, J_r])
+    return res
+
 def main():
     n_test_p = 16
     n_test_l = 100
