@@ -240,7 +240,7 @@ def main():
     np.set_printoptions(precision=4)
     #idx = np.random.choice(8)
     # 27, 34, 41 are currently used
-    idx = 34
+    idx = 27
     print('idx', idx)
 
     # load data

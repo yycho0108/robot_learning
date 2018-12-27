@@ -1173,24 +1173,23 @@ class ClassicalVO(object):
         # ax.cla()
         # ax.plot(sc, '+')
 
-        err0 = np.square(self.residual_BA(x0,
+        # mean reprojection error
+        err0 = np.sqrt(np.square(self.residual_BA(x0,
             n_c, n_l,
-            ci, li, p2)).sum()
+            ci, li, p2)).mean())
 
         # actually run BA
         # TODO : evaluate x_scale='jac' vs. x_scale=1.0 vs. x_scale = 1.0/v_var
 
         # TODO : restore pBA -> self.pBA_ when done tuning params
         pBA = dict(
-                #ftol=1e-9,
+                ftol=1e-4,
                 #xtol=np.finfo(float).eps,
                 loss='huber',
-                ftol=1e-4,
                 max_nfev=1024,
-                #loss='huber',
                 method='trf',
                 verbose=2,
-                #tr_solver='lsmr',
+                tr_solver='lsmr',
                 )
 
         res = least_squares(
@@ -1198,7 +1197,7 @@ class ClassicalVO(object):
                 #jac_sparsity=A,
                 jac=self.jac_BA,
                 #jac='2-point',
-                #x_scale = sc,
+                x_scale = sc,
                 #x_scale='jac',
                 args=(n_c, n_l, ci, li, p2),
                 **pBA
@@ -1209,9 +1208,9 @@ class ClassicalVO(object):
         pos_opt = res.x[:n_c*3].reshape(-1,3)
         lmk_opt = res.x[n_c*3:].reshape(-1,3)
 
-        err1 = np.square(self.residual_BA(res.x,
+        err1 = np.sqrt(np.square(self.residual_BA(res.x,
             n_c, n_l,
-            ci, li, p2)).sum()
+            ci, li, p2)).mean())
         #print err0, err1
 
         try:
@@ -1617,12 +1616,21 @@ class ClassicalVO(object):
         # NOTE ::: findEssentialMat() is run on ngp_idx (Not tracking Ground Plane)
         # Because the texture in the test cases were repeatd,
         # and was prone to mis-identification of transforms.
-        E, msk_e = cv2.findEssentialMat(pt2_u_c[ngp_idx], pt2_u_p[ngp_idx], self.K_,
-                **self.pEM_)
-        msk_e = msk_e[:,0].astype(np.bool)
-        idx_e = np.where(msk_e)[0]
-        idx_e = ngp_idx[idx_e] # << important when using ngp_idx
-        print_ratio('e_in', len(idx_e), msk_e.size)
+
+        try:
+            E, msk_e = cv2.findEssentialMat(pt2_u_c[ngp_idx], pt2_u_p[ngp_idx], self.K_,
+                    **self.pEM_)
+            msk_e = msk_e[:,0].astype(np.bool)
+            idx_e = np.where(msk_e)[0]
+            idx_e = ngp_idx[idx_e] # << important when using ngp_idx
+            print_ratio('e_in', len(idx_e), msk_e.size)
+        except Exception as e:
+            print('NGP-Emat failure : {}'.format(e))
+            # soft fail
+            # TODO : maybe it's better to fail entirely and
+            # let ground-plane homography handle the situation?
+            idx_e = np.int32([])
+
         if len(idx_e) <= 32:
             # failed, use the whole data
             E, msk_e = cv2.findEssentialMat(pt2_u_c, pt2_u_p, self.K_,
@@ -1739,10 +1747,11 @@ class ClassicalVO(object):
             t_c = t_c2
             scale_c = scale_c2
         else:
+            alpha = 0.25 # TODO : tune
             r_c  = np.ravel(tx.euler_from_matrix(R_c))
             r_c2 = np.ravel(tx.euler_from_matrix(R_c2))
-            R_c = tx.euler_matrix(*lerp(r_c, r_c2, 0.5))[:3,:3]
-            t_c = lerp(t_c, t_c2, 0.25) # TODO : better way to fuse?
+            R_c = tx.euler_matrix(*lerp(r_c, r_c2, alpha))[:3,:3]
+            t_c = lerp(t_c, t_c2, alpha) # TODO : better way to fuse?
             scale_c = np.linalg.norm(t_c)
 
         T_c2c1 = np.eye(4)
@@ -1793,6 +1802,27 @@ class ClassicalVO(object):
         pose_c_r = self.ukf_l_.x[:3].copy()
         self.graph_.add_pos(pose_c_r.copy())
 
+        # prune
+        idx = len(self.graph_.pose_)
+        if (idx>=self.prune_freq_) and (idx%self.prune_freq_)==0 :
+            # prep pruning figure
+            # draw pruned graph?
+            try:
+                #ax = self.gfig.gca()
+                ax = self.gfig.get_axes()
+            except Exception:
+                self.gfig, ax = plt.subplots(1,2)
+            [e.cla() for e in ax]
+            # TODO : evaluate pre-prune vs. post-prune for BA
+            # NOTE : May not even matter, given BA appears to do almost nothing.
+            # pre-prune (prior to BA)
+            self.graph_.draw(ax[0], self.cvt_, self.landmarks_) # pre-prune
+            plt.pause(0.001)
+            keep_idx = self.landmarks_.prune()
+            self.graph_.prune(keep_idx)
+            self.graph_.draw(ax[1], self.cvt_, self.landmarks_) # post-prune
+            self.gfig.canvas.draw()
+            plt.pause(0.001)
 
         # NOTE!! this vvvv must be called after all cache_BA calls
         # have been completed.
@@ -1843,41 +1873,6 @@ class ClassicalVO(object):
 
                     # result
                     pose_c_r = self.ukf_l_.x[:3].copy()
-
-                ## TODO : currently pruning happens with BA
-                ## in order to not mess up landmark indices.
-
-                #self.graph_.draw(ax[0], self.cvt_, self.landmarks_) # pre-prune
-                #plt.pause(0.001)
-                #keep_idx = self.landmarks_.prune()
-                #self.graph_.prune(keep_idx)
-                #self.graph_.draw(ax[1], self.cvt_, self.landmarks_) # post-prune
-                #self.gfig.canvas.draw()
-                #plt.pause(0.001)
-
-        # prune
-        idx = len(self.graph_.pose_)
-        if (idx>=self.prune_freq_) and (idx%self.prune_freq_)==0 :
-            # prep pruning figure
-            # draw pruned graph?
-            try:
-                #ax = self.gfig.gca()
-                ax = self.gfig.get_axes()
-            except Exception:
-                self.gfig, ax = plt.subplots(1,2)
-            [e.cla() for e in ax]
-            # TODO : evaluate pre-prune vs. post-prune for BA
-            # NOTE : May not even matter, given BA appears to do almost nothing.
-            # pre-prune (prior to BA)
-            self.graph_.draw(ax[0], self.cvt_, self.landmarks_) # pre-prune
-            plt.pause(0.001)
-            keep_idx = self.landmarks_.prune()
-            self.graph_.prune(keep_idx)
-            self.graph_.draw(ax[1], self.cvt_, self.landmarks_) # post-prune
-            self.gfig.canvas.draw()
-            plt.pause(0.001)
-
-
 
         print('\t\t pose-f2f : {}'.format(pose_c_r))
         ## === FROM THIS POINT ALL VIZ === 
