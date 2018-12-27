@@ -285,7 +285,7 @@ class VGraph(object):
         self.p2_[:n] = self.p2[i0].copy()
         self.size_ = n
 
-    def query(self, t):
+    def query(self, t, return_A=False):
         """ t = how much to look back """
         # assume (0...,1...,2...,3...,4..,5..,6...)
         # then self.pi[-1] = 6
@@ -298,6 +298,26 @@ class VGraph(object):
         pi = self.pi[idx] - self.pi[idx[0]] # return offset index for p0
         li = self.li[idx]
         p2 = self.p2[idx]
+
+        if return_A:
+            # validation: anticipated sparsity structure
+            n_o = len( idx ) # number of observations
+            n_p = len( p0  )
+            n_l = 1 + li.max()   # assume un-pruned n_l
+            n_x = n_p + n_l
+
+            # raw sparsity matrix
+            A = np.zeros((n_o,2,n_x,3), dtype=int)
+            A[np.arange(n_o), :, pi, :] = 1
+            A[np.arange(n_o), :, n_p+li, :] = 1
+
+            # pruned sparsity matrix
+            li_u = np.unique( li )
+            i    = np.r_[:n_p, n_p+li_u]
+            Ap = A[:, :, i, :] # pruned
+            Ap = Ap.reshape(n_o*2, -1)
+
+            return p0, pi, li, p2, Ap
 
         return p0, pi, li, p2
 
@@ -368,7 +388,6 @@ class VGraph(object):
         Rz[:,2,2] = 1
         # Nx3, base -> map coordinates
         g = np.matmul(Rz, g[...,None])[...,0]
-
 
         ax.quiver(
                 p[:,0], p[:,1],
@@ -497,7 +516,7 @@ class ClassicalVO(object):
         # define "system" parameters
         self.pEM_ = dict(method=cv2.FM_RANSAC, prob=0.999, threshold=1.0)
         self.pLK_ = dict(winSize = (32,16),
-                maxLevel = 4,
+                maxLevel = 4, # == effective winsize up to 32*(2**4) = 512x256
                 criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 100, 0.003),
                 flags = 0,
                 minEigThreshold = 1e-3 # TODO : disable eig?
@@ -967,7 +986,7 @@ class ClassicalVO(object):
 
         # Rotation Part
         T_o2b[:,0,0] = c
-        T_o2b[:,0,1] = s
+        T_o2b[:,0,1] = s # important : note transposed
         T_o2b[:,1,0] = -s
         T_o2b[:,1,1] = c
         T_o2b[:,2,2] = 1
@@ -980,19 +999,20 @@ class ClassicalVO(object):
         T_o2b[:,3,3] = 1
 
         lmk_h = self.cvt_.pt_to_pth(lmk)
+
         pt2_h = reduce(np.matmul,[
-            self.K_,
-            self.cvt_.T_b2c_[:3],
-            T_o2b,
-            self.cvt_.T_c2b_,
-            lmk_h[...,None]])[...,0]
+            self.K_, # 3x3
+            self.cvt_.T_b2c_[:3], # 3x4
+            T_o2b, # 4x4
+            self.cvt_.T_c2b_, # 4x4
+            lmk_h[...,None]])[...,0] # 4x1
         pt2 = self.cvt_.pth_to_pt(pt2_h)
+
         if return_msk:
-            # NOTE: mask only implements depth check,
-            # as out-of-bounds pixel coordinates are still meaningful
-            # for bundle adjustment.
-            msk = (pt2_h[...,-1] > 0.0)
+            #simple depth check
+            msk = (pt2_h[..., -1] >= 0)
             return pt2, msk
+
         return pt2
 
     def residual_BA(self, params,
@@ -1076,6 +1096,7 @@ class ClassicalVO(object):
 
         # create np arrays
         p0, ci, li, p2 = self.graph_.query(win)
+        _, vp, _ = self.s_hist_.query(win)
 
         # gather stats
         n_c = len(p0)
@@ -1093,12 +1114,34 @@ class ClassicalVO(object):
         # compute BA sparsity structure
         A  = self.sparsity_BA(n_c, n_l, ci, li)
 
+        #Ac = A.todense().astype(np.int32)
+        #Ap = Ap.astype(np.int32)
+        #print 'Computed'
+        #print Ac.shape
+        #print hash(Ac.tobytes())
+        #print 'Expected'
+        #print Ap.shape
+        #print hash(Ap.tobytes())
+
         # actually run BA
         # TODO : use x_scale='jac'???
+
+        si = np.arange(3)
+        vp = vp[:,si, si]
+        vl = self.landmarks_.var[li_u][:, si, si]
+        sc = 1.0 / np.concatenate([vp.ravel(), vl.ravel()])
+
+        print 'initial squared residual sum'
+        print np.square(self.residual_BA(x0,
+            n_c, n_l,
+            ci, li, p2)).sum()
+
         res = least_squares(
                 self.residual_BA, x0,
-                jac_sparsity=A, verbose=2,
+                jac_sparsity=A,
+                verbose=2,
                 ftol=1e-4,
+                x_scale = sc,
                 #x_scale='jac', # -- landmark @ pose should be about equivalent
                 method='trf',
                 args=(n_c, n_l, ci, li, p2) )
@@ -1106,6 +1149,31 @@ class ClassicalVO(object):
         # format ...
         pos_opt = res.x[:n_c*3].reshape(-1,3)
         lmk_opt = res.x[n_c*3:].reshape(-1,3)
+
+        print 'final squared residual sum'
+        print np.square(self.residual_BA(res.x,
+            n_c, n_l,
+            ci, li, p2)).sum()
+
+        print 'initial pose'
+        print p0
+
+        print 'optimized pose'
+        print pos_opt
+
+        try:
+            fig = self.tfig_
+            ax  = fig.gca()
+        except Exception:
+            fig = plt.figure()
+            self.tfig_ = fig
+            ax = fig.gca()
+
+        ax.cla()
+        ax.plot(p0[:,0], p0[:,1], 'k+', label='initial')
+        ax.plot(pos_opt[:,0], pos_opt[:,1], 'r+', label='optimized')
+        ax.set_title('Bundle Adjustment Results')
+        ax.legend()
 
         # apply BA results
         # TODO : can we INPUT variance information to scipy.least_squares?
@@ -1561,13 +1629,14 @@ class ClassicalVO(object):
                     self.gfig, ax = plt.subplots(1,2)
                 [e.cla() for e in ax]
                 self.graph_.draw(ax[0], self.cvt_, self.landmarks_) # pre-prune
+                plt.pause(0.001)
 
                 keep_idx = self.landmarks_.prune()
                 self.graph_.prune(keep_idx)
                 self.graph_.draw(ax[1], self.cvt_, self.landmarks_) # post-prune
 
                 self.gfig.canvas.draw()
-                #plt.pause(0.001)
+                plt.pause(0.001)
 
         print('\t\t pose-f2f : {}'.format(pose_c_r))
         ## === FROM THIS POINT ALL VIZ === 

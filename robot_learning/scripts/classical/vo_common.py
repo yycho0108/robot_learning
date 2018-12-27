@@ -496,7 +496,7 @@ class Landmarks(object):
 
         # strong responses are preferrable and will be kept
         rsp = [k.response for k in self.kpt[:,0]]
-        msk_r = np.greater(rsp, 48) # TODO : somewhat magical
+        msk_r = np.greater(rsp, 64) # TODO : somewhat magical
 
         # below expression describes the following heuristic:
         # if (new_landmark) keep;
