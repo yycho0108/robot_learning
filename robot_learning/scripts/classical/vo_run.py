@@ -181,6 +181,7 @@ class CVORunner(object):
             return
 
         (aimg, vo_pos, pts_r, pts3, col_p, msg) = res
+        print('msg', msg)
         #print('(pred-gt) {} vs {}'.format(dps, dps_gt) )
         pos = vo_pos
 
@@ -196,9 +197,10 @@ class CVORunner(object):
             scan_c = None
 
         ### EVERYTHING FROM HERE IS PLOTTING + VIZ ###
-        if (i % 16) == 0:
+        if (i % 1) == 0:
             P = self.vo_.ukf_l_.P
             self.show(aimg, pts3, pts2, scan_c, pts_r, P, col_p, ('[%d/%d] '%(i,n)) + msg)
+            plt.pause(0.001)
 
     def quit(self):
         self.quit_ = True

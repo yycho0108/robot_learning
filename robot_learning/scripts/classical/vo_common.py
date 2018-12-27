@@ -670,6 +670,12 @@ class Conversions(object):
         D = self.D_
         if not distort:
             D = D * 0.0
+
+        # soft fail for empty pt3
+        if pt3.size <= 0:
+            pt2 = np.empty((0,2), dtype=np.float32)
+            msk = np.empty((0,), dtype=np.bool)
+            return pt2, msk
         
         pt3_cam = self.map_to_cam(pt3, pose)
 

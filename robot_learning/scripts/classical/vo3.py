@@ -480,16 +480,16 @@ class ClassicalVO(object):
     VO_USE_GP_RSC    = 1<<11 # Enable RANSAC Plane estimation for ground plane
 
     VO_DEFAULT = VO_USE_FM_COR | VO_USE_TRACK | VO_USE_SCALE_GP | \
-            VO_USE_BA | VO_USE_HOMO | VO_USE_F2M | \
-            VO_USE_LM_KF | VO_USE_KPT_SPX | VO_USE_MXCHECK | \
-            VO_USE_GP_RSC
+            VO_USE_BA | VO_USE_F2M | VO_USE_LM_KF | \
+            VO_USE_KPT_SPX | VO_USE_MXCHECK | VO_USE_GP_RSC
 
     def __init__(self, cinfo=None):
         # define configuration
         self.flag_ = ClassicalVO.VO_DEFAULT
         self.flag_ &= ~ClassicalVO.VO_USE_HOMO # TODO : doesn't really work?
-        # self.flag_ &= ~ClassicalVO.VO_USE_BA
-        # self.flag_ &= ~ClassicalVO.VO_USE_FM_COR # performance
+        #self.flag_ &= ~ClassicalVO.VO_USE_BA
+        self.flag_ |= ClassicalVO.VO_USE_PNP
+        #self.flag_ &= ~ClassicalVO.VO_USE_FM_COR # performance
 
         # TODO : control stage-level verbosity
 
@@ -532,9 +532,9 @@ class ClassicalVO(object):
                 )
 
         self.pPNP_ = dict(
-                iterationsCount=1000,
-                reprojectionError=2.0,
-                confidence=0.999,
+                iterationsCount=10000,
+                reprojectionError=0.5,
+                confidence=0.99,
                 #flags = cv2.SOLVEPNP_EPNP
                 #flags = cv2.SOLVEPNP_DLS
                 #flags = cv2.SOLVEPNP_AP3P
@@ -577,6 +577,7 @@ class ClassicalVO(object):
         # data cache + flags
         self.landmarks_ = Landmarks(des)
         self.hist_ = deque(maxlen=3)
+        self.prune_freq_ = 32
 
         # pnp
         self.pnp_p_ = None
@@ -584,12 +585,14 @@ class ClassicalVO(object):
 
         # bundle adjustment + loop closure
         # sort ba pyramid by largest first
-        ba_pyr = [16] # [16,64]
+        ba_pyr = [4, 16, 64] # [16,64]
         self.ba_pyr_  = np.sort(ba_pyr)[::-1]
         self.graph_ = VGraph()
 
         # UKF
         # NOTE : ALWAYS enforce s_hist_.maxlen >= self.ba_pyr_.max()
+        # TODO : evaluate EKF vs. UKF? empirically similar.
+        # TODO : rename such that ukf/ekf naming is not confusing.
         # to avoid bugs due to circular buffer.
         self.ukf_l_  = build_ekf() # local incremental UKF
         self.ukf_h_  = build_ekf() # global historic UKF
@@ -820,52 +823,50 @@ class ClassicalVO(object):
                     pt2_u_c[idx_er[i2[lm_idx_e]]]
                     )
 
-        if self.flag_ & ClassicalVO.VO_USE_PNP: # == if USE_PNP
-            # PNP is currently horrible but may be required for loop closure.
-            pt_world = pos_lm[i1]#[lm_msk_e]
-            pt_cam   = pt2_u_c[idx_er][i2]#[lm_msk_e]
+        # flag to decide whether to run PNP
+        run_pnp = bool(self.flag_ & ClassicalVO.VO_USE_PNP)
+        run_pnp &= lm_idx_e.size >= 16 # use at least > 16 points
+        # reset PNP data no matter what
+        self.pnp_p_ = None
+        self.pnp_h_ = None
+        if run_pnp:
+            # either landmarks are wrong, or poses are wrong, which influences PNP performance.
+            # The issue is that both of them must be simultaneously optimized.
+            pt_map = pos_lm[i1[lm_idx_e]] # --> "REAL" map from old observations
+            #pt_map = p_lm_v2_0 # --> "FAKE" map from current observation
+            #pt_map = lerp(pos_lm[i1[lm_idx_e]], p_lm_v2_0, 0.15) # compromise?
+            pt_cam = pt2_u_c[idx_er[i2[lm_idx_e]]]
 
-            if pt_world.size>0 and pt_cam.size>0:
-                # PNP is super unreliable
-                # use guess?
+            # filter by above-GP features
+            # (TODO : hack because ground plane tends to be somewhat homogeneous
+            # in the test cases)
+            pt_map_b = pt_map.dot(self.cvt_.T_c2b_[:3,:3].T) + self.cvt_.T_c2b_[:3,3:].T
+            ngp_msk =  (pt_cam[:,1] < self.y_GP) # based on camera
+            ngp_msk &= (pt_map_b[:,2] > 0.0)     # based on map
+            ngp_idx = np.where(ngp_msk)[0]
+            pt_map = pt_map[ngp_idx]
+            pt_cam = pt_cam[ngp_idx]
+            #pt_cam_fake = pt2_lm[i1[lm_idx_e[ngp_idx]]]
+            pt_cam_fake, _ = self.cvt_.pt3_pose_to_pt2_msk(
+                    pt_map, pose)
 
-                T_b2o = self.cvt_.pose_to_T(pose)
-                T_c0c2_est = np.linalg.multi_dot([
-                    self.cvt_.T_b2c_,
-                    tx.inverse_matrix(T_b2o), # T_b0b2
-                    self.cvt_.T_c2b_])
+            # == debugging ==
+            try:
+                fig = self.pfig_
+                ax  = fig.gca()
+            except Exception:
+                self.pfig_ = plt.figure()
+                fig = self.pfig_
+                ax  = fig.gca()
+            ax.cla()
+            ax.imshow(img_c[...,::-1])
+            ax.plot(pt_cam[:,0], pt_cam[:,1], 'b+')
+            ax.plot(pt_cam_fake[:,0], pt_cam_fake[:,1], 'r*')
+            if not ax.yaxis_inverted():
+                ax.invert_yaxis()
+            # == debugging ==
 
-                rvec0 = cv2.Rodrigues(T_c0c2_est[:3,:3])[0]
-                tvec0 = T_c0c2_est[:3, 3:]
-
-                res = cv2.solvePnPRansac(
-                        pt_world, pt_cam,
-                        self.K_, 0*self.D_,
-                        #useExtrinsicGuess = False,
-                        useExtrinsicGuess = True,
-                        rvec=rvec0,
-                        tvec=tvec0,
-                        **self.pPNP_
-                        )
-
-                suc, rvec, tvec, inliers = res
-                if suc:
-                    T = np.eye(4, dtype=np.float64)
-                    T[:3,:3] = cv2.Rodrigues(rvec)[0]
-                    T[:3,3:] = tvec.reshape(3,1)
-                    T = tx.inverse_matrix(T)
-
-                    pnp_p = T[2,3], -T[0,3]
-                    pnp_h = -tx.euler_from_matrix(T)[1]
-                    #print('pnp : {}, {}, ({}/{})'.format(
-                    #    pnp_p, pnp_h, len(inliers), len(pt_world)))
-                    msg += '(pnp:{}/{})'.format( len(inliers), len(pt_world))
-                    # NOTE : uncomment this to revive pnp visualization
-                    self.pnp_p_ = pnp_p
-                    self.pnp_h_ = pnp_h
-                else:
-                    self.pnp_p_ = None
-                    self.pnp_h_ = None
+            msg = self.run_PNP(pt_map, pt_cam, pose, msg=msg)
 
         # == visualize filtering process ==
         # n_show = 1
@@ -1177,7 +1178,7 @@ class ClassicalVO(object):
 
         return pos_opt
 
-    def run_ukf(self, dt, scale=None):
+    def run_UKF(self, dt, scale=None):
         """ motion-based prediction """
         pose_p = self.ukf_l_.x[:3].copy()
         Q, R = get_QR(pose_p, dt)
@@ -1189,8 +1190,41 @@ class ClassicalVO(object):
             # initialize scale from UKF
             scale = np.linalg.norm(pose_c[:2] - pose_p[:2])
         return pose_p, pose_c, scale
+    
+    @property
+    def y_GP(self):
+        """
+        Minimum Ground Plane value in Image Coordinates.
+        probably super inefficient but doesn't really matter.
 
-    def run_gp(self, pt_c, pt_p, pt3=None,
+        returns y_GP such that
+        z.T.(R_c2b.(K^{-1}.([[0,ymin,1]].T)) + t_c2b) == 0
+
+        NOTE: assumes camera roll w.r.t ground plane = 0
+        NOTE: operates on undistorted coordinates.
+        """
+        # TODO : super rough implementation
+        try:
+            # try to return existing cache
+            return self.y_gp_
+        except Exception:
+            z = np.reshape([0,0,1], (3,1))
+            R = self.cvt_.T_c2b_[:3,:3]
+            t = self.cvt_.T_c2b_[:3,3:]
+            Ki = self.cvt_.Ki_
+
+            A_part = np.linalg.multi_dot([z.T, R, Ki])
+            b_part = -z.T.dot(t)
+            y_gp = (b_part[0,0] - A_part[0,2]) / A_part[0,1]
+
+            # validation
+            #x_part = np.reshape([0,y_gp,1], (3,1))
+            #print z.T.dot(R.dot(Ki.dot(x_part)) + t)
+
+            self.y_gp_ = y_gp
+        return self.y_gp_
+
+    def run_GP(self, pt_c, pt_p, pt3=None,
             scale=None,
             R=None,
             t=None
@@ -1209,19 +1243,7 @@ class ClassicalVO(object):
             # unfortunately, there's far too few points on the ground plane
             # to compute a reasonable estimate.
 
-            # find y_min such that
-            # NOTE: assumes camera roll w.r.t ground plane = 0
-            # z.T.(R_c2b.dot(K^{-1}.dot([[0,ymin,1]].T)) + t_c2b) == 0
-            # more generalized version of y_min, yay!
-            # probably super inefficient but doesn't really matter.
-            z = np.reshape([0,0,1], (3,1))
-            A_part = np.linalg.multi_dot([
-                z.T,
-                self.cvt_.T_c2b_[:3,:3],
-                self.cvt_.Ki_
-                ])
-            b_part = -z.T.dot(self.cvt_.T_c2b_[:3,3:])
-            y_min = (b_part[0,0] - A_part[0,2]) / A_part[0,1]
+            y_min = self.y_GP
 
             gp_msk = np.logical_and.reduce([
                 pt_c[:,1] >= y_min,
@@ -1349,6 +1371,85 @@ class ClassicalVO(object):
         R = T_b2b1[:3, :3]
         t = T_b2b1[:3, 3:].ravel()
         return R, t
+    
+    def run_PNP(self, pt3_map, pt2_cam, pose,
+            p_min=16, msg=''):
+
+        if len(pt3_map) < p_min or len(pt2_cam) < p_min:
+            return msg
+
+        try:
+            # construct extrinsic guess
+            T_b2o = self.cvt_.pose_to_T(pose)
+            T_c2m = np.linalg.multi_dot([
+                self.cvt_.T_b2c_,
+                T_b2o,
+                self.cvt_.T_c2b_
+                ])
+            T_m2c = tx.inverse_matrix(T_c2m)
+            T_src = T_m2c  # Model (map) --> Camera Coord.
+
+            rvec0 = cv2.Rodrigues(T_src[:3,:3])[0]
+            tvec0 = T_src[:3, 3:].ravel()
+            #res = cv2.solvePnPRansac(
+            #        pt_map, pt_cam,
+            #        self.K_, 0*self.D_,
+            #        useExtrinsicGuess = True,
+            #        rvec=rvec0.copy(),
+            #        tvec=tvec0.copy(),
+            #        **self.pPNP_
+            #        )
+            #suc, rvec, tvec, inliers = res
+            #rvec = rvec0
+            #tvec = tvec0
+            #idx = np.random.choice(len(pt_map), size=4, replace=False)
+            #idx = np.s_[:len(pt_map)]
+
+            print 'pnp input'
+            print pt3_map.shape
+            print pt2_cam.shape
+
+            res = cv2.solvePnP(
+                    pt3_map, pt2_cam,
+                    self.K_, 0*self.D_,
+                    useExtrinsicGuess = True,
+                    rvec=rvec0.copy(),
+                    tvec=tvec0.copy(),
+                    flags=self.pPNP_['flags']
+                    )
+            suc, rvec, tvec = res
+            inliers = np.arange(len(pt3_map))
+
+            if suc:
+                # parse output from solvePnP
+                T_m2c = np.eye(4, dtype=np.float64)
+                T_m2c[:3,:3] = cv2.Rodrigues(rvec)[0]
+                T_m2c[:3,3:] = tvec.reshape(3,1)
+                T_c2m = tx.inverse_matrix(T_m2c)
+
+                T_b2o = np.linalg.multi_dot([
+                        self.cvt_.T_c2b_, 
+                        T_c2m,
+                        self.cvt_.T_b2c_
+                        ])
+                t_b = tx.translation_from_matrix(T_b2o)
+                r_b = tx.euler_from_matrix(T_b2o)
+                
+                pnp_p = (t_b[0], t_b[1])
+                pnp_h = r_b[-1]
+                print('pnp : {}, {}'.format(pnp_p, pnp_h))
+                print_ratio('PNP Ratio', len(inliers), len(pt3_map))
+                msg += '(pnp:{}/{})'.format( len(inliers), len(pt3_map))
+                # NOTE : uncomment this to revive pnp visualization
+                # NOTE : standardize visualizations
+                self.pnp_p_ = pnp_p
+                self.pnp_h_ = pnp_h
+        except Exception as e:
+            # ignore exception
+            print('PNP Error : {}'.format(e))
+            pass
+
+        return msg
 
     def __call__(self, img, dt, scale=None):
         msg = ''
@@ -1381,7 +1482,7 @@ class ClassicalVO(object):
                 self.ukf_l_.P,
                 dt)
 
-        pose_p, pose_c, scale = self.run_ukf(dt, scale)
+        pose_p, pose_c, scale = self.run_UKF(dt, scale)
 
         # frame-to-frame processing
         pt2_p = self.cvt_.kpt_to_pt(kpt_p)
@@ -1511,13 +1612,12 @@ class ClassicalVO(object):
 
         # Estimate #2 : Based on Ground-Plane Estimation
         # <<-- initial guess, provided defaults in case of abort
-        scale_c, R_c2, t_c2 = self.run_gp(pt2_u_c[idx_e], pt2_u_p[idx_e], pt3,
+        scale_c, R_c2, t_c2 = self.run_GP(pt2_u_c[idx_e], pt2_u_p[idx_e], pt3,
                 scale_c, R_c, t_c / scale_c) # note returned t_c is uvec
 
         # un-intelligently resolve two measurements ...
         # TODO : figure out confidence scaling or variance.
         # TODO : CAN BE extremely wrong if triangulated results are negatives of each other.
-        #R_c, t_c = R_c2, t_c2
         if np.dot(t_c2.ravel(), t_c.ravel()) < 0:
             # facing opposite directions
             # most often happens in pure-rotation scenarios
@@ -1581,6 +1681,16 @@ class ClassicalVO(object):
             if run_ba:
                 # run BA every [win] frames
 
+                # prep pruning figure
+                # draw pruned graph?
+                try:
+                    #ax = self.gfig.gca()
+                    ax = self.gfig.get_axes()
+                except Exception:
+                    self.gfig, ax = plt.subplots(1,2)
+                [e.cla() for e in ax]
+
+
                 print('Running BA @ scale={}'.format(ba_win))
                 ba_res = self.run_BA(ba_win)
                 if ba_res is not None:
@@ -1615,22 +1725,26 @@ class ClassicalVO(object):
                 ## TODO : currently pruning happens with BA
                 ## in order to not mess up landmark indices.
 
-                # draw pruned graph?
-                try:
-                    #ax = self.gfig.gca()
-                    ax = self.gfig.get_axes()
-                except Exception:
-                    self.gfig, ax = plt.subplots(1,2)
-                [e.cla() for e in ax]
-                self.graph_.draw(ax[0], self.cvt_, self.landmarks_) # pre-prune
-                plt.pause(0.001)
+                #self.graph_.draw(ax[0], self.cvt_, self.landmarks_) # pre-prune
+                #plt.pause(0.001)
+                #keep_idx = self.landmarks_.prune()
+                #self.graph_.prune(keep_idx)
+                #self.graph_.draw(ax[1], self.cvt_, self.landmarks_) # post-prune
+                #self.gfig.canvas.draw()
+                #plt.pause(0.001)
 
-                keep_idx = self.landmarks_.prune()
-                self.graph_.prune(keep_idx)
-                self.graph_.draw(ax[1], self.cvt_, self.landmarks_) # post-prune
-
-                self.gfig.canvas.draw()
-                plt.pause(0.001)
+        idx = len(self.graph_.pose_)
+        if (idx>=self.prune_freq_) and (idx%self.prune_freq_)==0 :
+            # TODO : evaluate pre-prune vs. post-prune for BA
+            # NOTE : May not even matter, given BA appears to do almost nothing.
+            # pre-prune (prior to BA)
+            self.graph_.draw(ax[0], self.cvt_, self.landmarks_) # pre-prune
+            plt.pause(0.001)
+            keep_idx = self.landmarks_.prune()
+            self.graph_.prune(keep_idx)
+            self.graph_.draw(ax[1], self.cvt_, self.landmarks_) # post-prune
+            self.gfig.canvas.draw()
+            plt.pause(0.001)
 
         print('\t\t pose-f2f : {}'.format(pose_c_r))
         ## === FROM THIS POINT ALL VIZ === 
