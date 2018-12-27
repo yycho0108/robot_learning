@@ -491,6 +491,8 @@ class ClassicalVO(object):
         # self.flag_ &= ~ClassicalVO.VO_USE_BA
         # self.flag_ &= ~ClassicalVO.VO_USE_FM_COR # performance
 
+        # TODO : control stage-level verbosity
+
         # Note that camera intrinsic+extrinsic parameters
         # i.e. K, D, T_c2b
         # are coupled with the data, rather than the algorithm.
@@ -520,6 +522,13 @@ class ClassicalVO(object):
                 criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 100, 0.003),
                 flags = 0,
                 minEigThreshold = 1e-3 # TODO : disable eig?
+                )
+        self.pBA_ = dict(
+                ftol=1e-4,
+                #xtol=1e-9,
+                method='trf',
+                verbose=2,
+                #x_scale='jac'
                 )
 
         self.pPNP_ = dict(
@@ -657,7 +666,7 @@ class ClassicalVO(object):
         des_p_m = des_p[idx_ter]
 
         # query visible points from landmarks database
-        qres = self.landmarks_.query(pose, self.cvt_, atol=np.deg2rad(30.0) )
+        qres = self.landmarks_.query(pose, self.cvt_, atol=np.deg2rad(60.0) ) # atol here, chosen based on fov # TODO : avoid hardcoding or figure out better heuristic
         pt2_lm, pos_lm, des_lm, var_lm, cnt_lm, lm_idx = qres
 
         print_ratio('visible landmarks', len(lm_idx), self.landmarks_.size_)
@@ -1090,10 +1099,6 @@ class ClassicalVO(object):
         if self.graph_.size_ <= 0:
             return
 
-        #if len(self.ba_ci_) <= 0 or len(self.ba_pos_) <= 0:
-        #    # unable to run BA (NO DATA!)
-        #    return
-
         # create np arrays
         p0, ci, li, p2 = self.graph_.query(win)
         _, vp, _ = self.s_hist_.query(win)
@@ -1103,7 +1108,7 @@ class ClassicalVO(object):
         n_l = self.landmarks_.size_
 
         # filter by landmarks that were actually observed
-        # TODO : filter by cnt>=2?
+        # TODO : filter by cnt >= 2?
         li_u, li = np.unique(li, return_inverse=True) # WARN: li override
         n_l = len(li_u)
         x0 = np.concatenate([
@@ -1114,52 +1119,40 @@ class ClassicalVO(object):
         # compute BA sparsity structure
         A  = self.sparsity_BA(n_c, n_l, ci, li)
 
-        #Ac = A.todense().astype(np.int32)
-        #Ap = Ap.astype(np.int32)
-        #print 'Computed'
-        #print Ac.shape
-        #print hash(Ac.tobytes())
-        #print 'Expected'
-        #print Ap.shape
-        #print hash(Ap.tobytes())
+        # EXPERIMENTAL: parameters scale, by inverse variance
+        # si = np.arange(3)
+        # vp = vp[:,si, si]
+        # vl = self.landmarks_.var[li_u][:, si, si]
+        # sc = 1.0 / np.concatenate([vp.ravel(), vl.ravel()])
+        # sc = sc / sc.sum() # normalize
 
-        # actually run BA
-        # TODO : use x_scale='jac'???
-
-        si = np.arange(3)
-        vp = vp[:,si, si]
-        vl = self.landmarks_.var[li_u][:, si, si]
-        sc = 1.0 / np.concatenate([vp.ravel(), vl.ravel()])
-
-        print 'initial squared residual sum'
-        print np.square(self.residual_BA(x0,
+        err0 = np.square(self.residual_BA(x0,
             n_c, n_l,
             ci, li, p2)).sum()
 
+        # actually run BA
+        # TODO : evaluate x_scale='jac' vs. x_scale=1.0 vs. x_scale = 1.0/v_var
         res = least_squares(
                 self.residual_BA, x0,
                 jac_sparsity=A,
-                verbose=2,
-                ftol=1e-4,
-                x_scale = sc,
-                #x_scale='jac', # -- landmark @ pose should be about equivalent
-                method='trf',
-                args=(n_c, n_l, ci, li, p2) )
+                #x_scale = sc,
+                x_scale='jac', # -- landmark @ pose should be about equivalent
+                args=(n_c, n_l, ci, li, p2),
+                **self.pBA_
+                )
 
         # format ...
         pos_opt = res.x[:n_c*3].reshape(-1,3)
         lmk_opt = res.x[n_c*3:].reshape(-1,3)
 
-        print 'final squared residual sum'
-        print np.square(self.residual_BA(res.x,
+        err1 = np.square(self.residual_BA(res.x,
             n_c, n_l,
             ci, li, p2)).sum()
 
-        print 'initial pose'
-        print p0
-
-        print 'optimized pose'
-        print pos_opt
+        #print 'initial pose'
+        #print p0
+        #print 'optimized pose'
+        #print pos_opt
 
         try:
             fig = self.tfig_
@@ -1170,9 +1163,10 @@ class ClassicalVO(object):
             ax = fig.gca()
 
         ax.cla()
-        ax.plot(p0[:,0], p0[:,1], 'k+', label='initial')
+        ax.plot(p0[:,0], p0[:,1], 'ko', label='initial')
         ax.plot(pos_opt[:,0], pos_opt[:,1], 'r+', label='optimized')
-        ax.set_title('Bundle Adjustment Results')
+        ax.set_title('Bundle Adjustment Results : {:e}->{:e}'.format( err0, err1 ))
+        ax.set_aspect('equal', 'datalim')
         ax.legend()
 
         # apply BA results
