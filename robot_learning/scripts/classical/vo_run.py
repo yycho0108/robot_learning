@@ -34,13 +34,24 @@ class CVORunner(object):
         self.scan_ = scan
 
         self.fig_ = fig = plt.figure(figsize=(16,12), dpi=60)
-        gridspec.GridSpec(3,3)
 
-        self.ax0_ = fig.add_subplot(3,3,1)
-        self.ax2_ = fig.add_subplot(3,3,4, projection='3d')
-        self.ax3_ = fig.add_subplot(3,3,7)
-        self.ax1_ = plt.subplot2grid((3,3), (0,1), colspan=2, rowspan=2)
-        self.ax4_ = plt.subplot2grid((3,3), (2,1), colspan=2)
+        nrow = 3
+        ncol = 5
+
+        gs = gridspec.GridSpec(nrow,ncol)
+        G = plt.subplot
+
+        self.ax0_ = G(gs[0, 0])
+        self.ax2_ = G(gs[1, 0], projection='3d')
+        self.ax3_ = G(gs[2, 0])
+        self.ax1_ = G(gs[0:2,1:3])
+        self.ax4_ = G(gs[2,1:3])
+
+        # auxiliary viz
+        self.ax5_ = G(gs[0,3])
+        self.ax6_ = G(gs[1,3])
+        self.ax7_ = G(gs[1,4])
+        self.ax8_ = G(gs[2,3:5])
 
         self.map_ = np.empty((0, 2), dtype=np.float32)
         self.vo_ = ClassicalVO(cinfo)
@@ -173,7 +184,11 @@ class CVORunner(object):
         else:
             # implicit : scale = None
             pass
-        res = vo(img, dt, scale=scale)
+
+        res = vo(
+                img, dt, scale=scale,
+                aux_viz=[self.ax5_, self.ax6_, self.ax7_, self.ax8_]
+                )
 
         if res is None:
             # vo aborted for some unknown reason
@@ -181,7 +196,6 @@ class CVORunner(object):
             return
 
         (aimg, vo_pos, pts_r, pts3, col_p, msg) = res
-        print('msg', msg)
         #print('(pred-gt) {} vs {}'.format(dps, dps_gt) )
         pos = vo_pos
 
@@ -198,7 +212,6 @@ class CVORunner(object):
 
         ### EVERYTHING FROM HERE IS PLOTTING + VIZ ###
         if viz:
-            print 'should show stuff'
             P = self.vo_.ukf_l_.P
             self.show(aimg, pts3, pts2, scan_c, pts_r, P, col_p, ('[%d/%d] '%(i,n)) + msg)
             plt.pause(0.001)

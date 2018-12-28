@@ -432,6 +432,9 @@ class VGraph(object):
     @property
     def p2(self):
         return self.p2_[:self.size_]
+    @property
+    def index(self):
+        return len(self.pose_)
 
 class StateHistory(object):
     """
@@ -546,9 +549,10 @@ class ClassicalVO(object):
         # TODO : tune nfeatures; empirically 2048 is pretty good
         orb = cv2.ORB_create(
                 nfeatures=2048,
-                scaleFactor=np.sqrt(2),
+                scaleFactor=1.2,#np.sqrt(2),??
                 nlevels=8,
-                scoreType=cv2.ORB_FAST_SCORE,
+                #scoreType=cv2.ORB_FAST_SCORE,
+                scoreType=cv2.ORB_HARRIS_SCORE,
                 )
         det = orb
         #det = cv2.FastFeatureDetector_create(
@@ -577,7 +581,7 @@ class ClassicalVO(object):
         # data cache + flags
         self.landmarks_ = Landmarks(des)
         self.hist_ = deque(maxlen=3)
-        self.prune_freq_ = 32
+        self.prune_freq_ = 16
 
         # pnp
         self.pnp_p_ = None
@@ -585,7 +589,7 @@ class ClassicalVO(object):
 
         # bundle adjustment + loop closure
         # sort ba pyramid by largest first
-        ba_pyr = [16, 64] # [16,64]
+        ba_pyr = [16] # [16,64]
         self.ba_pyr_  = np.sort(ba_pyr)[::-1]
         self.graph_ = VGraph()
 
@@ -597,6 +601,9 @@ class ClassicalVO(object):
         self.ukf_l_  = build_ukf() # local incremental UKF
         self.ukf_h_  = build_ukf() # global historic UKF
         self.s_hist_ = StateHistory(maxlen=self.ba_pyr_.max()+1) # stores cache of prior.
+
+        # logging / visualization
+        self.lm_cnt_ = []
 
     def track(self, img1, img2, pt1, pt2=None,
             thresh=1.0
@@ -1123,7 +1130,7 @@ class ClassicalVO(object):
 
         return J_res
 
-    def run_BA(self, win):
+    def run_BA(self, win, ax=None):
         """
         Sources:
             https://scipy-cookbook.readthedocs.io/items/bundle_adjustment.html
@@ -1216,21 +1223,14 @@ class ClassicalVO(object):
             ci, li, p2)).mean())
         #print err0, err1
 
-        try:
-            fig = self.tfig_
-            ax  = fig.gca()
-        except Exception:
-            fig = plt.figure()
-            self.tfig_ = fig
-            ax = fig.gca()
-
-        ax.cla()
-        ax.plot(p0[:,0], p0[:,1], 'ko-', label='initial')
-        ax.plot(pos_opt[:,0], pos_opt[:,1], 'r+-', label='optimized')
-        ax.set_title('Bundle Adjustment Results : {:e}->{:e}'.format( err0, err1 ))
-        ax.axis('equal')
-        ax.set_aspect('equal', 'datalim')
-        ax.legend()
+        if ax is not None:
+            ax.cla()
+            ax.plot(p0[:,0], p0[:,1], 'ko-', label='initial')
+            ax.plot(pos_opt[:,0], pos_opt[:,1], 'r+-', label='optimized')
+            ax.set_title('BA : {:.3e}->{:.3e}'.format( err0, err1 ))
+            ax.axis('equal')
+            ax.set_aspect('equal', 'datalim')
+            ax.legend()
 
         # apply BA results
         # TODO : can we INPUT variance information to scipy.least_squares?
@@ -1633,7 +1633,9 @@ class ClassicalVO(object):
 
         return idx_in,  pt3, R, t
 
-    def __call__(self, img, dt, scale=None):
+    def __call__(self, img, dt, scale=None,
+            aux_viz=None
+            ):
         msg = ''
         # suffix designations:
         # o/0 = origin (i=0)
@@ -1849,26 +1851,29 @@ class ClassicalVO(object):
         self.graph_.add_pos(pose_c_r.copy())
 
         # prune
-        idx = len(self.graph_.pose_)
+        idx = self.graph_.index
         if (idx>=self.prune_freq_) and (idx%self.prune_freq_)==0 :
-            # prep pruning figure
-            # draw pruned graph?
-            try:
-                #ax = self.gfig.gca()
-                ax = self.gfig.get_axes()
-            except Exception:
-                self.gfig, ax = plt.subplots(1,2)
-            [e.cla() for e in ax]
-            # TODO : evaluate pre-prune vs. post-prune for BA
-            # NOTE : May not even matter, given BA appears to do almost nothing.
-            # pre-prune (prior to BA)
-            self.graph_.draw(ax[0], self.cvt_, self.landmarks_) # pre-prune
-            plt.pause(0.001)
+            # 1. prep viz (if available)
+            ax = None
+            if aux_viz is not None:
+                ax = [aux_viz[1], aux_viz[2]]
+                [e.cla() for e in ax]
+            # 2. draw pre-prune
+            if ax is not None:
+                self.graph_.draw(ax[0], self.cvt_, self.landmarks_) # pre-prune
+            # 3. prune
             keep_idx = self.landmarks_.prune()
             self.graph_.prune(keep_idx)
-            self.graph_.draw(ax[1], self.cvt_, self.landmarks_) # post-prune
-            self.gfig.canvas.draw()
-            plt.pause(0.001)
+            # 4. draw post-prune
+            if ax is not None:
+                self.graph_.draw(ax[1], self.cvt_, self.landmarks_) # post-prune
+
+        # show landmark statistics
+        self.lm_cnt_.append( self.landmarks_.size_ )
+        ax = aux_viz[3]
+        ax.cla()
+        ax.plot(self.lm_cnt_)
+        ax.set_title('# Landmarks Stat')
 
         # NOTE!! this vvvv must be called after all cache_BA calls
         # have been completed.
@@ -1890,7 +1895,8 @@ class ClassicalVO(object):
             if run_ba:
                 # run BA every [win] frames
                 print('Running BA @ scale={}'.format(ba_win))
-                ba_res = self.run_BA(ba_win)
+                ax = (None if (aux_viz is None) else aux_viz[0])
+                ba_res = self.run_BA(ba_win, ax=ax)
                 if ba_res is not None:
                     # "historic" UKF
                     xs, Ps, dts = self.s_hist_.query(ba_win)
