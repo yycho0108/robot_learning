@@ -653,27 +653,20 @@ class ClassicalVO(object):
         idx = idx[msk]
         return pt2, idx
 
-    def proc_f2m(self, pose, scale,
-            des_p, des_c,
-            idx_t, idx_e, idx_r,
-            pt2_u_p, pt2_u_c,
-            pt3,
-            img_c, pt2_c,
-            kpt_p,
-            msg
+    def proc_f2m(self,
+            pose, scale, pt3,
+            kpt_p, des_p,
+            pt2_c, pt2_u_c,
+            img_c,
+            msg=''
             ):
+        """
+        """
         # frame-to-map processing
         # (i.e. uses landmark data)
 
         # build index combinationss
         # TODO : tracking these indices are really getting quite ridiculous.
-        idx_te = idx_t[idx_e]
-        idx_ter = idx_te[idx_r]
-        idx_er = idx_e[idx_r]
-
-        # extract data
-        kpt_p_m = kpt_p[idx_ter]
-        des_p_m = des_p[idx_ter]
 
         # query visible points from landmarks database
         # atol here, chosen based on fov
@@ -690,13 +683,13 @@ class ClassicalVO(object):
         # select useful descriptor based on current viewpoint
         i1, i2 = self.cvt_.des_des_to_match(
                 des_lm,
-                des_p_m, cross=(self.flag_ & ClassicalVO.VO_USE_MXCHECK)
+                des_p, cross=(self.flag_ & ClassicalVO.VO_USE_MXCHECK)
                 )
 
         if len(lm_idx) > 16: # TODO : MAGIC
             # filter correspondences by Emat consensus
             # first-order estimate: image-coordinate distance-based filter
-            cor_delta = (pt2_lm[i1] - pt2_u_c[idx_er][i2])
+            cor_delta = (pt2_lm[i1] - pt2_u_c[i2])
             cor_delta = np.linalg.norm(cor_delta, axis=-1)
             lm_msk_d = (cor_delta < 128.0)  # TODO : MAGIC
             lm_idx_d = np.where(lm_msk_d)[0]
@@ -708,7 +701,7 @@ class ClassicalVO(object):
                 # TODO : take advantage of the Emat here to some use?
                 _, lm_msk_e = cv2.findEssentialMat(
                         pt2_lm[i1][lm_idx_d],
-                        pt2_u_c[idx_er][i2][lm_idx_d],
+                        pt2_u_c[i2][lm_idx_d],
                         self.K_,
                         **self.pEM_)
             except Exception as e:
@@ -833,7 +826,7 @@ class ClassicalVO(object):
             # Add correspondences to BA Cache
             # wow, that's a lot of chained indices.
             self.graph_.append(u_idx,
-                    pt2_u_c[idx_er[i2[lm_idx_e]]]
+                    pt2_u_c[i2[lm_idx_e]]
                     )
 
         # flag to decide whether to run PNP
@@ -848,7 +841,7 @@ class ClassicalVO(object):
             pt_map = pos_lm[i1[lm_idx_e]] # --> "REAL" map from old observations
             #pt_map = p_lm_v2_0 # --> "FAKE" map from current observation
             #pt_map = lerp(pos_lm[i1[lm_idx_e]], p_lm_v2_0, 0.15) # compromise?
-            pt_cam = pt2_u_c[idx_er[i2[lm_idx_e]]]
+            pt_cam = pt2_u_c[i2[lm_idx_e]]
 
             # filter by above-GP features
             # (TODO : hack because ground plane tends to be somewhat homogeneous
@@ -905,7 +898,7 @@ class ClassicalVO(object):
         # apply a lot more lenient matcher
         i1_lax, i2_lax = self.cvt_.des_des_to_match(
                 des_lm,
-                des_p_m,
+                des_p,
                 lowe=1.0,
                 maxd=128.0,
                 cross=False
@@ -918,7 +911,7 @@ class ClassicalVO(object):
         cnt_lm[i1_lax] -= 1
 
         if insert_lm:
-            lm_sel_msk = np.zeros(len(des_p_m), dtype=np.bool)
+            lm_sel_msk = np.zeros(len(des_p), dtype=np.bool)
             lm_sel_msk[i2_lax] = True
             lm_new_msk = ~lm_sel_msk
             lm_new_idx = np.where(lm_new_msk)[0]
@@ -930,7 +923,7 @@ class ClassicalVO(object):
                 if len(lm_new_idx) > 0:
                     neigh = NearestNeighbors(n_neighbors=1)
                     neigh.fit(pt2_lm)
-                    d, _ = neigh.kneighbors(pt2_u_c[idx_e][idx_r][lm_new_idx], return_distance=True)
+                    d, _ = neigh.kneighbors(pt2_u_c[lm_new_idx], return_distance=True)
                     msk_knn = (d < 16.0)[:,0] # TODO : magic number
 
                     # dist to nearest landmark, less than 20px
@@ -947,9 +940,9 @@ class ClassicalVO(object):
                 len(self.landmarks_.pos), len(self.landmarks_.pos)+n_new
                 ))
             pt3_new_c = scale * pt3[lm_new_idx][idx_n]
-            des_new = des_p_m[lm_new_idx][idx_n]
-            kpt_new = kpt_p_m[lm_new_idx][idx_n]
-            col_new = get_points_color(img_c, pt2_c[idx_t][idx_e][idx_r][lm_new_idx][idx_n], w=1)
+            des_new = des_p[lm_new_idx][idx_n]
+            kpt_new = kpt_p[lm_new_idx][idx_n]
+            col_new = get_points_color(img_c, pt2_c[lm_new_idx][idx_n], w=1)
 
             # append new landmarks ...
             # TODO : the problem here is that the landmarks are inserted eagerly,
@@ -967,12 +960,15 @@ class ClassicalVO(object):
             # WARN : pt2_u_c = undistort( pt2_c[idx_t])
             # for whatever reason, indexing was somewhat messed up.
             self.graph_.append(np.arange(li_0, li_1),
-                    pt2_u_c[idx_e][idx_r][lm_new_idx][idx_n]
+                    pt2_u_c[lm_new_idx][idx_n]
                     )
 
         return scale, msg
 
     def pRt2pose(self, p, R, t):
+        """
+        returns pose updated with input rotation + translation.
+        """
         x, y, h = p
 
         dh = tx.euler_from_matrix(R)[2]
@@ -1550,6 +1546,93 @@ class ClassicalVO(object):
             s_ratio = np.log([s_b/sol_1, s_b/sol_2])
             return [sol_1,sol_2][np.argmin(np.abs(s_ratio))]
 
+    def run_EM(self, 
+            pt2_u_c, pt2_u_p,
+            no_gp = True
+            ):
+
+        if no_gp:
+            # pre-filter by ymin
+            y_gp = self.y_GP
+            # NOTE: is it necessary to also check pt2_u_p?
+            # probably gives similar results; skip.
+            ngp_msk = (pt2_u_c[:,1] <= y_gp)
+            ngp_idx = np.where(ngp_msk)[0]
+            pt2_u_c = pt2_u_c[ngp_idx]
+            pt2_u_p = pt2_u_p[ngp_idx]
+
+        # == opt 1 : essential ==
+        # NOTE ::: findEssentialMat() is run on ngp_idx (Not tracking Ground Plane)
+        # Because the texture in the test cases were repeatd,
+        # and was prone to mis-identification of transforms.
+        E, msk_e = cv2.findEssentialMat(pt2_u_c, pt2_u_p, self.K_,
+                **self.pEM_)
+        msk_e = msk_e[:,0].astype(np.bool)
+        idx_e = np.where(msk_e)[0]
+        print_ratio('e_in', len(idx_e), msk_e.size)
+        F = self.cvt_.E_to_F(E)
+        # == essential over ==
+
+        if self.flag_ & ClassicalVO.VO_USE_HOMO:
+            # opt 2 : homography
+            H, msk_h = cv2.findHomography(pt2_u_c, pt2_u_p,
+                    method=self.pEM_['method'],
+                    ransacReprojThreshold=self.pEM_['threshold']
+                    )
+            msk_h = msk_h[:,0].astype(np.bool)
+            idx_h = np.where(msk_h)[0]
+            print_ratio('h_in', len(idx_h), msk_h.size)
+
+            # compare errors
+            sH, msk_sh = score_H(pt2_u_c, pt2_u_p, H, self.cvt_)
+            sF, msk_sf = score_F(pt2_u_c, pt2_u_p, F, self.cvt_)
+
+            r_H = (sH / (sH + sF))
+            print_ratio('RH', sH, sH+sF)
+
+        use_h = False
+        if self.flag_ & ClassicalVO.VO_USE_HOMO:
+            # TODO : "magic" determinant number based on ORB-SLAM Paper
+            use_h = (r_H > 0.45)
+
+        # TODO : option : filter based on input guess R,t
+        # maybe a good idea.
+
+        idx_p = None
+        if use_h:
+            # use Homography Matrix for pose
+            #idx_h = idx_h[msk_sh]
+            res_h, Hr, Ht, Hn = cv2.decomposeHomographyMat(H, self.K_)
+            print Hr[0], Ht[0], np.linalg.norm(Hr[0]), np.linalg.norm(Ht[0])
+            Ht = np.float32(Ht)
+
+            # NOTE: still don't know why Ht is not normalized.
+            Ht /= np.linalg.norm(Ht, axis=(1,2), keepdims=True)
+
+            perm = zip(Hr,Ht)
+            n_in, R, t, msk_r, pt3 = recover_pose_from_RT(perm, self.K_,
+                    pt2_u_c[idx_h], pt2_u_p[idx_h], log=False)
+            print_ratio('homography', len(idx_h), msk_h.size)
+
+            idx_p = idx_h
+        else:
+            # use Essential Matrix for pose
+            # TODO : specify z_min/z_max?
+            n_in, R, t, msk_r, pt3 = recover_pose(E, self.K_,
+                    pt2_u_c[idx_e], pt2_u_p[idx_e], log=False,
+                    )
+            print_ratio('essentialmat', len(idx_e), msk_e.size)
+            idx_p = idx_e
+
+        # idx_r = which points were used for pose reconstruction
+        pt3 = pt3.T
+        idx_r = np.where(msk_r)[0]
+        print_ratio('triangulation', len(idx_r), msk_r.size)
+
+        idx_in = idx_p[idx_r] # overall, which indices were used?
+
+        return idx_in,  pt3, R, t
+
     def __call__(self, img, dt, scale=None):
         msg = ''
         # suffix designations:
@@ -1585,20 +1668,25 @@ class ClassicalVO(object):
 
         # frame-to-frame processing
         pt2_p = self.cvt_.kpt_to_pt(kpt_p)
-        pt2_l = self.landmarks_.track_points()
-
-        # first off, track everything
-        self.track(img_p, img_c, pt2_p)
-        self.track(img_p, img_c, pt2_l)
-
-        #pt2_p, pt2_l = self.suppress_kpt(pt2_p, pt2_l)
+        idx_l_p, pt2_l = self.landmarks_.track_points()
 
         # == obtain next-frame keypoints ==
         if self.flag_ & ClassicalVO.VO_USE_TRACK:
             # opt1 : points by track
             pt2_c, idx_t = self.track(img_p, img_c, pt2_p)
+            pt2_c_l, idx_t_l = self.track(img_p, img_c, pt2_l)
+
+            # mark points from landmarks that failed to track
+            nidx_l = np.ones(len(pt2_l), dtype=np.bool)
+            nidx_l[idx_t_l] = False
+            self.landmarks_.untrack(idx_l_p[nidx_l])
+
+            # non-max suppression on remaining points
+            # NOTE: requires refactoring indexing architecture
+            # pt2_c, pt2_c_l = self.suppress_kpt(pt2_c, pt2_c_l)
         else:
             # opt2 : points by match
+            # TODO : not currently supporting landmarks extension
             i1, i2 = self.cvt_.des_des_to_match(des_p, des_c,
                     cross=(self.flag_ & ClassicalVO.VO_USE_MXCHECK)
                     )
@@ -1615,6 +1703,7 @@ class ClassicalVO(object):
         # TODO : also track landmark points?
         # =================================
 
+        # undistort
         pt2_u_p = self.cvt_.pt2_to_pt2u(pt2_p[idx_t])
         pt2_u_c = self.cvt_.pt2_to_pt2u(pt2_c[idx_t])
 
@@ -1638,99 +1727,13 @@ class ClassicalVO(object):
             pt2_u_c = np.squeeze(pt2_u_c, axis=0)
             pt2_u_p = np.squeeze(pt2_u_p, axis=0)
 
-        # filter by ymin
-        y_gp = self.y_GP
-        ngp_msk = (pt2_u_c[:,1] <= y_gp)
-        ngp_idx = np.where(ngp_msk)[0]
+        # unscaled camera pose + reconstructed points from triangulation
+        idx_e, pt3, R, t = self.run_EM(pt2_u_c, pt2_u_p, no_gp=False)
 
-        # == opt 1 : essential ==
-        # NOTE ::: findEssentialMat() is run on ngp_idx (Not tracking Ground Plane)
-        # Because the texture in the test cases were repeatd,
-        # and was prone to mis-identification of transforms.
-
-        try:
-            # TODO : is ngp useful at all?
-            #raise ValueError("TEST")
-            E, msk_e = cv2.findEssentialMat(pt2_u_c[ngp_idx], pt2_u_p[ngp_idx], self.K_,
-                    **self.pEM_)
-            msk_e = msk_e[:,0].astype(np.bool)
-            idx_e = np.where(msk_e)[0]
-            idx_e = ngp_idx[idx_e] # << important when using ngp_idx
-            print_ratio('e_in', len(idx_e), msk_e.size)
-        except Exception as e:
-            print('NGP-Emat failure : {}'.format(e))
-            # soft fail
-            # TODO : maybe it's better to fail entirely and
-            # let ground-plane homography handle the situation?
-            idx_e = np.int32([])
-
-        if len(idx_e) <= 32:
-            # failed, use the whole data
-            E, msk_e = cv2.findEssentialMat(pt2_u_c, pt2_u_p, self.K_,
-                    **self.pEM_)
-            msk_e = msk_e[:,0].astype(np.bool)
-            idx_e = np.where(msk_e)[0]
-            print_ratio('e_in (whole)', len(idx_e), msk_e.size)
-        F = self.cvt_.E_to_F(E)
-        # == essential over ==
-
-        if self.flag_ & ClassicalVO.VO_USE_HOMO:
-            # opt 2 : homography
-            H, msk_h = cv2.findHomography(pt2_u_c, pt2_u_p,
-                    method=self.pEM_['method'],
-                    ransacReprojThreshold=self.pEM_['threshold']
-                    )
-            msk_h = msk_h[:,0].astype(np.bool)
-            idx_h = np.where(msk_h)[0]
-            print_ratio('h_in', len(idx_h), msk_h.size)
-
-            # compare errors
-            sH, msk_sh = score_H(pt2_u_c[idx_h], pt2_u_p[idx_h], H, self.cvt_)
-            sF, msk_sf = score_F(pt2_u_c[idx_e], pt2_u_p[idx_e], F, self.cvt_)
-
-            r_H = (sH / (sH + sF))
-            print_ratio('RH', sH, sH+sF)
-
-        use_h = False
-        if self.flag_ & ClassicalVO.VO_USE_HOMO:
-            use_h = (r_H > 0.45)# and ( len(idx_h) > len(idx_e) )
-
-        if use_h:
-            ## homography
-            #idx_h = idx_h[msk_sh]
-            res_h, Hr, Ht, Hn = cv2.decomposeHomographyMat(H, self.K_)
-            print Hr[0], Ht[0], np.linalg.norm(Hr[0]), np.linalg.norm(Ht[0])
-            Ht = np.float32(Ht)
-
-            perm = zip(Hr,Ht)
-            n_in, R, t, msk_r, pt3 = recover_pose_from_RT(perm, self.K_,
-                    pt2_u_c[idx_h], pt2_u_p[idx_h], log=False)
-            #t /= np.linalg.norm(t)
-            print_ratio('homography', len(idx_h), msk_h.size)
-            # TODO : fix legacy variable name
-            idx_e = idx_h
-        else:
-            #idx_e = idx_e[msk_sf]
-            n_in, R, t, msk_r, pt3 = recover_pose(E, self.K_,
-                    pt2_u_c[idx_e], pt2_u_p[idx_e], log=False,
-                    #z_min = 0.01 / scale,
-                    #z_max = 100.0 / scale
-                    #z_max = 5000.0
-                    # = usually ~10m
-                    )
-            print_ratio('essentialmat', len(idx_e), msk_e.size)
-
-        idx_r = np.where(msk_r)[0]
-        pt3 = pt3.T
-        print_ratio('triangulation', len(idx_r), msk_r.size)
-
-        # draw matches
+        # collect used points for matches + draw
         msk = np.zeros(len(pt2_p), dtype=np.bool)
-        msk[idx_t[idx_e[idx_r]]] = True
-        #print('final msk : {}/{}'.format(msk.sum(), msk.size))
+        msk[idx_t[idx_e]] = True
         mim = drawMatches(img_p, img_c, pt2_p, pt2_c, msk)
-        # TODO (urgent) : fix current scaling architecture
-        # I think it theoretically, works, but is quite stupid.
 
         # Estimate #1 : Based on UKF Motion
         R_c, t_c = R, t # Camera-frame u-trans
@@ -1814,13 +1817,15 @@ class ClassicalVO(object):
             # TODO : smarter way to incorporate ground-plane scale information??
             # estimate scale based on current pose guess
             # and recompute rectified pose_c_r
-            scale_c, msg = self.proc_f2m(pose_c_r, scale_c,
-                    des_p, des_c,
-                    idx_t, idx_e, idx_r,
-                    pt2_u_p, pt2_u_c,
-                    pt3,
-                    img_c, pt2_c,
-                    kpt_p,
+
+            # currently valid indices
+            idx_te = idx_t[idx_e]
+
+            scale_c, msg = self.proc_f2m(
+                    pose_c_r, scale_c, pt3,
+                    kpt_p[idx_te], des_p[idx_te],
+                    pt2_c[idx_te], pt2_u_c[idx_e],
+                    img_c, 
                     msg
                     )
 

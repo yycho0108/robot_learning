@@ -525,7 +525,10 @@ class Landmarks(object):
 
     def track_points(self):
         t_idx = np.where(self.trk)[0]
-        return self.kpt_[t_idx, :2]
+        return t_idx, self.kpt_[t_idx, :2]
+
+    def untrack(self, idx):
+        self.trk[idx] = False
 
     @property
     def pos(self):
