@@ -25,53 +25,78 @@ def recover_pose_from_RT(perm, K,
         z_max = np.inf,
         return_index=False,
         log=False,
+        threshold=0.8,
         guess=None
         ):
     P1 = np.eye(3,4)
     P2 = np.eye(3,4)
 
+    sel   = 0
+    scores = [0.0 for _ in perm]
     msks = [None for _ in perm]
     pt3s = [None for _ in perm]
-
-    sel   = 0
     ctest = -np.inf
 
     for i, (R, t) in enumerate(perm):
-        #print '==== recover_pose validation ===='
+        # Compute Projection Matrix
         P2[:3,:3] = R
         P2[:3,3:] = t.reshape(3,1)
-
-        KP1 = K.dot(P1)
+        KP1 = K.dot(P1) # NOTE : this could be unnecessary, idk.
         KP2 = K.dot(P2)
 
+        # Triangulate Points
         pth_a = cv2.triangulatePoints(
                 KP1, KP2,
                 pt1[None,...],
                 pt2[None,...]).astype(np.float32)
         pth_a /= pth_a[3:]
 
+        # transform points into camera coordinates
         pt3_a = P1.dot(pth_a)
         pt3_b = P2.dot(pth_a)
 
-        pt3s[i] = pt3_a
-
+        # apply z-value (depth) filter
         za, zb = pt3_a[2], pt3_b[2]
-
         msk_i = np.logical_and.reduce([
             z_min < za,
             za < z_max,
             z_min < zb,
             zb < z_max
             ])
-        msks[i] = msk_i
         c = msk_i.sum()
+
+        # store data
+        pt3s[i] = pt3_a # NOTE: a, not b
+        msks[i] = msk_i
+        scores[i] = ( float(msk_i.sum()) / msk_i.size)
+
         if log:
             print('[{}] {}/{}'.format(i, c, msk_i.size))
             print_Rt(R, t)
 
-        if c > ctest:
-            sel = i
-            ctest = c
+    soft_sel = np.greater(scores, threshold)
+    if (guess is not None) and soft_sel.sum() >= 2:
+        # More than two "valid" candidates, apply guess
+        soft_idx = np.where(soft_sel)[0]
+        R_g, t_g = guess # TODO : currently, R-guess is not supported.
+        t_g_u = np.reshape(t_g, 3) / np.linalg.norm(t_g) # convert guess to uvec
+
+        soft_scores = []
+        for i in soft_idx:
+            # filter by alignment with current guess-translational vector
+            R_i, t_i = perm[i]
+            t_i_u = np.reshape(t_i) / np.linalg.norm(t_i)
+            score_i = np.sum(t_g_u * t_i_u) # dot product
+            soft_scores.append(score_i)
+
+        # finalize selection
+        sel = soft_idx[np.argmax(soft_scores)]
+
+        if True:
+            print('\t\tresolving ambiguity with guess:')
+            print('\t\tselected i={}, {}'.format(sel, perm[sel]))
+    else:
+        sel = np.argmax(scores)
 
     R, t = perm[sel]
     msk = msks[sel]
@@ -87,6 +112,8 @@ def recover_pose(E, K,
         pt1, pt2,
         z_min = np.finfo(np.float32).eps,
         z_max = np.inf,
+        threshold=0.8,
+        guess=None,
         log=False
         ):
     R1, R2, t = cv2.decomposeEssentialMat(E)
@@ -98,6 +125,8 @@ def recover_pose(E, K,
     return recover_pose_from_RT(perm, K,
             pt1, pt2,
             z_min, z_max,
+            threshold=threshold,
+            guess=guess,
             log=log
             )
 

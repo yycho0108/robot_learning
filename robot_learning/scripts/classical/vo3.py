@@ -1306,15 +1306,14 @@ class ClassicalVO(object):
 
     def run_GP(self, pt_c, pt_p, pt3=None,
             scale=None,
-            R=None,
-            t=None
+            guess=None
             ):
         """
         Scale estimation based on locating the ground plane.
         if scale:=None, scale based on best z-plane will be returned.
         """
         if not (self.flag_ & ClassicalVO.VO_USE_SCALE_GP):
-            return scale, R, t
+            return None, scale, guess
 
         camera_height = self.T_c2b_[2, 3]
 
@@ -1333,7 +1332,7 @@ class ClassicalVO(object):
 
             if len(gp_idx) <= 3: # TODO : magic
                 # too few points, abort gp estimate
-                return None, scale, R, t
+                return None, scale, guess
 
             # update pt_c and pt_p
             pt_c = pt_c[gp_idx]
@@ -1376,7 +1375,7 @@ class ClassicalVO(object):
 
             if len(idx_h) < 16: # TODO : magic number
                 # insufficient # of points -- abort
-                return None, scale, R, t
+                return None, scale, guess
 
 
             # update pt_c and pt_p
@@ -1400,12 +1399,12 @@ class ClassicalVO(object):
             z_idx = np.where(z_val)[0]
             if len(z_idx) <= 0:
                 # abort ground-plane estimation.
-                return None, scale, R, t
+                return None, scale, guess
             # NOTE: honestly don't know why I need to pre-filter by z-norm at all
             perm = zip(Hr,Ht)
             perm = [perm[i] for i in z_idx]
             n_in, R, t, msk_r, gpt3, sel = recover_pose_from_RT(perm, self.K_,
-                    pt_c, pt_p, return_index=True, log=False)
+                    pt_c, pt_p, return_index=True, guess=guess, log=False)
             gpt3 = gpt3.T # TODO : gpt3 not used
 
             # convert w.r.t base_link
@@ -1416,7 +1415,9 @@ class ClassicalVO(object):
             if np.isfinite(scale_gp) and scale_gp > 0:
                 # project just in case scale < 0...
                 scale = scale_gp
-            return H, scale, R, t
+
+            # this is functionally the only time it's considered "success".
+            return H, scale, (R, t)
         else:
             # opt2 : directly estimate ground plane by simple height filter
             # only works with "reasonable" initial scale guess.
@@ -1443,7 +1444,7 @@ class ClassicalVO(object):
                     print_ratio('scale_gp', scale_gp, scale)
                     # use gp scale instead
                     scale = scale_gp
-        return None, scale, R, t
+        return None, scale, guess
 
     def run_PNP(self, pt3_map, pt2_cam, pose,
             p_min=16, msg=''):
@@ -1570,8 +1571,10 @@ class ClassicalVO(object):
             #raise ValueError("solution somehow does not exist")
             #print sol_1
             #print sol_2
-            return 0.0
-
+            #return 0.0
+            # WHAT SHOULD I DO? rely on the fact that scale_b ~~ scale_c?
+            # NOTE : this is wrong.
+            return s_b
 
         if sol_1 < 0.0:
             return sol_2
@@ -1597,7 +1600,8 @@ class ClassicalVO(object):
 
     def run_EM(self, 
             pt2_u_c, pt2_u_p,
-            no_gp = True
+            no_gp = True,
+            guess=None
             ):
 
         if no_gp:
@@ -1660,16 +1664,17 @@ class ClassicalVO(object):
 
             perm = zip(Hr,Ht)
             n_in, R, t, msk_r, pt3 = recover_pose_from_RT(perm, self.K_,
-                    pt2_u_c[idx_h], pt2_u_p[idx_h], log=False)
+                    pt2_u_c[idx_h], pt2_u_p[idx_h], guess=guess,
+                    log=False)
             print_ratio('homography', len(idx_h), msk_h.size)
 
             idx_p = idx_h
         else:
             # use Essential Matrix for pose
             # TODO : specify z_min/z_max?
-            print 'RECOVER POSE EMAT'
             n_in, R, t, msk_r, pt3 = recover_pose(E, self.K_,
-                    pt2_u_c[idx_e], pt2_u_p[idx_e], log=False
+                    pt2_u_c[idx_e], pt2_u_p[idx_e], guess=guess,
+                    log=False
                     )
             print_ratio('essentialmat', len(idx_e), msk_e.size)
             idx_p = idx_e
@@ -1717,6 +1722,33 @@ class ClassicalVO(object):
                 dt)
 
         pose_p, pose_c, scale = self.run_UKF(dt, scale)
+
+        # Estimate #0 : Based on UKF Motion
+        # TODO : is it possible to pass R_c/t_c
+        # as initial guesses to recoverPose()?
+
+        # construct t_b/t_c guess
+        dx, dy, dh = (pose_c - pose_p)
+        R_b = tx.euler_matrix(0, 0, dh)[:3,:3]
+        t_b = np.reshape([dx, dy, 0], (3,1))
+
+        T_b2b1 = np.eye(4)
+        T_b2b1[:3,:3] = R_b
+        T_b2b1[:3,3:] = t_b
+        T_c2c1 = np.linalg.multi_dot([
+            self.cvt_.T_b2c_,
+            T_b2b1,
+            self.cvt_.T_c2b_
+            ])
+        R_c = T_c2c1[:3,:3]
+        t_c = T_c2c1[:3,3:]
+
+        # cache results
+        R_c0 = R_c
+        R_b0 = R_b
+        t_c0 = t_c
+        t_b0 = t_b
+        # == #0 finished ==
 
         # frame-to-frame processing
         pt2_p = self.cvt_.kpt_to_pt(kpt_p)
@@ -1780,44 +1812,19 @@ class ClassicalVO(object):
             pt2_u_p = np.squeeze(pt2_u_p, axis=0)
 
         # unscaled camera pose + reconstructed points from triangulation
-        idx_e, pt3, R_em, t_em = self.run_EM(pt2_u_c, pt2_u_p, no_gp=False)
+        idx_e, pt3, R_em, t_em = self.run_EM(pt2_u_c, pt2_u_p, no_gp=False,
+                guess=(R_c0, t_c0)
+                )
 
         # collect used points for matches + draw
         msk = np.zeros(len(pt2_p), dtype=np.bool)
         msk[idx_t[idx_e]] = True
         mim = drawMatches(img_p, img_c, pt2_p, pt2_c, msk)
 
-        # Estimate #0 : Based on UKF Motion
-        # TODO : is it possible to pass R_c/t_c
-        # as initial guesses to recoverPose()?
 
-        # construct t_b/t_c guess
-        dx, dy, dh = (pose_c - pose_p)
-        R_b = tx.euler_matrix(0, 0, dh)[:3,:3]
-        t_b = np.reshape([dx, dy, 0], (3,1))
-
-        T_b2b1 = np.eye(4)
-        T_b2b1[:3,:3] = R_b
-        T_b2b1[:3,3:] = t_b
-        T_c2c1 = np.linalg.multi_dot([
-            self.cvt_.T_b2c_,
-            T_b2b1,
-            self.cvt_.T_c2b_
-            ])
-        R_c = T_c2c1[:3,:3]
-        t_c = T_c2c1[:3,3:]
-
-        # cache results
-        R_c0 = R_c
-        R_b0 = R_b
-        t_c0 = t_c
-        t_b0 = t_b
-        # == #0 finished ==
 
         # Estimate #1 : Based on EM Results
         R_c, t_c_u = R_em, t_em # Camera-frame u-trans
-        R_c = R_c.copy()
-        t_c = t_c.copy()
         scale_b = np.linalg.norm(t_b) # current scale estimate
         print 'scale_b #0', scale_b
         scale_c = self.scale_c(scale_b, R_c, t_c_u,
@@ -1826,7 +1833,7 @@ class ClassicalVO(object):
         t_c = t_c_u * scale_c
 
         T_c2c1 = np.eye(4)
-        T_c2c1[:3,:3] = R_c.copy()
+        T_c2c1[:3,:3] = R_c
         T_c2c1[:3,3:] = t_c.reshape(3,1)
 
         T_b2b1 = np.linalg.multi_dot([
@@ -1852,8 +1859,9 @@ class ClassicalVO(object):
         # <<-- initial guess, provided defaults in case of abort
         t_c1_u = (t_c1 / scale_c if scale_c >= np.finfo(np.float32).eps else t_c1)
 
-        H, scale_c2, R_c, t_c_u = self.run_GP(pt2_u_c, pt2_u_p, pt3,
-                scale_c, R_c, t_c1_u) # note returned t_c is uvec
+        H, scale_c2, (R_c, t_c_u) = self.run_GP(pt2_u_c, pt2_u_p, pt3,
+                scale_c, guess=(R_c1, t_c1_u)
+                ) # note returned t_c is uvec
         t_c = t_c_u * scale_c2 # apply scale
         print 'scale_c #2', scale_c2
 
