@@ -12,6 +12,7 @@ from collections import namedtuple, deque
 from tf import transformations as tx
 import cv2
 import numpy as np
+import sys
 
 from vo_common import recover_pose, drawMatches, recover_pose_from_RT
 from vo_common import robust_mean, oriented_cov, show_landmark_2d
@@ -519,7 +520,10 @@ class ClassicalVO(object):
                     translate=[0.174,0,0.113])
 
         # define "system" parameters
-        self.pEM_ = dict(method=cv2.FM_RANSAC, prob=0.999, threshold=0.1)
+        self.pEM_ = dict(
+                method=cv2.FM_RANSAC,
+                prob=0.999,
+                threshold=1.0)
         self.pLK_ = dict(winSize = (32,16),
                 maxLevel = 4, # == effective winsize up to 32*(2**4) = 512x256
                 criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 100, 0.003),
@@ -527,13 +531,14 @@ class ClassicalVO(object):
                 minEigThreshold = 1e-3 # TODO : disable eig?
                 )
         self.pBA_ = dict(
-                ftol=1e-9,
-                xtol=np.finfo(float).eps,
+                ftol=1e-4,
+                #xtol=np.finfo(float).eps,
                 loss='huber',
+                max_nfev=1024,
                 method='trf',
                 verbose=2,
+                tr_solver='lsmr',
                 )
-
         self.pPNP_ = dict(
                 iterationsCount=10000,
                 reprojectionError=0.5,
@@ -583,7 +588,7 @@ class ClassicalVO(object):
         self.hist_ = deque(maxlen=3)
         self.prune_freq_ = 16
 
-        # pnp
+        # pnp (NOTE : temporary for viz + should be deleted)
         self.pnp_p_ = None
         self.pnp_h_ = None
 
@@ -598,12 +603,19 @@ class ClassicalVO(object):
         # TODO : evaluate EKF vs. UKF? empirically similar.
         # TODO : rename such that ukf/ekf naming is not confusing.
         # to avoid bugs due to circular buffer.
-        self.ukf_l_  = build_ukf() # local incremental UKF
-        self.ukf_h_  = build_ukf() # global historic UKF
-        self.s_hist_ = StateHistory(maxlen=self.ba_pyr_.max()+1) # stores cache of prior.
+        self.ukf_l_  = build_ekf() # local incremental UKF
+        self.ukf_h_  = build_ekf() # global historic UKF
+
+        # State History
+        if len(ba_pyr) >= 1:
+            slen = self.ba_pyr_.max() + 1
+        else:
+            slen = 1
+        self.s_hist_ = StateHistory(maxlen=slen) # stores cache of prior.
 
         # logging / visualization
         self.lm_cnt_ = []
+        self.scales_ = []
 
     def track(self, img1, img2, pt1, pt2=None,
             thresh=1.0
@@ -864,19 +876,20 @@ class ClassicalVO(object):
                     pt_map, pose) # updated version
 
             # == debugging ==
-            try:
-                fig = self.pfig_
-                ax  = fig.gca()
-            except Exception:
-                self.pfig_ = plt.figure()
-                fig = self.pfig_
-                ax  = fig.gca()
-            ax.cla()
-            ax.imshow(img_c[...,::-1])
-            ax.plot(pt_cam_rec[:,0], pt_cam_rec[:,1], 'r*', alpha=0.5)
-            ax.plot(pt_cam[:,0], pt_cam[:,1], 'b+', alpha=0.5)
-            if not ax.yaxis_inverted():
-                ax.invert_yaxis()
+            # TODO : make slot for pnp
+            #try:
+            #    fig = self.pfig_
+            #    ax  = fig.gca()
+            #except Exception:
+            #    self.pfig_ = plt.figure()
+            #    fig = self.pfig_
+            #    ax  = fig.gca()
+            #ax.cla()
+            #ax.imshow(img_c[...,::-1])
+            #ax.plot(pt_cam_rec[:,0], pt_cam_rec[:,1], 'r*', alpha=0.5)
+            #ax.plot(pt_cam[:,0], pt_cam[:,1], 'b+', alpha=0.5)
+            #if not ax.yaxis_inverted():
+            #    ax.invert_yaxis()
             # == debugging ==
 
             msg = self.run_PNP(pt_map, pt_cam, pose, msg=msg)
@@ -1171,17 +1184,32 @@ class ClassicalVO(object):
         si = np.arange(3)
         vp = vp[:,si, si]
         vl = self.landmarks_.var[li_u][:, si, si]
-        sc = np.sqrt(np.concatenate([vp.ravel(), vl.ravel()]))
 
-        # try:
-        #     fig = self.sfig_
-        #     ax  = fig.gca()
-        # except Exception:
-        #     fig = plt.figure()
-        #     self.sfig_ = fig
-        #     ax = fig.gca()
-        # ax.cla()
-        # ax.plot(sc, '+')
+        # scales -- avoid hyper-strong outliers
+        sp = np.sqrt(vp)
+        sl = np.sqrt(vl)
+        sl_lo = np.percentile(wl, 20)
+        sl_hi = np.percentile(wl, 80)
+        sl = np.clip(sl, sl_lo, sl_hi)
+        sc = np.concatenate([sp.ravel(), sl.ravel()])
+
+        if ax is not None:
+            ax['ba_1'].cla()
+            ax['ba_1'].set_title('scale')
+
+            # prep data for viz
+            w = (1.0 / sc) # << is how it will actually be reflected
+            hi = np.full(len(sc), np.percentile(w, 80))
+            lo = np.full(len(sc), np.percentile(w, 20))
+
+            ax['ba_1'].plot(w, '+')
+            ax['ba_1'].plot(hi, '--')
+            ax['ba_1'].plot(lo, '--')
+
+            #ax['ba_1'].hist(sc[:n_c], alpha=0.5, label='cam')
+            #ax['ba_2'].cla()
+            #ax['ba_2'].set_title('lmk-sc')
+            #ax['ba_2'].hist(sc[n_c:], alpha=0.5, label='lmk')
 
         # mean reprojection error
         err0 = np.sqrt(np.square(self.residual_BA(x0,
@@ -1189,19 +1217,6 @@ class ClassicalVO(object):
             ci, li, p2)).mean())
 
         # actually run BA
-        # TODO : evaluate x_scale='jac' vs. x_scale=1.0 vs. x_scale = 1.0/v_var
-
-        # TODO : restore pBA -> self.pBA_ when done tuning params
-        pBA = dict(
-                ftol=1e-4,
-                #xtol=np.finfo(float).eps,
-                loss='huber',
-                max_nfev=1024,
-                method='trf',
-                verbose=2,
-                tr_solver='lsmr',
-                )
-
         res = least_squares(
                 self.residual_BA, x0,
                 #jac_sparsity=A,
@@ -1210,8 +1225,7 @@ class ClassicalVO(object):
                 x_scale = sc,
                 #x_scale='jac',
                 args=(n_c, n_l, ci, li, p2),
-                **pBA
-                #**self.pBA_
+                **self.pBA_
                 )
 
         # format ...
@@ -1224,13 +1238,13 @@ class ClassicalVO(object):
         #print err0, err1
 
         if ax is not None:
-            ax.cla()
-            ax.plot(p0[:,0], p0[:,1], 'ko-', label='initial')
-            ax.plot(pos_opt[:,0], pos_opt[:,1], 'r+-', label='optimized')
-            ax.set_title('BA : {:.3e}->{:.3e}'.format( err0, err1 ))
-            ax.axis('equal')
-            ax.set_aspect('equal', 'datalim')
-            ax.legend()
+            ax['ba_0'].cla()
+            ax['ba_0'].plot(p0[:,0], p0[:,1], 'ko-', label='initial')
+            ax['ba_0'].plot(pos_opt[:,0], pos_opt[:,1], 'r+-', label='optimized')
+            ax['ba_0'].set_title('BA : {:.3e}->{:.3e}'.format( err0, err1 ))
+            ax['ba_0'].axis('equal')
+            ax['ba_0'].set_aspect('equal', 'datalim')
+            ax['ba_0'].legend()
 
         # apply BA results
         # TODO : can we INPUT variance information to scipy.least_squares?
@@ -1251,6 +1265,9 @@ class ClassicalVO(object):
         if scale is None:
             # initialize scale from UKF
             scale = np.linalg.norm(pose_c[:2] - pose_p[:2])
+        else:
+            # implicit : scale is kept
+            pass
         return pose_p, pose_c, scale
     
     @property
@@ -1513,38 +1530,66 @@ class ClassicalVO(object):
     #    (s_c - X - Y)/s_b [known] = utc.R.t_b [unknown]
     #    s_b*t_b = R_b2c.dot(s_c*t_c) - R_b.dot(t_c2b) + t_c2b # == don't have s_c, t_b
 
-    def scale_c(self, s_b, R_c, t_c):
+    def scale_c(self, s_b, R_c, t_c, guess=None):
+        """
+        obtain scale of camera-frame translation from
+        s_b (base-frame translation scale)
+        R_c (camera-frame rotation matrix)
+        t_c (camera-frame translation vector)
+
+        refer to test_scale.py for validation.
+        """
+
         R_c2b = self.cvt_.T_c2b_[:3,:3]
         t_c2b = self.cvt_.T_c2b_[:3,3:]
         R_b2c = self.cvt_.T_b2c_[:3,:3]
         t_b2c = self.cvt_.T_b2c_[:3,3:]
 
+        R_b = np.linalg.multi_dot([
+            R_c2b, R_c, R_b2c])
+
         v1 = R_c2b.dot(t_c)
-        v2 = t_c2b - R_c2b.dot(R_c).dot(R_c2b.T).dot(t_c2b)
+        v2 = t_c2b-R_b.dot(t_c2b)
 
         # c_a*s_c^2 + c_b*s_c^1 + c_c = s_b**2
-        c_a = v1.T.dot(v1)[0,0]
-        c_b = 2*v1.T.dot(v2)[0,0]
-        c_c = v2.T.dot(v2)[0,0] - s_b**2
+        c_a = (v1*v1).sum() # v1.T.dot(v1)[0,0]
+        c_b = 2 * (v1*v2).sum() #2*v1.T.dot(v2)[0,0]
+        c_c = (v2*v2).sum() - s_b**2 #v2.T.dot(v2)[0,0] - s_b**2
+
+        print 'a', c_a
+        print 'b', c_b
+        print 'c', c_c
 
         det = c_b**2-4*c_a*c_c # determinant part
-        if det <= 0.0:
-            print '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!ABORT'
-            print det
-            # abort
-            return s_b
-        
+        if det < 0:
+            # this is usually due to numerical error.
+            # raise ValueError("Determinant is invalid! {}".format(det))
+            det = 0.0
         sol_1 = (-c_b + np.sqrt(det) ) / (2*c_a)
         sol_2 = (-c_b - np.sqrt(det) ) / (2*c_a)
 
-        if sol_1 < 0.0:
-            return sol_2
-        elif sol_2 < 0.0:
-            return sol_1
+        if False:
+            if sol_1 < 0.0:
+                return sol_2
+            if sol_2 < 0.0:
+                return sol_1
+
+        if guess is None:
+            # return a random "valid" solution.
+            # beware of the possible flipped signs.
+            return np.random.choice([sol_1,sol_2])
         else:
-            print '>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>DUBIOUS scale_c candidates', sol_1, sol_2
-            s_ratio = np.log([s_b/sol_1, s_b/sol_2])
-            return [sol_1,sol_2][np.argmin(np.abs(s_ratio))]
+            # tie-breaker with guess
+            # tb1 and tb2 are mostly negatives of each other.
+            # choose the one that best aligns with the current estimate.
+            t_b = guess
+            stb1 = np.matmul(R_c2b, sol_1 * t_c) - np.matmul(R_b, t_c2b) + t_c2b
+            stb2 = np.matmul(R_c2b, sol_2 * t_c) - np.matmul(R_b, t_c2b) + t_c2b
+            score_1 = (t_b * stb1).sum() / np.linalg.norm(stb1)
+            score_2 = (t_b * stb2).sum() / np.linalg.norm(stb2)
+            idx = np.argmax([score_1,score_2])
+            return [sol_1, sol_2][idx]
+        return sol_1
 
     def run_EM(self, 
             pt2_u_c, pt2_u_p,
@@ -1634,7 +1679,7 @@ class ClassicalVO(object):
         return idx_in,  pt3, R, t
 
     def __call__(self, img, dt, scale=None,
-            aux_viz=None
+            ax=None
             ):
         msg = ''
         # suffix designations:
@@ -1741,7 +1786,14 @@ class ClassicalVO(object):
         R_c, t_c = R, t # Camera-frame u-trans
         scale_b = scale
         print 'scale_b #0', scale_b
-        scale_c = self.scale_c(scale_b, R_c, t_c)
+
+        # construct t_b guess - pose_c in the coord.frame of pose_p
+        dx, dy, dh = (pose_c - pose_p)
+        t_b = np.reshape([dx, dy, 0], (3,1))
+
+        scale_c = self.scale_c(scale_b, R_c, t_c,
+                guess = t_b
+                )
         t_c *= scale_c
 
         T_c2c1 = np.eye(4)
@@ -1777,10 +1829,7 @@ class ClassicalVO(object):
         # TODO : figure out confidence scaling or variance.
         # TODO : CAN BE extremely wrong if triangulated results are negatives of each other.
 
-        u_t_c = t_c / np.linalg.norm(t_c)
-        u_t_c2 = t_c2 / np.linalg.norm(t_c2)
-
-        if np.dot(u_t_c.ravel(), u_t_c2.ravel()) < 0:
+        if np.dot(t_c.ravel(), t_c2.ravel()) < 0:
             # facing opposite directions
             # most often happens in pure-rotation scenarios
             print '\t\t\t>>>>>>>>>>>>>>>>>>>>>>>>>>>WARNING : GP and EM Systems Disagree.'
@@ -1793,12 +1842,15 @@ class ClassicalVO(object):
             scale_c = scale_c2
         else:
             #alpha = 0.25 # TODO : tune
-            alpha = (1.0 - rh) # USE score_F/score_H results
+            alpha = 1.0 - lerp(rh, 1.0, 0.5)
+            # USE score_F/score_H results
+            # heuristic : generally in favor of GP
             r_c  = np.ravel(tx.euler_from_matrix(R_c))
             r_c2 = np.ravel(tx.euler_from_matrix(R_c2))
             R_c = tx.euler_matrix(*lerp(r_c, r_c2, alpha))[:3,:3]
             t_c = lerp(t_c, t_c2, alpha) # TODO : better way to fuse?
             scale_c = np.linalg.norm(t_c)
+        print 'scale_c #2 (lerp)', scale_c
 
         T_c2c1 = np.eye(4)
         T_c2c1[:3,:3] = R_c
@@ -1811,6 +1863,8 @@ class ClassicalVO(object):
         R_b, t_b = T_b2b1[:3,:3], T_b2b1[:3,3:]
         scale_b = np.linalg.norm(t_b)
         print 'scale_b #2', scale_b
+        #self.scale_c(scale_b, R_c, t_c / np.linalg.norm(t_c))
+        #print 'scale_c #2 (rec)', scale_b
 
         pose_c_r = self.pRt2pose(pose_p, R_b, t_b)
 
@@ -1854,26 +1908,25 @@ class ClassicalVO(object):
         idx = self.graph_.index
         if (idx>=self.prune_freq_) and (idx%self.prune_freq_)==0 :
             # 1. prep viz (if available)
-            ax = None
-            if aux_viz is not None:
-                ax = [aux_viz[1], aux_viz[2]]
-                [e.cla() for e in ax]
+            if ax is not None:
+                ax['prune_0'].cla()
+                ax['prune_1'].cla()
             # 2. draw pre-prune
             if ax is not None:
-                self.graph_.draw(ax[0], self.cvt_, self.landmarks_) # pre-prune
+                self.graph_.draw(ax['prune_0'], self.cvt_, self.landmarks_) # pre-prune
             # 3. prune
             keep_idx = self.landmarks_.prune()
             self.graph_.prune(keep_idx)
             # 4. draw post-prune
             if ax is not None:
-                self.graph_.draw(ax[1], self.cvt_, self.landmarks_) # post-prune
+                self.graph_.draw(ax['prune_1'], self.cvt_, self.landmarks_) # post-prune
 
         # show landmark statistics
         self.lm_cnt_.append( self.landmarks_.size_ )
-        ax = aux_viz[3]
-        ax.cla()
-        ax.plot(self.lm_cnt_)
-        ax.set_title('# Landmarks Stat')
+        if ax is not None:
+            ax['lmk_cnt'].cla()
+            ax['lmk_cnt'].plot(self.lm_cnt_)
+            ax['lmk_cnt'].set_title('# Landmarks Stat')
 
         # NOTE!! this vvvv must be called after all cache_BA calls
         # have been completed.
@@ -1895,7 +1948,6 @@ class ClassicalVO(object):
             if run_ba:
                 # run BA every [win] frames
                 print('Running BA @ scale={}'.format(ba_win))
-                ax = (None if (aux_viz is None) else aux_viz[0])
                 ba_res = self.run_BA(ba_win, ax=ax)
                 if ba_res is not None:
                     # "historic" UKF

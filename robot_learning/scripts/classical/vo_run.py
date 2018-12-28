@@ -36,22 +36,24 @@ class CVORunner(object):
         self.fig_ = fig = plt.figure(figsize=(16,12), dpi=60)
 
         nrow = 3
-        ncol = 5
+        ncol = 6
 
         gs = gridspec.GridSpec(nrow,ncol)
         G = plt.subplot
 
-        self.ax0_ = G(gs[0, 0])
-        self.ax2_ = G(gs[1, 0], projection='3d')
-        self.ax3_ = G(gs[2, 0])
-        self.ax1_ = G(gs[0:2,1:3])
-        self.ax4_ = G(gs[2,1:3])
-
-        # auxiliary viz
-        self.ax5_ = G(gs[0,3])
-        self.ax6_ = G(gs[1,3])
-        self.ax7_ = G(gs[1,4])
-        self.ax8_ = G(gs[2,3:5])
+        self.ax_ = {
+                'track' : G(gs[0,0]),
+                'cloud' : G(gs[1,0], projection='3d'),
+                'proj2' : G(gs[2,0]),
+                'main'  : G(gs[0:2,1:3]),
+                'terr'  : G(gs[2,1:3]),
+                'ba_0'  : G(gs[0,3]),
+                'ba_1'  : G(gs[0,4]),
+                'ba_2'  : G(gs[0,5]),
+                'prune_0' : G(gs[1,3]),
+                'prune_1' : G(gs[1,4]),
+                'lmk_cnt' : G(gs[2,3:5])
+                }
 
         self.map_ = np.empty((0, 2), dtype=np.float32)
         self.vo_ = ClassicalVO(cinfo)
@@ -99,8 +101,6 @@ class CVORunner(object):
         # unroll
         i = self.index_
         n = self.n_
-        ax0,ax1,ax2,ax3,ax4 = \
-            self.ax0_, self.ax1_, self.ax2_, self.ax3_, self.ax4_
 
         odom   = self.odom_
         scan   = self.scan_
@@ -111,22 +111,22 @@ class CVORunner(object):
 
         rec_path = np.stack([tx,ty,th], axis=-1)
 
-        ax0.set_title('Tracking Visualization')
-        VoGUI.draw_img(ax0, aimg[..., ::-1])
-        VoGUI.draw_top(ax1, rec_path, pts2, odom[:i+1], scan_c, cov, pts_col)
-        VoGUI.draw_3d(ax2, pts3, pts_col)
-        VoGUI.draw_2d_proj(ax3, imgs[i, ..., ::-1], pts_r)
-        VoGUI.draw_err(ax4, rec_path, odom[:i])
+        self.ax_['track'].set_title('Tracking Visualization')
+        VoGUI.draw_img(self.ax_['track'], aimg[..., ::-1])
+        VoGUI.draw_top(self.ax_['main'], rec_path, pts2, odom[:i+1], scan_c, cov, pts_col)
+        VoGUI.draw_3d(self.ax_['cloud'], pts3, pts_col)
+        VoGUI.draw_2d_proj(self.ax_['proj2'], imgs[i, ..., ::-1], pts_r)
+        VoGUI.draw_err(self.ax_['terr'], rec_path, odom[:i])
 
         if self.vo_.pnp_p_ is not None:
-            self.ax1_.plot(
+            self.ax_['main'].plot(
                     [self.vo_.pnp_p_[0]],
                     [self.vo_.pnp_p_[1]],
                     'go',
                     label='pnp',
                     alpha=0.5
                     )
-            self.ax1_.quiver(
+            self.ax_['main'].quiver(
                     [self.vo_.pnp_p_[0]],
                     [self.vo_.pnp_p_[1]],
                     [np.cos(self.vo_.pnp_h_)],
@@ -187,7 +187,7 @@ class CVORunner(object):
 
         res = vo(
                 img, dt, scale=scale,
-                aux_viz=[self.ax5_, self.ax6_, self.ax7_, self.ax8_]
+                ax = (self.ax_ if viz else None)
                 )
 
         if res is None:
@@ -229,7 +229,6 @@ class CVORunner(object):
                     self.index_ += 1
                     viz = ( (self.index_ % vfreq) == 0)
                     self.step(viz=viz)
-                plt.pause(0.001)
                 #plt.savefig('/tmp/{:04d}.png'.format(self.index_))
         else:
             plt.show()
@@ -248,7 +247,7 @@ class CVORunner(object):
 def main():
     # convenience params defined here
     auto  = True
-    vfreq = 16
+    vfreq = 4
 
     np.set_printoptions(precision=4)
     #idx = np.random.choice(8)

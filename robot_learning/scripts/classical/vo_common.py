@@ -252,7 +252,6 @@ def show_landmark_2d(pos, cov, clear=True, draw=True,
         ax.legend()
         ax.plot([0],[0],'k+')
         lmk_fig.canvas.draw()
-        plt.pause(0.001)
 
 class Landmarks(object):
     """ Landmarks management """
