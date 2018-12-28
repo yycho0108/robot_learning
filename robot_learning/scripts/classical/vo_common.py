@@ -24,7 +24,8 @@ def recover_pose_from_RT(perm, K,
         z_min = np.finfo(np.float32).eps,
         z_max = np.inf,
         return_index=False,
-        log=False
+        log=False,
+        guess=None
         ):
     P1 = np.eye(3,4)
     P2 = np.eye(3,4)
@@ -96,7 +97,8 @@ def recover_pose(E, K,
             (R2, -t)]
     return recover_pose_from_RT(perm, K,
             pt1, pt2,
-            z_min, z_max, log
+            z_min, z_max,
+            log=log
             )
 
 def drawMatches(img1, img2, pt1, pt2, msk,

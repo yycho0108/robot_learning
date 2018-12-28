@@ -1559,17 +1559,24 @@ class ClassicalVO(object):
 
         det = c_b**2-4*c_a*c_c # determinant part
         if det < 0:
+            print('det', det)
             # this is usually due to numerical error.
             # raise ValueError("Determinant is invalid! {}".format(det))
             det = 0.0
         sol_1 = (-c_b + np.sqrt(det) ) / (2*c_a)
         sol_2 = (-c_b - np.sqrt(det) ) / (2*c_a)
 
-        if False:
-            if sol_1 < 0.0:
-                return sol_2
-            if sol_2 < 0.0:
-                return sol_1
+        if sol_1 < 0.0 and sol_2 < 0.0:
+            #raise ValueError("solution somehow does not exist")
+            #print sol_1
+            #print sol_2
+            return 0.0
+
+
+        if sol_1 < 0.0:
+            return sol_2
+        if sol_2 < 0.0:
+            return sol_1
 
         if guess is None:
             # return a random "valid" solution.
@@ -1660,8 +1667,9 @@ class ClassicalVO(object):
         else:
             # use Essential Matrix for pose
             # TODO : specify z_min/z_max?
+            print 'RECOVER POSE EMAT'
             n_in, R, t, msk_r, pt3 = recover_pose(E, self.K_,
-                    pt2_u_c[idx_e], pt2_u_p[idx_e], log=False,
+                    pt2_u_c[idx_e], pt2_u_p[idx_e], log=False
                     )
             print_ratio('essentialmat', len(idx_e), msk_e.size)
             idx_p = idx_e
@@ -1799,7 +1807,6 @@ class ClassicalVO(object):
         R_c = T_c2c1[:3,:3]
         t_c = T_c2c1[:3,3:]
 
-
         # cache results
         R_c0 = R_c
         R_b0 = R_b
@@ -1809,6 +1816,8 @@ class ClassicalVO(object):
 
         # Estimate #1 : Based on EM Results
         R_c, t_c_u = R_em, t_em # Camera-frame u-trans
+        R_c = R_c.copy()
+        t_c = t_c.copy()
         scale_b = np.linalg.norm(t_b) # current scale estimate
         print 'scale_b #0', scale_b
         scale_c = self.scale_c(scale_b, R_c, t_c_u,
@@ -1817,8 +1826,9 @@ class ClassicalVO(object):
         t_c = t_c_u * scale_c
 
         T_c2c1 = np.eye(4)
-        T_c2c1[:3,:3] = R_c
+        T_c2c1[:3,:3] = R_c.copy()
         T_c2c1[:3,3:] = t_c.reshape(3,1)
+
         T_b2b1 = np.linalg.multi_dot([
             self.cvt_.T_c2b_,
             T_c2c1,
@@ -1840,8 +1850,10 @@ class ClassicalVO(object):
 
         # Estimate #2 : Based on Ground-Plane Estimation
         # <<-- initial guess, provided defaults in case of abort
+        t_c1_u = (t_c1 / scale_c if scale_c >= np.finfo(np.float32).eps else t_c1)
+
         H, scale_c2, R_c, t_c_u = self.run_GP(pt2_u_c, pt2_u_p, pt3,
-                scale_c, R_c, t_c1 / scale_c) # note returned t_c is uvec
+                scale_c, R_c, t_c1_u) # note returned t_c is uvec
         t_c = t_c_u * scale_c2 # apply scale
         print 'scale_c #2', scale_c2
 
@@ -1861,6 +1873,8 @@ class ClassicalVO(object):
 
         # Estimate #3 : un-intelligently resolve two measurements.
         # TODO : figure out confidence scaling or variance.
+        # NOTE/TODO : does NOT check for inconsistency in rotation.
+
         if np.dot(t_c1.ravel(), t_c2.ravel()) < 0:
             # facing opposite directions
             # most often happens in pure-rotation scenarios
@@ -2033,8 +2047,6 @@ class ClassicalVO(object):
 
                     # result
                     pose_c_r = self.ukf_l_.x[:3].copy()
-
-        print('\t\t pose-f2f : {}'.format(pose_c_r))
         ## === FROM THIS POINT ALL VIZ === 
 
         # construct visualizations

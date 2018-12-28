@@ -146,7 +146,8 @@ class CVORunner(object):
     def step(self, viz=False):
         i = self.index_
         n = self.n_
-        print('i : {}/{}'.format(i,n))
+        print('')
+        print('====================================== i : {}/{}'.format(i,n))
 
         if i >= n:
             return
