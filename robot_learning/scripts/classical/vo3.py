@@ -1186,11 +1186,12 @@ class ClassicalVO(object):
         vl = self.landmarks_.var[li_u][:, si, si]
 
         # scales -- avoid hyper-strong outliers
+        # NOTE : lower scale needs to be regulated, not high.
         sp = np.sqrt(vp)
         sl = np.sqrt(vl)
-        sl_lo = np.percentile(wl, 20)
-        sl_hi = np.percentile(wl, 80)
-        sl = np.clip(sl, sl_lo, sl_hi)
+        sl_lo = np.percentile(sl, 20)
+        #sl_hi = np.percentile(sl, 80)
+        sl = np.clip(sl, sl_lo, a_max=None)
         sc = np.concatenate([sp.ravel(), sl.ravel()])
 
         if ax is not None:
@@ -1556,10 +1557,6 @@ class ClassicalVO(object):
         c_b = 2 * (v1*v2).sum() #2*v1.T.dot(v2)[0,0]
         c_c = (v2*v2).sum() - s_b**2 #v2.T.dot(v2)[0,0] - s_b**2
 
-        print 'a', c_a
-        print 'b', c_b
-        print 'c', c_c
-
         det = c_b**2-4*c_a*c_c # determinant part
         if det < 0:
             # this is usually due to numerical error.
@@ -1810,6 +1807,10 @@ class ClassicalVO(object):
         scale_c = np.linalg.norm(t_c)
         print 'scale_b #1', scale_b
         print 'scale_c #1', scale_c
+        # cache results
+        R_c0 = R_c
+        t_c0 = t_c
+        # == #1 finished ==
 
         # Estimate #2 : Based on Ground-Plane Estimation
         # <<-- initial guess, provided defaults in case of abort
@@ -1836,10 +1837,14 @@ class ClassicalVO(object):
             print_Rt(R_c, t_c)
             print_Rt(R_c2, t_c2)
             print '============================'
-            # take gp results in general
-            R_c = R_c2
-            t_c = t_c2
-            scale_c = scale_c2
+
+            # choose t_c consisent with current motion guess
+            score_c1 = (t_c0 * t_c).sum() / ( np.linalg.norm(t_c0) * np.linalg.norm(t_c))
+            score_c2 = (t_c0 * t_c2).sum() / ( np.linalg.norm(t_c0) * np.linalg.norm(t_c2))
+            idx = np.argmax([score_c1, score_c2])
+            print('selected : {}'.format(idx))
+            R_c = [R_c, R_c2][idx]
+            t_c = [t_c, t_c2][idx]
         else:
             #alpha = 0.25 # TODO : tune
             alpha = 1.0 - lerp(rh, 1.0, 0.5)

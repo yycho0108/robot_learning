@@ -117,6 +117,8 @@ class CVORunner(object):
         VoGUI.draw_3d(self.ax_['cloud'], pts3, pts_col)
         VoGUI.draw_2d_proj(self.ax_['proj2'], imgs[i, ..., ::-1], pts_r)
         VoGUI.draw_err(self.ax_['terr'], rec_path, odom[:i])
+        # TODO : plot error in stepwise difference
+        #VoGUI.draw_err(self.ax_['derr'], rec_path, odom[:i])
 
         if self.vo_.pnp_p_ is not None:
             self.ax_['main'].plot(
@@ -247,7 +249,7 @@ class CVORunner(object):
 def main():
     # convenience params defined here
     auto  = True
-    vfreq = 4
+    vfreq = 16
 
     np.set_printoptions(precision=4)
     #idx = np.random.choice(8)
