@@ -228,7 +228,7 @@ class CVORunner(object):
         if viz:
             P = self.vo_.ukf_l_.P
             self.show(aimg, pts3, pts2, scan_c, pts_r, P, col_p, ('[%d/%d] '%(i,n)) + msg)
-            plt.pause(0.001)
+            plt.pause(0.01) # supply enough time to draw everything
 
     def quit(self):
         self.quit_ = True
@@ -243,6 +243,8 @@ class CVORunner(object):
                     self.index_ += 1
                     viz = ( (self.index_ % vfreq) == 0)
                     self.step(viz=viz)
+                else:
+                    plt.pause(0.01)
                 #plt.savefig('/tmp/{:04d}.png'.format(self.index_))
         else:
             plt.show()
@@ -260,13 +262,13 @@ class CVORunner(object):
 
 def main():
     # convenience params defined here
-    auto  = True
+    auto  = True #True
     vfreq = 16
 
     np.set_printoptions(precision=4)
     #idx = np.random.choice(8)
     # 27, 34, 41 are currently used
-    idx = 27
+    idx = 34
     print('idx', idx)
 
     # load data
