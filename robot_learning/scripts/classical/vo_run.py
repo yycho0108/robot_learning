@@ -196,9 +196,10 @@ class CVORunner(object):
                 ax = (self.ax_ if viz else None)
                 )
 
+        # NOTE : index here may be offset by +-1
         self.ax_['scale'].plot(
                 np.arange(len(self.s_)),
-                self.s_,
+                self.s_, 
                 label='gt'
                 )
         self.ax_['scale'].legend()
@@ -260,7 +261,7 @@ class CVORunner(object):
 def main():
     # convenience params defined here
     auto  = True
-    vfreq = 4
+    vfreq = 16
 
     np.set_printoptions(precision=4)
     #idx = np.random.choice(8)

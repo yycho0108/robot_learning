@@ -542,6 +542,8 @@ class Landmarks(object):
         #msk_t = np.arange(self.size_) > (self.size_ - keep_last)
         # opt 2: keep all landmarks since last prune
         msk_t = np.arange(self.size_) >= self.pidx_
+        # also keep all currently tracked landmarks
+        msk_t |= self.trk[:,0]
         # TODO : IMPORTANT : exclude landmarks where (self.trk ==True).
 
         # strong responses are preferrable and will be kept
