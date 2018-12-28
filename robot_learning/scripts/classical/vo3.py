@@ -1772,26 +1772,49 @@ class ClassicalVO(object):
             pt2_u_p = np.squeeze(pt2_u_p, axis=0)
 
         # unscaled camera pose + reconstructed points from triangulation
-        idx_e, pt3, R, t = self.run_EM(pt2_u_c, pt2_u_p, no_gp=False)
+        idx_e, pt3, R_em, t_em = self.run_EM(pt2_u_c, pt2_u_p, no_gp=False)
 
         # collect used points for matches + draw
         msk = np.zeros(len(pt2_p), dtype=np.bool)
         msk[idx_t[idx_e]] = True
         mim = drawMatches(img_p, img_c, pt2_p, pt2_c, msk)
 
-        # Estimate #1 : Based on UKF Motion
-        R_c, t_c = R, t # Camera-frame u-trans
-        scale_b = scale
-        print 'scale_b #0', scale_b
+        # Estimate #0 : Based on UKF Motion
+        # TODO : is it possible to pass R_c/t_c
+        # as initial guesses to recoverPose()?
 
-        # construct t_b guess - pose_c in the coord.frame of pose_p
+        # construct t_b/t_c guess
         dx, dy, dh = (pose_c - pose_p)
+        R_b = tx.euler_matrix(0, 0, dh)[:3,:3]
         t_b = np.reshape([dx, dy, 0], (3,1))
 
-        scale_c = self.scale_c(scale_b, R_c, t_c,
-                guess = t_b
+        T_b2b1 = np.eye(4)
+        T_b2b1[:3,:3] = R_b
+        T_b2b1[:3,3:] = t_b
+        T_c2c1 = np.linalg.multi_dot([
+            self.cvt_.T_b2c_,
+            T_b2b1,
+            self.cvt_.T_c2b_
+            ])
+        R_c = T_c2c1[:3,:3]
+        t_c = T_c2c1[:3,3:]
+
+
+        # cache results
+        R_c0 = R_c
+        R_b0 = R_b
+        t_c0 = t_c
+        t_b0 = t_b
+        # == #0 finished ==
+
+        # Estimate #1 : Based on EM Results
+        R_c, t_c_u = R_em, t_em # Camera-frame u-trans
+        scale_b = np.linalg.norm(t_b) # current scale estimate
+        print 'scale_b #0', scale_b
+        scale_c = self.scale_c(scale_b, R_c, t_c_u,
+                guess = t_b0
                 )
-        t_c *= scale_c
+        t_c = t_c_u * scale_c
 
         T_c2c1 = np.eye(4)
         T_c2c1[:3,:3] = R_c
@@ -1807,16 +1830,19 @@ class ClassicalVO(object):
         scale_c = np.linalg.norm(t_c)
         print 'scale_b #1', scale_b
         print 'scale_c #1', scale_c
+
         # cache results
-        R_c0 = R_c
-        t_c0 = t_c
+        R_c1 = R_c
+        R_b1 = R_b
+        t_c1 = t_c
+        t_b1 = t_b
         # == #1 finished ==
 
         # Estimate #2 : Based on Ground-Plane Estimation
         # <<-- initial guess, provided defaults in case of abort
-        H, scale_c2, R_c2, t_c2 = self.run_GP(pt2_u_c, pt2_u_p, pt3,
-                scale_c, R_c, t_c / scale_c) # note returned t_c is uvec
-        t_c2 *= scale_c2
+        H, scale_c2, R_c, t_c_u = self.run_GP(pt2_u_c, pt2_u_p, pt3,
+                scale_c, R_c, t_c1 / scale_c) # note returned t_c is uvec
+        t_c = t_c_u * scale_c2 # apply scale
         print 'scale_c #2', scale_c2
 
         rh = 0.5
@@ -1824,28 +1850,36 @@ class ClassicalVO(object):
             sF, msk_sF = score_F(pt2_u_c, pt2_u_p, F, self.cvt_)
             sH, msk_sH = score_H(pt2_u_c, pt2_u_p, H, self.cvt_)
             rh = float(sH) / (sH+sF)
-            print_ratio('RH', sH, sH+sF)
+            print_ratio('RH-gp', sH, sH+sF)
+        
+        # NOTE: estimate #2 does not produce R_b1 / t_b1
+        # because it does not need to.
+        # cache results
+        R_c2 = R_c
+        t_c2 = t_c
+        # == #2 finished ==
 
-        # un-intelligently resolve two measurements ...
+        # Estimate #3 : un-intelligently resolve two measurements.
         # TODO : figure out confidence scaling or variance.
-        # TODO : CAN BE extremely wrong if triangulated results are negatives of each other.
-
-        if np.dot(t_c.ravel(), t_c2.ravel()) < 0:
+        if np.dot(t_c1.ravel(), t_c2.ravel()) < 0:
             # facing opposite directions
             # most often happens in pure-rotation scenarios
             print '\t\t\t>>>>>>>>>>>>>>>>>>>>>>>>>>>WARNING : GP and EM Systems Disagree.'
-            print_Rt(R_c, t_c)
+            print_Rt(R_c1, t_c1)
             print_Rt(R_c2, t_c2)
             print '============================'
 
-            # choose t_c consisent with current motion guess
-            score_c1 = (t_c0 * t_c).sum() / ( np.linalg.norm(t_c0) * np.linalg.norm(t_c))
+            # choose t_c consisent with current motion guess t_c0.
+            score_c1 = (t_c0 * t_c1).sum() / ( np.linalg.norm(t_c0) * np.linalg.norm(t_c1))
             score_c2 = (t_c0 * t_c2).sum() / ( np.linalg.norm(t_c0) * np.linalg.norm(t_c2))
+            print 'scores', score_c1, score_c2
             idx = np.argmax([score_c1, score_c2])
             print('selected : {}'.format(idx))
-            R_c = [R_c, R_c2][idx]
-            t_c = [t_c, t_c2][idx]
+            R_c = [R_c1, R_c2][idx]
+            t_c = [t_c1, t_c2][idx]
         else:
+            # facing the same direction
+            # interpolate the results for time-domain scale stability.
             #alpha = 0.25 # TODO : tune
             alpha = 1.0 - lerp(rh, 1.0, 0.5)
             # USE score_F/score_H results
@@ -1868,13 +1902,18 @@ class ClassicalVO(object):
         R_b, t_b = T_b2b1[:3,:3], T_b2b1[:3,3:]
         scale_b = np.linalg.norm(t_b)
         print 'scale_b #2', scale_b
-        #self.scale_c(scale_b, R_c, t_c / np.linalg.norm(t_c))
-        #print 'scale_c #2 (rec)', scale_b
+
+        # cache results
+        R_c3 = R_c
+        R_b3 = R_b
+        t_c3 = t_c
+        t_b3 = t_b
+        # == #3 finished ==
 
         pose_c_r = self.pRt2pose(pose_p, R_b, t_b)
 
         if self.flag_ & ClassicalVO.VO_USE_F2M:
-            # Estimate #3 : Based on Landmarks
+            # Estimate #4 : Based on Landmarks
             # TODO : smarter way to incorporate ground-plane scale information??
             # estimate scale based on current pose guess
             # and recompute rectified pose_c_r
@@ -1890,24 +1929,36 @@ class ClassicalVO(object):
                     msg
                     )
 
+            # update transforms with new scale_c information from proc_f2m.
+            # (scale_c fusion happenes automatically within proc_f2m)
+            t_c = t_c / np.linalg.norm(t_c) * scale_c
             T_c2c1 = np.eye(4)
             T_c2c1[:3,:3] = R_c
-            T_c2c1[:3,3:] = t_c / np.linalg.norm(t_c) * scale_c
+            T_c2c1[:3,3:] = t_c
             T_b2b1 = np.linalg.multi_dot([
                 self.cvt_.T_c2b_,
                 T_c2c1,
                 self.cvt_.T_b2c_
                 ])
-
             R_b, t_b = T_b2b1[:3,:3], T_b2b1[:3,3:]
             print 'scale_b #3', scale_b
             pose_c_r = self.pRt2pose(pose_p, R_b, t_b)
-        self.ukf_l_.update(pose_c_r)
 
-        # Estimate #4 : return Post-filter results as UKF Posterior
+            # cache results
+            R_c4 = R_c
+            R_b4 = R_b
+            t_c4 = t_c
+            t_b4 = t_b
+            # == #4 finished ==
+
+        # Estimate #5 : return Post-filter results as UKF Posterior
         # NOTE: self.graph_ contains pose posterior.
+        self.ukf_l_.update(pose_c_r)
         pose_c_r = self.ukf_l_.x[:3].copy()
         self.graph_.add_pos(pose_c_r.copy())
+        # NOTE: estimate #5 does not produce R_c, t_c, R_b, t_c
+        # because it is not needed.
+        # == #5 finished ==
 
         # prune
         idx = self.graph_.index
