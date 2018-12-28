@@ -74,29 +74,45 @@ def recover_pose_from_RT(perm, K,
             print('[{}] {}/{}'.format(i, c, msk_i.size))
             print_Rt(R, t)
 
-    soft_sel = np.greater(scores, threshold)
-    if (guess is not None) and soft_sel.sum() >= 2:
-        # More than two "valid" candidates, apply guess
-        soft_idx = np.where(soft_sel)[0]
-        R_g, t_g = guess # TODO : currently, R-guess is not supported.
-        t_g_u = np.reshape(t_g, 3) / np.linalg.norm(t_g) # convert guess to uvec
+    # option one: compare best/next-best
+    sel = np.argmax(scores)
+
+    if guess is not None:
+        # -- option 1 : multiple "good" estimates by score metric
+        # here, threshold = score
+        # soft_sel = np.greater(scores, threshold)
+        # soft_idx = np.where(soft_sel)[0]
+        # do_guess = (soft_sel.sum() >= 2)
+        # -- option 1 end --
+
+        # -- option 2 : alternative next estimate is also "good" by ratio metric
+        # here, threshold = ratio
+        next_idx, best_idx = np.argsort(scores)[-2:]
+        soft_idx = [next_idx, best_idx]
+        do_guess = (scores[next_idx] / scores[best_idx]) > threshold
+        # -- option 2 end --
 
         soft_scores = []
-        for i in soft_idx:
-            # filter by alignment with current guess-translational vector
-            R_i, t_i = perm[i]
-            t_i_u = np.reshape(t_i) / np.linalg.norm(t_i)
-            score_i = np.sum(t_g_u * t_i_u) # dot product
-            soft_scores.append(score_i)
+        if do_guess:
+            # TODO : currently, R-guess is not supported.
+            R_g, t_g = guess
+            t_g_u = np.reshape(t_g, 3) / np.linalg.norm(t_g) # convert guess to uvec
+            
+            for i in soft_idx:
+                # filter by alignment with current guess-translational vector
+                R_i, t_i = perm[i]
+                t_i_u = np.reshape(t_i) / np.linalg.norm(t_i)
+                score_i = np.sum(t_g_u * t_i_u) # dot product
+                soft_scores.append(score_i)
 
-        # finalize selection
-        sel = soft_idx[np.argmax(soft_scores)]
+            # finalize selection
+            sel = soft_idx[ np.argmax(soft_scores) ]
+            unsel = soft_idx[ np.argmin(soft_scores) ] # NOTE: log-only
 
-        if True:
-            print('\t\tresolving ambiguity with guess:')
-            print('\t\tselected i={}, {}'.format(sel, perm[sel]))
-    else:
-        sel = np.argmax(scores)
+            if True: # TODO : swap with if log:
+                print('\t\tresolving ambiguity with guess:')
+                print('\t\tselected  i={}, {}'.format(sel, perm[sel]))
+                print('\t\tdiscarded i={}, {}'.format(unsel, perm[unsel]))
 
     R, t = perm[sel]
     msk = msks[sel]
@@ -504,6 +520,7 @@ class Landmarks(object):
         """
         Non-max suppression based pruning.
         set k=1 to disable  nmx. --> TODO: verify this
+        NOTE: keep_last is currently unused.
         """
         # TODO : Tune keep_last parameter
         # TODO : Prune by tracking information and/or count
@@ -529,7 +546,7 @@ class Landmarks(object):
 
         # strong responses are preferrable and will be kept
         rsp = self.kpt[:,2]
-        msk_r = np.greater(rsp, 64) # TODO : somewhat magical
+        msk_r = np.greater(rsp, 48) # TODO : somewhat magical
 
         # below expression describes the following heuristic:
         # if (new_landmark) keep;

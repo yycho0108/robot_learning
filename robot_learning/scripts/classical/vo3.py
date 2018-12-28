@@ -1574,6 +1574,8 @@ class ClassicalVO(object):
             #return 0.0
             # WHAT SHOULD I DO? rely on the fact that scale_b ~~ scale_c?
             # NOTE : this is wrong.
+            # TODO : this is wrong.
+            # WARN : this is wrong.
             return s_b
 
         if sol_1 < 0.0:
