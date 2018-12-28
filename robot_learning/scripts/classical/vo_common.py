@@ -282,9 +282,14 @@ class Landmarks(object):
         self.var_ = np.empty((c,3,3), dtype=np.float32)
         self.cnt_ = np.empty((c,1), dtype=np.int32)
 
+        # observation source?
+        # self.src_ = ...
+
         # tracking ...
-        self.trk_ = np.empty((c,1), dtype=np.int32)
-        self.kpt_ = np.empty((c,1), dtype=cv2.KeyPoint)
+        self.trk_ = np.empty((c,1), dtype=np.bool)
+        # kpt will be pre-formatted to hold (x,y,rsp)
+        # and maybe oct, idk.
+        self.kpt_ = np.empty((c,3), dtype=np.float32)
 
         # query filtering
         # NOTE : maxd/mind scale filtering may be ORB-specific.
@@ -293,11 +298,6 @@ class Landmarks(object):
         self.s_pyr_ = np.power(self.s_fac_, np.arange(self.n_lvl_))
         self.maxd_ = np.empty((c,1), dtype=np.float32)
         self.mind_ = np.empty((c,1), dtype=np.float32)
-
-        # TODO : maybe decompose keypoints into more useful form
-        # self.pt2_ = [k.pt for k in kpt]
-        # self.rsp_ = [k.response for k in kpt]
-        # self.oct_ = [k.octave for k in kpt]
 
         self.fields_ = [
                 'pos_', 'des_', 'ang_', 'col_',
@@ -371,7 +371,7 @@ class Landmarks(object):
         n = len(p)
         if self.size_ + n > self.capacity_:
             self.resize(self.capacity_ * 2)
-            # retry append
+            # retry append after resize
             self.append(p,v,d,a,c,k)
         else:
             # assign
@@ -381,7 +381,9 @@ class Landmarks(object):
             self.des_[i] = d
             self.ang_[i] = a
             self.col_[i] = c
-            self.kpt_[i] = k[:,None]
+            #self.kpt_[i] = k[:,None]
+            self.kpt_[i, :2] = np.reshape([e.pt for e in k], [-1,2])
+            self.kpt_[i, 2]  = [e.response for e in k]
 
             # auto initialized vars
             self.cnt_[i] = 1
@@ -493,9 +495,10 @@ class Landmarks(object):
         #msk_t = np.arange(self.size_) > (self.size_ - keep_last)
         # opt 2: keep all landmarks since last prune
         msk_t = np.arange(self.size_) >= self.pidx_
+        # TODO : IMPORTANT : exclude landmarks where (self.trk ==True).
 
         # strong responses are preferrable and will be kept
-        rsp = [k.response for k in self.kpt[:,0]]
+        rsp = self.kpt[:,2]
         msk_r = np.greater(rsp, 64) # TODO : somewhat magical
 
         # below expression describes the following heuristic:
@@ -519,6 +522,10 @@ class Landmarks(object):
 
         # return pruned indices
         return np.where(msk)[0]
+
+    def track_points(self):
+        t_idx = np.where(self.trk)[0]
+        return self.kpt_[t_idx, :2]
 
     @property
     def pos(self):

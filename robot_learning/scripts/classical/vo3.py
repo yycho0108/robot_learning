@@ -488,7 +488,7 @@ class ClassicalVO(object):
         self.flag_ = ClassicalVO.VO_DEFAULT
         self.flag_ &= ~ClassicalVO.VO_USE_HOMO # TODO : doesn't really work?
         #self.flag_ &= ~ClassicalVO.VO_USE_BA
-        self.flag_ |= ClassicalVO.VO_USE_PNP
+        #self.flag_ |= ClassicalVO.VO_USE_PNP
         #self.flag_ &= ~ClassicalVO.VO_USE_FM_COR # performance
 
         # TODO : control stage-level verbosity
@@ -546,7 +546,7 @@ class ClassicalVO(object):
         # TODO : tune nfeatures; empirically 2048 is pretty good
         orb = cv2.ORB_create(
                 nfeatures=2048,
-                scaleFactor=1.2,
+                scaleFactor=np.sqrt(2),
                 nlevels=8,
                 scoreType=cv2.ORB_FAST_SCORE,
                 )
@@ -601,6 +601,13 @@ class ClassicalVO(object):
     def track(self, img1, img2, pt1, pt2=None,
             thresh=1.0
             ):
+
+        if pt1.size <= 0:
+            # soft fail
+            pt2 = np.empty([0,2], dtype=np.float32)
+            idx = np.empty([0], dtype=np.int32)
+            return pt2, idx
+
         # stat img
         h, w = np.shape(img2)[:2]
 
@@ -1312,7 +1319,7 @@ class ClassicalVO(object):
 
             if len(gp_idx) <= 3: # TODO : magic
                 # too few points, abort gp estimate
-                return scale, R, t
+                return None, scale, R, t
 
             # update pt_c and pt_p
             pt_c = pt_c[gp_idx]
@@ -1355,7 +1362,7 @@ class ClassicalVO(object):
 
             if len(idx_h) < 16: # TODO : magic number
                 # insufficient # of points -- abort
-                return scale, R, t
+                return None, scale, R, t
 
 
             # update pt_c and pt_p
@@ -1379,7 +1386,7 @@ class ClassicalVO(object):
             z_idx = np.where(z_val)[0]
             if len(z_idx) <= 0:
                 # abort ground-plane estimation.
-                return scale, R, t
+                return None, scale, R, t
             # NOTE: honestly don't know why I need to pre-filter by z-norm at all
             perm = zip(Hr,Ht)
             perm = [perm[i] for i in z_idx]
@@ -1395,6 +1402,7 @@ class ClassicalVO(object):
             if np.isfinite(scale_gp) and scale_gp > 0:
                 # project just in case scale < 0...
                 scale = scale_gp
+            return H, scale, R, t
         else:
             # opt2 : directly estimate ground plane by simple height filter
             # only works with "reasonable" initial scale guess.
@@ -1421,7 +1429,7 @@ class ClassicalVO(object):
                     print_ratio('scale_gp', scale_gp, scale)
                     # use gp scale instead
                     scale = scale_gp
-        return scale, R, t
+        return None, scale, R, t
 
     def run_PNP(self, pt3_map, pt2_cam, pose,
             p_min=16, msg=''):
@@ -1496,6 +1504,18 @@ class ClassicalVO(object):
             pass
 
         return msg
+    
+    #def sbRcTc2RbTb(self, s_b, R_c, t_c):
+    #    R_c2b = self.cvt_.T_c2b_[:3,:3]
+    #    t_c2b = self.cvt_.T_c2b_[:3,3:]
+    #    R_b = R_c2b.dot(R_c).dot(R_b2c)
+    #    s_c*t_c = R_c2b.T.dot(R_b.dot(t_c2b) + s_b*t_b - t_c2b) # == don't have s_c, t_b
+    #    s_c = uvec(t_c).dot((RR t_c2b) + s_b*(R t_b) - (t_c2b))
+    #    s_c(unknown) = X(known) + utc . (s_b * R * t_b(unknown)) - Y(known)
+    #    s_c[unk] - X + Y = s_b * utc.R(t_b[unk])
+    #    s_c - X - Y = s_b * utc . (R.t_b)
+    #    (s_c - X - Y)/s_b [known] = utc.R.t_b [unknown]
+    #    s_b*t_b = R_b2c.dot(s_c*t_c) - R_b.dot(t_c2b) + t_c2b # == don't have s_c, t_b
 
     def scale_c(self, s_b, R_c, t_c):
         R_c2b = self.cvt_.T_c2b_[:3,:3]
@@ -1513,6 +1533,9 @@ class ClassicalVO(object):
 
         det = c_b**2-4*c_a*c_c # determinant part
         if det <= 0.0:
+            print '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!ABORT'
+            print det
+            # abort
             return s_b
         
         sol_1 = (-c_b + np.sqrt(det) ) / (2*c_a)
@@ -1523,6 +1546,7 @@ class ClassicalVO(object):
         elif sol_2 < 0.0:
             return sol_1
         else:
+            print '>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>DUBIOUS scale_c candidates', sol_1, sol_2
             s_ratio = np.log([s_b/sol_1, s_b/sol_2])
             return [sol_1,sol_2][np.argmin(np.abs(s_ratio))]
 
@@ -1561,6 +1585,13 @@ class ClassicalVO(object):
 
         # frame-to-frame processing
         pt2_p = self.cvt_.kpt_to_pt(kpt_p)
+        pt2_l = self.landmarks_.track_points()
+
+        # first off, track everything
+        self.track(img_p, img_c, pt2_p)
+        self.track(img_p, img_c, pt2_l)
+
+        #pt2_p, pt2_l = self.suppress_kpt(pt2_p, pt2_l)
 
         # == obtain next-frame keypoints ==
         if self.flag_ & ClassicalVO.VO_USE_TRACK:
@@ -1618,6 +1649,8 @@ class ClassicalVO(object):
         # and was prone to mis-identification of transforms.
 
         try:
+            # TODO : is ngp useful at all?
+            #raise ValueError("TEST")
             E, msk_e = cv2.findEssentialMat(pt2_u_c[ngp_idx], pt2_u_p[ngp_idx], self.K_,
                     **self.pEM_)
             msk_e = msk_e[:,0].astype(np.bool)
@@ -1723,10 +1756,17 @@ class ClassicalVO(object):
 
         # Estimate #2 : Based on Ground-Plane Estimation
         # <<-- initial guess, provided defaults in case of abort
-        scale_c2, R_c2, t_c2 = self.run_GP(pt2_u_c, pt2_u_p, pt3,
+        H, scale_c2, R_c2, t_c2 = self.run_GP(pt2_u_c, pt2_u_p, pt3,
                 scale_c, R_c, t_c / scale_c) # note returned t_c is uvec
         t_c2 *= scale_c2
         print 'scale_c #2', scale_c2
+
+        rh = 0.5
+        if H is not None:
+            sF, msk_sF = score_F(pt2_u_c, pt2_u_p, F, self.cvt_)
+            sH, msk_sH = score_H(pt2_u_c, pt2_u_p, H, self.cvt_)
+            rh = float(sH) / (sH+sF)
+            print_ratio('RH', sH, sH+sF)
 
         # un-intelligently resolve two measurements ...
         # TODO : figure out confidence scaling or variance.
@@ -1747,7 +1787,8 @@ class ClassicalVO(object):
             t_c = t_c2
             scale_c = scale_c2
         else:
-            alpha = 0.25 # TODO : tune
+            #alpha = 0.25 # TODO : tune
+            alpha = (1.0 - rh) # USE score_F/score_H results
             r_c  = np.ravel(tx.euler_from_matrix(R_c))
             r_c2 = np.ravel(tx.euler_from_matrix(R_c2))
             R_c = tx.euler_matrix(*lerp(r_c, r_c2, alpha))[:3,:3]
