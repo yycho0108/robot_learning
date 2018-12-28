@@ -52,7 +52,8 @@ class CVORunner(object):
                 'ba_2'  : G(gs[0,5]),
                 'prune_0' : G(gs[1,3]),
                 'prune_1' : G(gs[1,4]),
-                'lmk_cnt' : G(gs[2,3:5])
+                'lmk_cnt' : G(gs[2,3:5]),
+                'scale' : G(gs[1,5])
                 }
 
         self.map_ = np.empty((0, 2), dtype=np.float32)
@@ -63,6 +64,7 @@ class CVORunner(object):
         self.tx_ = []
         self.ty_ = []
         self.th_ = []
+        self.s_  = []
 
         #self.gui_ = VoGUI()
         self.quit_ = False
@@ -175,6 +177,7 @@ class CVORunner(object):
         # TODO : estimate scale from points + camera height?
         dps_gt = sub_p3d(odom[i], odom[i-1])
         s = np.linalg.norm(dps_gt[:2])
+        self.s_.append(s)
         print('Ground Truth Scale : [ {} ]'.format(s))
         print('Ground Truth Motion : {}'.format( dps_gt ))
 
@@ -192,6 +195,13 @@ class CVORunner(object):
                 img, dt, scale=scale,
                 ax = (self.ax_ if viz else None)
                 )
+
+        self.ax_['scale'].plot(
+                np.arange(len(self.s_)),
+                self.s_,
+                label='gt'
+                )
+        self.ax_['scale'].legend()
 
         if res is None:
             # vo aborted for some unknown reason
@@ -250,7 +260,7 @@ class CVORunner(object):
 def main():
     # convenience params defined here
     auto  = True
-    vfreq = 16
+    vfreq = 4
 
     np.set_printoptions(precision=4)
     #idx = np.random.choice(8)

@@ -101,7 +101,7 @@ def recover_pose_from_RT(perm, K,
             for i in soft_idx:
                 # filter by alignment with current guess-translational vector
                 R_i, t_i = perm[i]
-                t_i_u = np.reshape(t_i) / np.linalg.norm(t_i)
+                t_i_u = np.reshape(t_i, 3) / np.linalg.norm(t_i)
                 score_i = np.sum(t_g_u * t_i_u) # dot product
                 soft_scores.append(score_i)
 

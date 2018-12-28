@@ -8,7 +8,7 @@ Semi-Urgent TODOs:
     - Refactor Camera Extrinsic/Intrinsic Params as input
 """
 
-from collections import namedtuple, deque
+from collections import namedtuple, deque, defaultdict
 from tf import transformations as tx
 import cv2
 import numpy as np
@@ -615,7 +615,7 @@ class ClassicalVO(object):
 
         # logging / visualization
         self.lm_cnt_ = []
-        self.scales_ = []
+        self.scales_ = defaultdict(lambda:[])
 
     def track(self, img1, img2, pt1, pt2=None,
             thresh=1.0
@@ -1693,6 +1693,7 @@ class ClassicalVO(object):
     def __call__(self, img, dt, scale=None,
             ax=None
             ):
+        index = self.graph_.index
         msg = ''
         # suffix designations:
         # o/0 = origin (i=0)
@@ -1750,6 +1751,8 @@ class ClassicalVO(object):
         R_b0 = R_b
         t_c0 = t_c
         t_b0 = t_b
+        self.scales_['c0'].append([index, np.linalg.norm(t_c0)])
+        self.scales_['b0'].append([index, np.linalg.norm(t_b0)])
         # == #0 finished ==
 
         # frame-to-frame processing
@@ -1823,8 +1826,6 @@ class ClassicalVO(object):
         msk[idx_t[idx_e]] = True
         mim = drawMatches(img_p, img_c, pt2_p, pt2_c, msk)
 
-
-
         # Estimate #1 : Based on EM Results
         R_c, t_c_u = R_em, t_em # Camera-frame u-trans
         scale_b = np.linalg.norm(t_b) # current scale estimate
@@ -1855,6 +1856,8 @@ class ClassicalVO(object):
         R_b1 = R_b
         t_c1 = t_c
         t_b1 = t_b
+        self.scales_['c1'].append([index, np.linalg.norm(t_c1)])
+        self.scales_['b1'].append([index, np.linalg.norm(t_b1)])
         # == #1 finished ==
 
         # Estimate #2 : Based on Ground-Plane Estimation
@@ -1879,6 +1882,7 @@ class ClassicalVO(object):
         # cache results
         R_c2 = R_c
         t_c2 = t_c
+        self.scales_['c2'].append([index, np.linalg.norm(t_c2)])
         # == #2 finished ==
 
         # Estimate #3 : un-intelligently resolve two measurements.
@@ -1932,6 +1936,9 @@ class ClassicalVO(object):
         R_b3 = R_b
         t_c3 = t_c
         t_b3 = t_b
+
+        self.scales_['c3'].append([index, np.linalg.norm(t_c3)])
+        self.scales_['b3'].append([index, np.linalg.norm(t_b3)])
         # == #3 finished ==
 
         pose_c_r = self.pRt2pose(pose_p, R_b, t_b)
@@ -1973,6 +1980,9 @@ class ClassicalVO(object):
             R_b4 = R_b
             t_c4 = t_c
             t_b4 = t_b
+
+            self.scales_['c4'].append([index, np.linalg.norm(t_c4)])
+            self.scales_['b4'].append([index, np.linalg.norm(t_b4)])
             # == #4 finished ==
 
         # Estimate #5 : return Post-filter results as UKF Posterior
@@ -1985,8 +1995,7 @@ class ClassicalVO(object):
         # == #5 finished ==
 
         # prune
-        idx = self.graph_.index
-        if (idx>=self.prune_freq_) and (idx%self.prune_freq_)==0 :
+        if (index >= self.prune_freq_) and (index % self.prune_freq_)==0 :
             # 1. prep viz (if available)
             if ax is not None:
                 ax['prune_0'].cla()
@@ -2057,6 +2066,16 @@ class ClassicalVO(object):
 
                     # result
                     pose_c_r = self.ukf_l_.x[:3].copy()
+
+        # plot scale
+
+        if ax is not None:
+            ax['scale'].cla()
+            for (k, v) in self.scales_.items():
+                s_i, s_v = zip(*v)
+                ax['scale'].plot(s_i, s_v, label=k)
+            ax['scale'].legend()
+
         ## === FROM THIS POINT ALL VIZ === 
 
         # construct visualizations
