@@ -516,7 +516,7 @@ class Landmarks(object):
         self.var[idx] = P_k
         self.cnt[idx] += 1
 
-    def prune(self, k=5, radius=0.05, keep_last=512):
+    def prune(self, k=3, radius=0.025, keep_last=512):
         """
         Non-max suppression based pruning.
         set k=1 to disable  nmx. --> TODO: verify this
@@ -528,7 +528,8 @@ class Landmarks(object):
         # TODO : if(num_added_landmarks_since_last > x) == lots of new info
         #             search_and_add_keyframe()
         # and get rid of desirable landmarks.
-        v = np.linalg.norm(self.var[:,(0,1,2),(0,1,2)], axis=-1)
+        #v = np.linalg.norm(self.var[:,(0,1,2),(0,1,2)], axis=-1)
+        v = self.kpt[:, 2]
         neigh = NearestNeighbors(n_neighbors=k)
         neigh.fit(self.pos)
         d, i = neigh.kneighbors(return_distance=True)

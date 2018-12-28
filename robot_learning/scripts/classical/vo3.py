@@ -550,7 +550,7 @@ class ClassicalVO(object):
         # TODO : what is FAST threshold?
         # TODO : tune nfeatures; empirically 2048 is pretty good
         orb = cv2.ORB_create(
-                nfeatures=2048,
+                nfeatures=512,
                 scaleFactor=1.2,#np.sqrt(2),??
                 nlevels=8,
                 #scoreType=cv2.ORB_FAST_SCORE,
@@ -622,6 +622,8 @@ class ClassicalVO(object):
             ):
         # NOTE : somewhat confusing;
         # here suffix c=camera, l=landmark.
+t 
+        # TODO : is it necessary / proper to take octaves into account?
         if pt2_l.size <= 0:
             # No registered landmarks to filter with.
             return np.arange(len(pt2_c))
@@ -1266,28 +1268,38 @@ class ClassicalVO(object):
 
         # scales -- avoid hyper-strong outliers
         # NOTE : lower scale needs to be regulated, not high.
+        # TODO : x_scale=sc is very very unstable.
         sp = np.sqrt(vp)
         sl = np.sqrt(vl)
-        sl_lo = np.percentile(sl, 20)
+        #sl_lo = np.percentile(sp, 50)
+        #sl_lo = np.percentile(sl, 20)
         #sl_hi = np.percentile(sl, 80)
-        sl = np.clip(sl, sl_lo, a_max=None)
+        #sl = np.clip(sl, sl_lo, a_max=None)
         sc = np.concatenate([sp.ravel(), sl.ravel()])
 
         if ax is not None:
             ax['ba_1'].cla()
-            ax['ba_1'].set_title('scale')
+            ax['ba_2'].cla()
+            ax['ba_1'].set_title('scale-pos')
+            ax['ba_2'].set_title('scale-lmk')
 
             # prep data for viz
-            w = (1.0 / sc) # << is how it will actually be reflected
-            hi = np.full(len(sc), np.percentile(w, 80))
-            lo = np.full(len(sc), np.percentile(w, 20))
+            w = (1.0 / sp) # << is how it will actually be reflected
+            hi = np.full(len(sp), np.percentile(w, 80))
+            lo = np.full(len(sp), np.percentile(w, 20))
 
             ax['ba_1'].plot(w, '+')
             ax['ba_1'].plot(hi, '--')
             ax['ba_1'].plot(lo, '--')
-
             #ax['ba_1'].hist(sc[:n_c], alpha=0.5, label='cam')
-            #ax['ba_2'].cla()
+
+            w = (1.0 / sl) # << is how it will actually be reflected
+            hi = np.full(len(sl), np.percentile(w, 80))
+            lo = np.full(len(sl), np.percentile(w, 20))
+
+            ax['ba_2'].plot(w, '+')
+            ax['ba_2'].plot(hi, '--')
+            ax['ba_2'].plot(lo, '--')
             #ax['ba_2'].set_title('lmk-sc')
             #ax['ba_2'].hist(sc[n_c:], alpha=0.5, label='lmk')
 
@@ -1301,7 +1313,6 @@ class ClassicalVO(object):
                 self.residual_BA, x0,
                 #jac_sparsity=A,
                 jac=self.jac_BA,
-                #jac='2-point',
                 #x_scale = sc,
                 x_scale='jac',
                 args=(n_c, n_l, ci, li, p2),
