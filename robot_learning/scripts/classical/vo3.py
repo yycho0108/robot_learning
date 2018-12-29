@@ -1339,8 +1339,8 @@ class ClassicalVO(object):
 
         ## actually run BA
         # -- opt1 : custom --
-        x = x0
 
+        x = x0
         for i in range(10):
             print('iteration {}'.format(i))
             F = self.residual_BA(x,
@@ -1352,16 +1352,16 @@ class ClassicalVO(object):
         x1 = x
 
         # -- opt2 : scipy --
-        #res = least_squares(
-        #        self.residual_BA, x0,
-        #        #jac_sparsity=A,
-        #        jac=self.jac_BA,
-        #        #x_scale = sc,
-        #        x_scale='jac',
-        #        args=(n_c, n_l, ci, li, p2),
-        #        **self.pBA_
-        #        )
-        #x1 = res.x
+        # res = least_squares(
+        #         self.residual_BA, x0,
+        #         #jac_sparsity=A,
+        #         jac=self.jac_BA,
+        #         #x_scale = sc,
+        #         x_scale='jac',
+        #         args=(n_c, n_l, ci, li, p2),
+        #         **self.pBA_
+        #         )
+        # x1 = res.x
         # ------------------
 
         # format ...

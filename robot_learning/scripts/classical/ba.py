@@ -1,4 +1,5 @@
 from scipy.sparse.linalg import inv as sinv
+from scipy.linalg import cho_solve
 from scipy.sparse import bsr_matrix, lil_matrix
 import numpy as np
 from tf import transformations as tx
@@ -269,11 +270,13 @@ def block_inv(A, n_rows, n_cols):
         
         a = np.linalg.inv(A[i0:i1,j0:j1].todense())
         Ai[i0:i1,j0:j1] = a
+    print Ai.shape, Ai.nnz, Ai.size
     return Ai
 
 def schur_trick(J, F, n_c, n_l, s_c=3, s_l=3, mu=1.0):
     """
     """
+    ts = []
     # H.dot(dx) = -g
 
     # H of form [[B E],[E.T,C]] 
@@ -285,31 +288,49 @@ def schur_trick(J, F, n_c, n_l, s_c=3, s_l=3, mu=1.0):
     # B - S.dy = v - E.C^{-1}.w (NOTE: x' = x.T)
 
     #H0 = J.T.dot(J)
-    H0 = J.T.dot(J)
+    ts.append(time.time())
+    H0 = J.T.dot(J) # << most time-consuming step
+    ts.append(time.time())
 
     # opt1
     n = H0.shape[0]
     i = np.arange(n)
     H0[i,i] *= (1.0+mu)
     H=H0
+    ts.append(time.time())
 
     # opt2
     #D = np.diag(np.sqrt(np.diag(H0)))
     #H = H0 + mu * D.T.dot(D) # mu, D are regularization terms
     #print 'dbg -1'
     #H = H0
-    g = J.T.dot(F)
+    g = J.T.dot(F) # << sometimes consumes a lot of time as well
+    ts.append(time.time())
 
     o_l = n_c*s_c # landmark index offset
 
+    ts.append(time.time())
     # partition matrices
     B  = H[:o_l, :o_l]
     E  = H[:o_l, o_l:]
     ET = H[o_l:, :o_l]
     C  = H[o_l:, o_l:]
     v, w = -g[:o_l], -g[o_l:]
-    # Ci = np.linalg.pinv(C) # infeasible
-    Ci = block_inv(C, n_rows=s_c, n_cols=s_c) # should be pretty cheap?
+
+    # IMPORTANT : this is a hack on a lot of levels.
+    # 1. Directly manipulates Ci data
+    # 2. original H is not preserved since copy=False
+    # 3. Relies on data to be in a certain order
+    # FAST, but hacky. worth it? definitely.
+    Ci = bsr_matrix(C, shape=C.shape, blocksize=(s_c,s_c))
+    Ci.data = np.linalg.inv(Ci.data)
+
+    # validation
+    # Ci0 = block_inv(C, n_rows=s_c, n_cols=s_c) # should be pretty cheap?
+    # print np.square(Ci0.todense() - Ci.todense()).sum()
+
+    #Cib = np.linalg.inv(Cb.data)
+    ts.append(time.time())
 
     # -- opt1 : direct multiple
     #ECi = E.dot(Ci) # << problem
@@ -324,30 +345,43 @@ def schur_trick(J, F, n_c, n_l, s_c=3, s_l=3, mu=1.0):
     #        j0 = j * s_l
     #        j1 = (j+1) * s_l
     #        Eci[i0:i1,j0:j1] = E[i0:i1,j0:j1].dot(Ci[j0:j1,j0:j1])
-
-    print 'dbg1'
-    Cib = Ci.tobsr(blocksize=(s_c,s_c))
-    print 'dbg2'
-
+    ts.append(time.time())
     #t1 = time.time()
     #Eci = E.dot(Ci)
     #t2 = time.time()
-    ECi = E.dot(Cib) # Note ECi is dense here.
+    ECi = E.dot(Ci) # Note ECi is dense here.
+    ts.append(time.time())
     #t3 = time.time()
 
     #delta = Eci - Eci2
     #print np.abs(delta).sum()
     #print (Eci != 0).sum(), Eci.size
     # S,v,w are all dense at this point
-    print 'dbg3'
     S = (B - E.dot(ECi.T).T).todense()
-    print 'dbg4'
-    try:
-        dy = np.linalg.solve(S, (v - ECi.dot(w))) # << pose optimization
-    except Exception as e:
-        print 'solve failed ; fallback to lstsq : {}'.format(e)
-        dy = np.linalg.lstsq(S, (v-ECi.dot(w)))[0] # == give up "solve" exact soln.
-    dz = Cib.dot(w-ET.dot(dy)) # << landmark optimization
+    ts.append(time.time())
+    b = (v - ECi.dot(w))
+    ts.append(time.time())
+
+    dy = None
+    if np.linalg.cond(S) < (1.0 / np.finfo(np.float32).eps):
+        try:
+            cf = cho_factor(S)
+            dy = cho_solve(cf, b)
+            #dy = np.linalg.solve(S, b) # << pose optimization
+        except Exception as e:
+            print 'solve failed ; fallback to lstsq : {}'.format(e)
+    ts.append(time.time())
+    if dy is None:
+        # probably ill-conditioned
+        # TODO : maybe check residuals.
+        dy = np.linalg.lstsq(S, b)[0]
+    ts.append(time.time())
+    dz = Ci.dot(w-ET.dot(dy)) # << landmark optimization
+    ts.append(time.time())
+
+    dt = np.diff(ts)
+    print 'times', dt
+    print 'times (normalized)', dt / dt.max()
     return np.concatenate([dy,dz], axis=0)
 
 def main():
