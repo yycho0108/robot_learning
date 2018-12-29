@@ -5,7 +5,6 @@ Semi-Urgent TODOs:
     - Try to apply the homography model from ORB_SLAM??
     - Keyframes?
     - Incorporate Variance information in BA?
-    - Refactor Camera Extrinsic/Intrinsic Params as input
 """
 
 from collections import namedtuple, deque, defaultdict
@@ -148,7 +147,6 @@ def get_points_color(img, pts, w=3):
     cols = cols_w.astype(np.float32)
     # opt 2 : rms
     cols = np.sqrt(np.mean(np.square(cols),axis=(1,2)))
-    #cs = np.clip(cs, 0, 255) # TODO : evaluate if necessary
     return np.asarray(cols, dtype=img.dtype)
 
 def score_H(pt1, pt2, H, cvt, sigma=1.0):
@@ -1852,7 +1850,15 @@ class ClassicalVO(object):
         # == obtain next-frame keypoints ==
         if self.flag_ & ClassicalVO.VO_USE_TRACK:
             # opt1 : points by track
-            # TODO : construct pyramid
+            # TODO : support pyramid
+            #pyr_p = cv2.buildOpticalFlowPyramid(img_p,
+            #        self.pLK_['winSize'],
+            #        self.pLK_['maxLevel']
+            #        )
+            #pyr_c = cv2.buildOpticalFlowPyramid(img_p,
+            #        self.pLK_['winSize'],
+            #        self.pLK_['maxLevel']
+            #        )
             pt2_c,   idx_t   = self.track(img_p, img_c, pt2_p)
             pt2_c_l, idx_t_l = self.track(img_p, img_c, pt2_l)
 
@@ -1941,11 +1947,16 @@ class ClassicalVO(object):
             #pt2_u_c = np.squeeze(pt2_u_c, axis=0)
             #pt2_u_p = np.squeeze(pt2_u_p, axis=0)
 
-            pt2_u_c, pt2_u_p = cv2.correctMatches(F,
+            pt2_u_c2, pt2_u_p2 = cv2.correctMatches(F,
                     pt2_u_c[None,...],
                     pt2_u_p[None,...])
-            pt2_u_c = np.squeeze(pt2_u_c, axis=0)
-            pt2_u_p = np.squeeze(pt2_u_p, axis=0)
+
+            # -- will sometimes return NaN.
+            check_c = np.all(np.isfinite(pt2_u_c2))
+            check_p = np.all(np.isfinite(pt2_u_p2))
+            if check_c and check_p:
+                pt2_u_c = np.squeeze(pt2_u_c2, axis=0)
+                pt2_u_p = np.squeeze(pt2_u_p2, axis=0)
 
         # unscaled camera pose + reconstructed points from triangulation
         idx_e, pt3, R_em, t_em = self.run_EM(
@@ -2018,8 +2029,18 @@ class ClassicalVO(object):
         if (H is not None) and (F is not None):
             sF, msk_sF = score_F(pt2_u_c, pt2_u_p, F, self.cvt_)
             sH, msk_sH = score_H(pt2_u_c, pt2_u_p, H, self.cvt_)
-            rh = float(sH) / (sH+sF)
+            rh2 = float(sH) / (sH+sF)
             print_ratio('RH-gp', sH, sH+sF)
+            if np.isfinite(rh2):
+                rh = rh2
+            else:
+                print pt2_u_c.shape
+                print pt2_u_p.shape
+                print F
+                print H
+                print sH
+                print sF
+                raise ValueError(rh2, "Something is off.")
         
         # NOTE: estimate #2 does not produce R_b1 / t_b1
         # because it does not need to.
