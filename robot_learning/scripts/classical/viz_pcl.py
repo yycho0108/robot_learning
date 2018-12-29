@@ -219,20 +219,20 @@ def main():
     #lmk_var = lmk_var[v_idx]
     ##cam_pos = cam_pos[v_idx]
 
-    idx = np.where(lmk_pos[:,2] > -0.01) # plot above ground-plane
-    lmk_pos, lmk_col, lmk_var = [e[idx] for e in (lmk_pos, lmk_col, lmk_var)]
+    #idx = np.where(lmk_pos[:,2] > -0.01) # plot above ground-plane
+    #lmk_pos, lmk_col, lmk_var = [e[idx] for e in (lmk_pos, lmk_col, lmk_var)]
 
     idx = non_max_suppression(lmk_pos, lmk_var, k=16, radius=0.025)
     lmk_pos, lmk_col, lmk_var = [e[idx] for e in (lmk_pos, lmk_col, lmk_var)]
 
-    lo = np.percentile(lmk_pos, 5, axis=0)
-    hi = np.percentile(lmk_pos, 95, axis=0)
-    clip_msk = np.logical_and.reduce([
-        np.all(lo[None,:] <= lmk_pos, axis=1),
-        np.all(lmk_pos <= hi[None,:], axis=1)
-        ])
-    idx = np.where(clip_msk)[0]
-    lmk_pos, lmk_col, lmk_var = [e[idx] for e in (lmk_pos, lmk_col, lmk_var)]
+    #lo = np.percentile(lmk_pos, 5, axis=0)
+    #hi = np.percentile(lmk_pos, 95, axis=0)
+    #clip_msk = np.logical_and.reduce([
+    #    np.all(lo[None,:] <= lmk_pos, axis=1),
+    #    np.all(lmk_pos <= hi[None,:], axis=1)
+    #    ])
+    #idx = np.where(clip_msk)[0]
+    #lmk_pos, lmk_col, lmk_var = [e[idx] for e in (lmk_pos, lmk_col, lmk_var)]
 
     lo = np.percentile(lmk_pos, 20, axis=0)
     hi = np.percentile(lmk_pos, 80, axis=0)

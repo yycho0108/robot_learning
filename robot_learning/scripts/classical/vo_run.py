@@ -254,10 +254,12 @@ class CVORunner(object):
         cam_pos = np.stack([self.tx_, self.ty_, self.th_], axis=-1)
         lmk_pos = self.vo_.landmarks_.pos
         lmk_var = self.vo_.landmarks_.var
+        #lmk_ang = self.vo_.landmarks_.ang
         lmk_col = self.vo_.landmarks_.col
 
         np.save('/tmp/cam_pos.npy', cam_pos)
         np.save('/tmp/lmk_pos.npy', lmk_pos)
+        #np.save('/tmp/lmk_ang.npy', lmk_ang)
         np.save('/tmp/lmk_var.npy', lmk_var)
         np.save('/tmp/lmk_col.npy', lmk_col)
 

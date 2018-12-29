@@ -46,6 +46,31 @@ def print_ratio(msg, a, b):
 def lerp(a,b,w):
     return (a*w) + (b*(1.0-w))
 
+def p2vec(p2, p, l, cvt):
+    # where they are 'supposed to be'
+    # Nx2, image coordinates
+    g = p2
+    # Nx3, camera coordinates
+    g = cvt.pt_to_pth(g).dot(cvt.Ki_.T)
+    # Nx3, Normalize + apply depth
+    g /= np.linalg.norm(g, axis=-1, keepdims=True)
+    d = np.linalg.norm(l[:,:2] - p[:,:2], axis=-1, keepdims=True)
+    g *= d
+    # Nx3, camera->base coordinates
+    g = g.dot(cvt.T_c2b_[:3,:3].T) + cvt.T_c2b_[:3,3:].T
+    # Construct Z-axis rotation matrix
+    h = p[:,2]
+    c, s = np.cos(h), np.sin(h)
+    Rz = np.zeros((len(c),3,3), dtype=np.float32)
+    Rz[:,0,0] = c
+    Rz[:,0,1] = -s
+    Rz[:,1,0] = s
+    Rz[:,1,1] = c # Nx3x3
+    Rz[:,2,2] = 1
+    # Nx3, base -> map coordinates
+    g = np.matmul(Rz, g[...,None])[...,0]
+    return g
+
 def axisEqual3D(ax):
     """ from https://stackoverflow.com/a/19248731 """
     extents = np.array([getattr(ax, 'get_{}lim'.format(dim))() for dim in 'xyz'])
@@ -528,7 +553,7 @@ class ClassicalVO(object):
                 )
         self.pBA_ = dict(
                 ftol=1e-4,
-                #xtol=np.finfo(float).eps,
+                xtol=np.finfo(float).eps,
                 loss='huber',
                 max_nfev=1024,
                 method='trf',
@@ -536,7 +561,7 @@ class ClassicalVO(object):
                 tr_solver='lsmr',
                 )
         self.pPNP_ = dict(
-                iterationsCount=10000,
+                iterationsCount=1000,
                 reprojectionError=0.5,
                 confidence=0.99,
                 #flags = cv2.SOLVEPNP_EPNP
@@ -549,7 +574,7 @@ class ClassicalVO(object):
         # TODO : what is FAST threshold?
         # TODO : tune nfeatures; empirically 2048 is pretty good
         orb = cv2.ORB_create(
-                nfeatures=2048,
+                nfeatures=1024,
                 scaleFactor=1.2,#np.sqrt(2),??
                 nlevels=8,
                 # IMPORTANT : scoretype here influences response-based filters.
@@ -1270,42 +1295,46 @@ class ClassicalVO(object):
         # TODO : x_scale=sc is very very unstable.
         sp = np.sqrt(vp)
         sl = np.sqrt(vl)
-        #sl_lo = np.percentile(sp, 50)
+        sl_lo = np.percentile(sp, 50) # lower bounds on pose
         #sl_lo = np.percentile(sl, 20)
         #sl_hi = np.percentile(sl, 80)
         #sl = np.clip(sl, sl_lo, a_max=None)
+        sl_mx = sl.max()
+        sl_mn = sl.min()
+
+        sl = (sl - sl_mn) * ( (sl_mx - sl_lo) / (sl_mx - sl_mn) ) + sl_lo
         sc = np.concatenate([sp.ravel(), sl.ravel()])
 
         if ax is not None:
-            ax['ba_1'].cla()
+            ## prep data for viz
+            #wp = (1.0 / sp) # << is how it will actually be reflected
+            #hip = np.full(len(sp), np.percentile(wp, 80))
+            #lop = np.full(len(sp), np.percentile(wp, 20))
+
+            #ax['ba_1'].cla()
+            #ax['ba_1'].set_title('scale-pos')
+            #ax['ba_1'].plot(wp, '+')
+            #ax['ba_1'].plot(hip, '--')
+            #ax['ba_1'].plot(lop, '--')
+            ##ax['ba_1'].hist(sc[:n_c], alpha=0.5, label='cam')
+
+            wl = (1.0 / sl) # << is how it will actually be reflected
+            hil = np.full(len(sl), np.percentile(wl, 80))
+            lol = np.full(len(sl), np.percentile(wl, 20))
+
             ax['ba_2'].cla()
-            ax['ba_1'].set_title('scale-pos')
             ax['ba_2'].set_title('scale-lmk')
-
-            # prep data for viz
-            w = (1.0 / sp) # << is how it will actually be reflected
-            hi = np.full(len(sp), np.percentile(w, 80))
-            lo = np.full(len(sp), np.percentile(w, 20))
-
-            ax['ba_1'].plot(w, '+')
-            ax['ba_1'].plot(hi, '--')
-            ax['ba_1'].plot(lo, '--')
-            #ax['ba_1'].hist(sc[:n_c], alpha=0.5, label='cam')
-
-            w = (1.0 / sl) # << is how it will actually be reflected
-            hi = np.full(len(sl), np.percentile(w, 80))
-            lo = np.full(len(sl), np.percentile(w, 20))
-
-            ax['ba_2'].plot(w, '+')
-            ax['ba_2'].plot(hi, '--')
-            ax['ba_2'].plot(lo, '--')
+            ax['ba_2'].plot(wl, '+')
+            ax['ba_2'].plot(hil, '--')
+            ax['ba_2'].plot(lol, '--')
             #ax['ba_2'].set_title('lmk-sc')
             #ax['ba_2'].hist(sc[n_c:], alpha=0.5, label='lmk')
 
         # mean reprojection error
-        err0 = np.sqrt(np.square(self.residual_BA(x0,
+        err0s = np.square(self.residual_BA(x0,
             n_c, n_l,
-            ci, li, p2)).mean())
+            ci, li, p2))
+        err0 = np.sqrt(err0s.mean())
 
         # actually run BA
         res = least_squares(
@@ -1322,19 +1351,103 @@ class ClassicalVO(object):
         pos_opt = res.x[:n_c*3].reshape(-1,3)
         lmk_opt = res.x[n_c*3:].reshape(-1,3)
 
-        err1 = np.sqrt(np.square(self.residual_BA(res.x,
+        err1s = np.square(self.residual_BA(res.x,
             n_c, n_l,
-            ci, li, p2)).mean())
+            ci, li, p2))
+        err1 = np.sqrt(err1s.mean())
         #print err0, err1
 
+
         if ax is not None:
+            # visualize best improvements
+            n_viz = 16
+            imp = np.sqrt(err0s.reshape(-1,2).sum(axis=1)) - np.sqrt(err1s.reshape(-1,2).sum(axis=1))
+
+            print 'improvement min', imp.min()
+            print 'improvement max', imp.max()
+
+            v_idx = np.argsort(imp)[-n_viz:]
+
+            print 'most improved landmarks', li[v_idx]
+            pre_l  = self.landmarks_.pos[li_u][li[v_idx]]
+            post_l = lmk_opt[li[v_idx]]
+
+            print 'most improved poses', ci[v_idx]
+            pre_p  = p0[ci[v_idx]]
+            post_p = pos_opt[ci[v_idx]]
+
+            # points
+            pre_p2  = p2[v_idx]
+            post_p2 = p2[v_idx] # NOTE: same
+
+            vp0 = pre_p
+            vl0 = pre_l.dot(self.cvt_.T_c2b_[:3,:3].T) + self.cvt_.T_c2b_[:3,3:].T # map coord
+            d0  = p2vec(pre_p2, vp0, vl0, self.cvt_)
+
+            vp1 = post_p
+            vl1 = post_l.dot(self.cvt_.T_c2b_[:3,:3].T) + self.cvt_.T_c2b_[:3,3:].T # map coord
+            d1  = p2vec(post_p2, vp1, vl1, self.cvt_)
+
+            elems = [vp0, vl0, vp1, vl1]
+
+            mnlim = np.min([e.min(axis=0) for e in elems], axis=0)
+            print mnlim.shape
+            mxlim = np.max([e.max(axis=0) for e in elems], axis=0)
+            print mxlim.shape
+            xlim, ylim, _ = zip(*[mnlim, mxlim])
+
+            # apply padding
+            pad = 1.2
+            xmean = np.mean(xlim)
+            ymean = np.mean(ylim)
+            xlim = [xmean + pad * (xlim[0] - xmean), xmean + pad * (xlim[1] - xmean)]
+            ylim = [ymean + pad * (ylim[0] - ymean), ymean + pad * (ylim[1] - ymean)]
+
             ax['ba_0'].cla()
-            ax['ba_0'].plot(p0[:,0], p0[:,1], 'ko-', label='initial')
-            ax['ba_0'].plot(pos_opt[:,0], pos_opt[:,1], 'r+-', label='optimized')
+            ax['ba_0'].plot(vp0[:,0], vp0[:,1], 'bo', label='pos0')
+            ax['ba_0'].plot(vl0[:,0], vl0[:,1], 'c^', label='lmk0')
+            ax['ba_0'].quiver(
+                    vp0[:,0], vp0[:,1],
+                    #vl0[:,0] - vp0[:,0], vl0[:,1] - vp0[:,1],
+                    d0[:,0], d0[:,1],
+                    angles='xy',
+                    scale=1.0,
+                    scale_units='xy',
+                    color='r',
+                    linestyle=':',
+                    dashes=(0,(10, 20)),
+                    alpha=0.5
+                    )
+            ax['ba_0'].plot(vp1[:,0], vp1[:,1], 'r+', label='pos1')
+            ax['ba_0'].plot(vl1[:,0], vl1[:,1], 'm^', label='lmk1')
+            ax['ba_0'].quiver(
+                    vp1[:,0], vp1[:,1],
+                    #vl1[:,0] - vp1[:,0], vl1[:,1]-vp1[:,1],
+                    d1[:,0], d1[:,1],
+                    angles='xy',
+                    scale=1.0,
+                    scale_units='xy',
+                    color='b',
+                    linestyle=':',
+                    dashes=(0,(10, 20)),
+                    alpha=0.5
+                    )
             ax['ba_0'].set_title('BA : {:.3e}->{:.3e}'.format( err0, err1 ))
-            ax['ba_0'].axis('equal')
+            ax['ba_0'].set_xlim(xlim)
+            ax['ba_0'].set_ylim(ylim)
             ax['ba_0'].set_aspect('equal', 'datalim')
             ax['ba_0'].legend()
+            #ax['ba_0'].plot(p0[:,0], p0[:,1], 'ko-', label='pos-pre')
+            #ax['ba_0'].plot(p0[:,0], p0[:,1], 'ko-', label='lmk-pre')
+
+        if ax is not None:
+            ax['ba_1'].cla()
+            ax['ba_1'].plot(p0[:,0], p0[:,1], 'ko-', label='initial')
+            ax['ba_1'].plot(pos_opt[:,0], pos_opt[:,1], 'r+-', label='optimized')
+            ax['ba_1'].set_title('BA Pose'.format( err0, err1 ))
+            ax['ba_1'].axis('equal')
+            ax['ba_1'].set_aspect('equal', 'datalim')
+            ax['ba_1'].legend()
 
         # apply BA results
         # TODO : can we INPUT variance information to scipy.least_squares?
