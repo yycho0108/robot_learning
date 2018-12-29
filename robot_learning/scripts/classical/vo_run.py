@@ -53,7 +53,8 @@ class CVORunner(object):
                 'prune_0' : G(gs[1,3]),
                 'prune_1' : G(gs[1,4]),
                 'lmk_cnt' : G(gs[2,3:5]),
-                'scale' : G(gs[1,5])
+                'scale' : G(gs[1,5]),
+                'pnp'   : G(gs[2,5])
                 }
 
         self.map_ = np.empty((0, 2), dtype=np.float32)
@@ -268,7 +269,7 @@ def main():
     np.set_printoptions(precision=4)
     #idx = np.random.choice(8)
     # 27, 34, 41 are currently used
-    idx = 41
+    idx = 27
     print('idx', idx)
 
     # load data

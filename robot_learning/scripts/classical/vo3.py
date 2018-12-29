@@ -488,7 +488,7 @@ class ClassicalVO(object):
         self.flag_ = ClassicalVO.VO_DEFAULT
         self.flag_ &= ~ClassicalVO.VO_USE_HOMO # TODO : doesn't really work?
         #self.flag_ &= ~ClassicalVO.VO_USE_BA
-        #self.flag_ |= ClassicalVO.VO_USE_PNP
+        self.flag_ |= ClassicalVO.VO_USE_PNP
         #self.flag_ &= ~ClassicalVO.VO_USE_FM_COR # performance
 
         # TODO : control stage-level verbosity
@@ -706,7 +706,9 @@ class ClassicalVO(object):
             pose, scale,
             pt3_new_c, lm_idx,
             pt2_new,
-            pt2_new_u
+            pt2_new_u,
+            ax,
+            msg=''
             ):
         """
         NOTE : pt3_new_c MUST BE in camera coordinates.
@@ -820,51 +822,47 @@ class ClassicalVO(object):
             self.graph_.append(lm_idx, pt2_new_u)
 
         # == PNP ===================
-        ## flag to decide whether to run PNP
-        #run_pnp = bool(self.flag_ & ClassicalVO.VO_USE_PNP)
-        #run_pnp &= lm_idx_e.size >= 16 # use at least > 16 points
+        # flag to decide whether to run PNP
+        run_pnp = bool(self.flag_ & ClassicalVO.VO_USE_PNP)
+        run_pnp &= lm_idx.size >= 16 # use at least > 16 points
         # TODO : REVIVE PNP AT SOME POINT
-        ## reset PNP data no matter what
-        #self.pnp_p_ = None
-        #self.pnp_h_ = None
-        #if run_pnp:
-        #    # either landmarks are wrong, or poses are wrong, which influences PNP performance.
-        #    # The issue is that both of them must be simultaneously optimized.
-        #    pt_map = pos_lm[i1[lm_idx_e]] # --> "REAL" map from old observations
-        #    #pt_map = p_lm_v2_0 # --> "FAKE" map from current observation
-        #    #pt_map = lerp(pos_lm[i1[lm_idx_e]], p_lm_v2_0, 0.15) # compromise?
-        #    pt_cam = pt2_u_c[i2[lm_idx_e]]
+        # reset PNP data no matter what
+        self.pnp_p_ = None
+        self.pnp_h_ = None
+        if run_pnp:
+            # either landmarks are wrong, or poses are wrong, which influences PNP performance.
+            # The issue is that both of them must be simultaneously optimized.
 
-        #    # filter by above-GP features
-        #    # (TODO : hack because ground plane tends to be somewhat homogeneous
-        #    # in the test cases)
-        #    pt_map_b = pt_map.dot(self.cvt_.T_c2b_[:3,:3].T) + self.cvt_.T_c2b_[:3,3:].T
-        #    ngp_msk =  (pt_cam[:,1] < self.y_GP) # based on camera
-        #    ngp_msk &= (pt_map_b[:,2] > 0.0)     # based on map
-        #    ngp_idx = np.where(ngp_msk)[0]
-        #    pt_map = pt_map[ngp_idx]
-        #    pt_cam = pt_cam[ngp_idx]
-        #    #pt_cam_rec = pt2_lm[i1[lm_idx_e[ngp_idx]]] # un-updated
-        #    pt_cam_rec, _ = self.cvt_.pt3_pose_to_pt2_msk(
-        #            pt_map, pose) # updated version
+            #pt_map = p_lm_v2_0 # --> "FAKE" map from current observation
+            #pt_map = lerp(pos_lm[i1[lm_idx_e]], p_lm_v2_0, 0.15) # compromise?
+            pt_map = self.landmarks_.pos[lm_idx]
+            pt_cam = pt2_new_u
 
-        #    # == debugging ==
-        #    # TODO : make slot for pnp
-        #    #try:
-        #    #    fig = self.pfig_
-        #    #    ax  = fig.gca()
-        #    #except Exception:
-        #    #    self.pfig_ = plt.figure()
-        #    #    fig = self.pfig_
-        #    #    ax  = fig.gca()
-        #    #ax.cla()
-        #    #ax.imshow(img_c[...,::-1])
-        #    #ax.plot(pt_cam_rec[:,0], pt_cam_rec[:,1], 'r*', alpha=0.5)
-        #    #ax.plot(pt_cam[:,0], pt_cam[:,1], 'b+', alpha=0.5)
-        #    #if not ax.yaxis_inverted():
-        #    #    ax.invert_yaxis()
-        #    # == debugging ==
-        #    msg = self.run_PNP(pt_map, pt_cam, pose, msg=msg)
+            # filter by above-GP features
+            # (TODO : hack because ground plane tends to be somewhat homogeneous
+            # in the test cases)
+            pt_map_b = pt_map.dot(self.cvt_.T_c2b_[:3,:3].T) + self.cvt_.T_c2b_[:3,3:].T
+            ngp_msk =  (pt_cam[:,1] < self.y_GP) # based on camera
+            ngp_msk &= (pt_map_b[:,2] > 0.0)     # based on map
+            ngp_idx = np.where(ngp_msk)[0]
+            pt_map = pt_map[ngp_idx]
+            pt_cam = pt_cam[ngp_idx]
+
+            #pt_cam_rec = pt2_lm[i1[lm_idx_e[ngp_idx]]] # un-updated
+            pt_cam_rec, _ = self.cvt_.pt3_pose_to_pt2_msk(
+                    pt_map, pose) # updated version
+
+            # == debugging ==
+            # TODO : make slot for pnp
+            if ax is not None:
+                ax['pnp'].cla()
+                #ax['pnp'].imshow(img_c[...,::-1])
+                ax['pnp'].plot(pt_cam_rec[:,0], pt_cam_rec[:,1], 'r*', alpha=0.5)
+                ax['pnp'].plot(pt_cam[:,0], pt_cam[:,1], 'b+', alpha=0.5)
+                if not ax['pnp'].yaxis_inverted():
+                    ax['pnp'].invert_yaxis()
+            # == debugging ==
+            msg = self.run_PNP(pt_map, pt_cam, pose, msg=msg)
         # ========================
 
         # == visualize filtering process ==
@@ -885,8 +883,7 @@ class ClassicalVO(object):
         #         style='b*', colors=colors, label='lm_post'
         #         )
         # =================================
-
-        return scale
+        return scale, msg
 
     def proc_f2m_new(self,
             pose, scale, pt3,
@@ -1076,6 +1073,7 @@ class ClassicalVO(object):
         dh = tx.euler_from_matrix(R)[2]
         dx = np.float32([t[0], t[1]])
 
+        print('erroneous z-trans', t[2])
         c, s = np.cos(h), np.sin(h)
         R2_p = np.reshape([c,-s,s,c], [2,2]) # [2,2,N]
         dp = R2_p.dot(dx).ravel()
@@ -2165,12 +2163,14 @@ class ClassicalVO(object):
             # and recompute rectified pose_c_r
 
             # process old points first and obtain camera motion scale from correspondences
-            scale_c = self.proc_f2m_old(
+            scale_c, msg = self.proc_f2m_old(
                     pose_c_r, scale_c,
                     pt3[idx_idx_e_lmk], # new points3
                     idx_l[idx_t_l[idx_e_lmk - cam_lim]], # landmark indices; NOTE : apply lmk index start offset
                     pt2_c_all[idx_e_lmk], # points here are needed to update kpt location
                     pt2_u_c[idx_e_lmk], # undistorted observations, required for obs. adding
+                    ax,
+                    msg
                     )
 
             # new points
