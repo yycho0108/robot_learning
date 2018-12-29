@@ -1,5 +1,5 @@
 from scipy.sparse.linalg import inv as sinv
-from scipy.linalg import cho_solve
+from scipy.linalg import cho_solve, cho_factor
 from scipy.sparse import bsr_matrix, lil_matrix
 import numpy as np
 from tf import transformations as tx
@@ -273,7 +273,7 @@ def block_inv(A, n_rows, n_cols):
     print Ai.shape, Ai.nnz, Ai.size
     return Ai
 
-def schur_trick(J, F, n_c, n_l, s_c=3, s_l=3, mu=1.0):
+def schur_trick(J, F, n_c, n_l, s_c=3, s_l=3, mu=1e-3):
     """
     """
     ts = []
@@ -321,7 +321,7 @@ def schur_trick(J, F, n_c, n_l, s_c=3, s_l=3, mu=1.0):
     # 1. Directly manipulates Ci data
     # 2. original H is not preserved since copy=False
     # 3. Relies on data to be in a certain order
-    # FAST, but hacky. worth it? definitely.
+    # FAST, but hacky. worth it? maybe.
     Ci = bsr_matrix(C, shape=C.shape, blocksize=(s_c,s_c))
     Ci.data = np.linalg.inv(Ci.data)
 
@@ -380,8 +380,8 @@ def schur_trick(J, F, n_c, n_l, s_c=3, s_l=3, mu=1.0):
     ts.append(time.time())
 
     dt = np.diff(ts)
-    print 'times', dt
-    print 'times (normalized)', dt / dt.max()
+    #print 'times', dt
+    #print 'times (normalized)', dt / dt.max()
     return np.concatenate([dy,dz], axis=0)
 
 def main():

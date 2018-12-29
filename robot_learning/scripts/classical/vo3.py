@@ -552,7 +552,7 @@ class ClassicalVO(object):
                 minEigThreshold = 1e-3 # TODO : disable eig?
                 )
         self.pBA_ = dict(
-                ftol=1e-4,
+                ftol=1e-3,
                 xtol=np.finfo(float).eps,
                 loss='huber',
                 max_nfev=1024,
@@ -1340,15 +1340,39 @@ class ClassicalVO(object):
         ## actually run BA
         # -- opt1 : custom --
 
+        max_it = self.pBA_['max_nfev']
+        ftol = self.pBA_['ftol']
+        xtol = self.pBA_['xtol']
+
+        # setup variables
         x = x0
-        for i in range(10):
-            print('iteration {}'.format(i))
-            F = self.residual_BA(x,
-                    n_c, n_l,
-                    ci, li, p2)
+        F = self.residual_BA(x,
+            n_c, n_l,
+            ci, li, p2)
+        Fs = np.square(F).sum()
+
+        for i in range(max_it):
+            # compute deltas
             J = self.jac_BA(x, n_c, n_l, ci, li, p2)
             dx = schur_trick(J, F, n_c, n_l)
+            # TODO: check xtol
             x += dx
+
+            F1 = self.residual_BA(x,
+                    n_c, n_l,
+                    ci, li, p2)
+            F1s = np.square(F1).sum()
+
+            # check ftol
+            dF = Fs - F1s
+            print('[{}] ref : {}'.format(i, dF / Fs))
+            if dF < ftol * Fs:
+                print('satisfied ftol')
+                break
+            # cache data
+            F = F1
+            Fs = F1s
+
         x1 = x
 
         # -- opt2 : scipy --
