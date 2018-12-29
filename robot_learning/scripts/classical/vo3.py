@@ -13,6 +13,7 @@ from tf import transformations as tx
 import cv2
 import numpy as np
 import sys
+import time
 
 from vo_common import recover_pose, drawMatches, recover_pose_from_RT
 from vo_common import robust_mean, oriented_cov, show_landmark_2d
@@ -23,8 +24,10 @@ from sklearn.neighbors import NearestNeighbors
 from matplotlib.patches import Ellipse
 from mpl_toolkits.mplot3d import Axes3D
 
-from scipy.sparse import lil_matrix
+from scipy.sparse import lil_matrix, csr_matrix
 from scipy.optimize import least_squares
+from scipy.optimize._lsq.common import scale_for_robust_loss_function
+from scipy.optimize._lsq.least_squares import construct_loss_function
 
 from ukf import build_ukf, build_ekf, get_QR
 from ba import ba_J, ba_J_v2, schur_trick
@@ -234,6 +237,62 @@ def score_F(pt1, pt2, F, cvt, sigma=1.0):
     score += ((th_score - chi_sq1) * msk1).sum()
 
     return score, (msk1 & msk2)
+
+def lsq(f, x0, jac, args,
+        ftol=1e-8, xtol=1e-8,
+        max_nfev=1000,
+        # below, currently ignored parameters
+        loss=None,
+        method=None,
+        verbose=None,
+        tr_solver=None,
+        f_scale=1.0,
+        ):
+
+    def f_cost(x):
+        return 0.5 * np.dot(x,x)
+
+    # initial values
+    x = x0
+    F = f(x, *args)
+    J = jac(x, *args)
+    cost = f_cost(F)
+
+    for i in range(max_nfev):
+        ts = []
+        ts.append( time.time())
+        # compute deltas
+        J = jac(x, *args)
+        ts.append( time.time()) 
+        # NOTE: *args[:2] is a hack to get n_c & n_l populated
+        dx = schur_trick(J, F, *args[:2])
+        ts.append( time.time()) 
+        # TODO: check xtol
+        x += dx
+        ts.append( time.time()) 
+        F1 = f(x, *args)
+        ts.append( time.time()) 
+        cost1 = f_cost(F1)
+        ts.append( time.time()) 
+
+        # check ftol
+        d_cost = cost - cost1 
+        print('[{}] ref : {}'.format(i, d_cost / cost))
+        if d_cost < ftol * cost:
+            print('satisfied ftol')
+            break
+
+        # cache data
+        F = F1
+        cost = cost1
+
+        dt = np.diff(ts)
+
+        #print 'net time summary'
+        #print dt
+        #print dt / dt.max()
+
+    return x
 
 class VGraph(object):
     """ Simple wrapper for visibility graph """
@@ -554,7 +613,7 @@ class ClassicalVO(object):
         self.pBA_ = dict(
                 ftol=1e-3,
                 xtol=np.finfo(float).eps,
-                loss='huber',
+                loss='linear',
                 max_nfev=1024,
                 method='trf',
                 verbose=2,
@@ -1098,7 +1157,6 @@ class ClassicalVO(object):
         dh = tx.euler_from_matrix(R)[2]
         dx = np.float32([t[0], t[1]])
 
-        print('erroneous z-trans', t[2])
         c, s = np.cos(h), np.sin(h)
         R2_p = np.reshape([c,-s,s,c], [2,2]) # [2,2,N]
         dp = R2_p.dot(dx).ravel()
@@ -1218,6 +1276,7 @@ class ClassicalVO(object):
         TODO : optimize and/or validate
         """
         # shape information
+        ts = []
         n_o = len(c_i)
 
         # unroll input params
@@ -1225,26 +1284,65 @@ class ClassicalVO(object):
         lmk = x[n_c*3:].reshape(-1, 3) # landmark positions
 
         # TODO : cache results for pt2_h to avoid calcing twice
+        ts.append(time.time())
         pt2_h = self.project_BA(pos[c_i], lmk[l_i], return_h=True)
+        ts.append(time.time())
         #err   = obs_pt2 - pt2_h
-
         J = -ba_J_v2(pos[c_i], lmk[l_i], self.K_,
                 self.cvt_.T_b2c_[:3,:3], self.cvt_.T_b2c_[:3,3:], pt2_h) # Nx2x6
+        ts.append(time.time())
 
         J_c = J[:,:,:3]
         J_l = J[:,:,3:]
 
-        J_res = lil_matrix((2*n_o, n_c*3+n_l*3))
-
         o_i0 = np.arange(n_o)
-        for i_o in range(2): # iterate over point (x,y)
-            for i_c in range(3): # iterate over pose (x,y,h)
-                J_res[o_i0*2+i_o, c_i*3+i_c] = J_c[:,i_o,i_c]
-            for i_l in range(3): # iterate over landmark (x,y,z)
-                J_res[o_i0*2+i_o, n_c*3 + l_i*3+i_l] = J_l[:,i_o,i_l]
-        # quick validation.
-        #zmsk = (self.sparsity_BA(n_c,n_l,c_i,l_i).todense() == 0)
-        #print 'jacobian validation', np.abs(J_res[zmsk]).sum()
+
+        # TODO : better format?
+        ri = np.r_[
+                o_i0*2, o_i0*2, o_i0*2,
+                o_i0*2, o_i0*2, o_i0*2,
+                o_i0*2+1, o_i0*2+1, o_i0*2+1,
+                o_i0*2+1, o_i0*2+1, o_i0*2+1
+                ]
+        ci = np.r_[
+                c_i*3,
+                c_i*3+1,
+                c_i*3+2,
+                n_c*3+l_i*3,
+                n_c*3+l_i*3+1,
+                n_c*3+l_i*3+2,
+                c_i*3,
+                c_i*3+1,
+                c_i*3+2,
+                n_c*3+l_i*3,
+                n_c*3+l_i*3+1,
+                n_c*3+l_i*3+2
+                ]
+
+        data = np.transpose(J, [1,2,0]).ravel()
+        #print 'can i just...?', np.square(data - data1.ravel()).sum()
+
+        ts.append(time.time())
+        J_res = csr_matrix(
+                (data, (ri, ci)),
+                shape=(2*n_o, n_c*3+n_l*3)
+                )
+
+        # legacy reference : lil_matrix
+        #J_res = lil_matrix((2*n_o, n_c*3+n_l*3))
+        #for i_o in range(2): # iterate over point (x,y)
+        #    for i_c in range(3): # iterate over pose (x,y,h)
+        #        J_res[o_i0*2+i_o, c_i*3+i_c] = J_c[:,i_o,i_c]
+        #    for i_l in range(3): # iterate over landmark (x,y,z)
+        #        J_res[o_i0*2+i_o, n_c*3 + l_i*3+i_l] = J_l[:,i_o,i_l]
+        #J_res = J_res.tocsr()
+
+        ts.append(time.time())
+
+        dt = np.diff(ts)
+
+        #print 'jac_BA dt', dt
+        #print 'jac_BA dt(normalized)', dt / dt.sum()
 
         return J_res
 
@@ -1339,42 +1437,12 @@ class ClassicalVO(object):
 
         ## actually run BA
         # -- opt1 : custom --
-
-        max_it = self.pBA_['max_nfev']
-        ftol = self.pBA_['ftol']
-        xtol = self.pBA_['xtol']
-
         # setup variables
-        x = x0
-        F = self.residual_BA(x,
-            n_c, n_l,
-            ci, li, p2)
-        Fs = np.square(F).sum()
-
-        for i in range(max_it):
-            # compute deltas
-            J = self.jac_BA(x, n_c, n_l, ci, li, p2)
-            dx = schur_trick(J, F, n_c, n_l)
-            # TODO: check xtol
-            x += dx
-
-            F1 = self.residual_BA(x,
-                    n_c, n_l,
-                    ci, li, p2)
-            F1s = np.square(F1).sum()
-
-            # check ftol
-            dF = Fs - F1s
-            print('[{}] ref : {}'.format(i, dF / Fs))
-            if dF < ftol * Fs:
-                print('satisfied ftol')
-                break
-            # cache data
-            F = F1
-            Fs = F1s
-
-        x1 = x
-
+        x1 = lsq(self.residual_BA, x0,
+                jac=self.jac_BA,
+                args=(n_c, n_l, ci, li, p2),
+                **self.pBA_
+                )
         # -- opt2 : scipy --
         # res = least_squares(
         #         self.residual_BA, x0,

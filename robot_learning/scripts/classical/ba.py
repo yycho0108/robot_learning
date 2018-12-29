@@ -273,7 +273,7 @@ def block_inv(A, n_rows, n_cols):
     print Ai.shape, Ai.nnz, Ai.size
     return Ai
 
-def schur_trick(J, F, n_c, n_l, s_c=3, s_l=3, mu=1e-3):
+def schur_trick(J, F, n_c, n_l, s_c=3, s_l=3, mu=1e-2):
     """
     """
     ts = []
