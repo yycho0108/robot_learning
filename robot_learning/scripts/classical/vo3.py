@@ -27,7 +27,7 @@ from scipy.sparse import lil_matrix
 from scipy.optimize import least_squares
 
 from ukf import build_ukf, build_ekf, get_QR
-from ba import ba_J, ba_J_v2
+from ba import ba_J, ba_J_v2, schur_trick
 
 def print_ratio(msg, a, b):
     as_int = np.issubdtype(type(a), np.integer)
@@ -1330,28 +1330,45 @@ class ClassicalVO(object):
             #ax['ba_2'].set_title('lmk-sc')
             #ax['ba_2'].hist(sc[n_c:], alpha=0.5, label='lmk')
 
+
         # mean reprojection error
         err0s = np.square(self.residual_BA(x0,
             n_c, n_l,
             ci, li, p2))
         err0 = np.sqrt(err0s.mean())
 
-        # actually run BA
-        res = least_squares(
-                self.residual_BA, x0,
-                #jac_sparsity=A,
-                jac=self.jac_BA,
-                #x_scale = sc,
-                x_scale='jac',
-                args=(n_c, n_l, ci, li, p2),
-                **self.pBA_
-                )
+        ## actually run BA
+        # -- opt1 : custom --
+        x = x0
+
+        for i in range(10):
+            print('iteration {}'.format(i))
+            F = self.residual_BA(x,
+                    n_c, n_l,
+                    ci, li, p2)
+            J = self.jac_BA(x, n_c, n_l, ci, li, p2)
+            dx = schur_trick(J, F, n_c, n_l)
+            x += dx
+        x1 = x
+
+        # -- opt2 : scipy --
+        #res = least_squares(
+        #        self.residual_BA, x0,
+        #        #jac_sparsity=A,
+        #        jac=self.jac_BA,
+        #        #x_scale = sc,
+        #        x_scale='jac',
+        #        args=(n_c, n_l, ci, li, p2),
+        #        **self.pBA_
+        #        )
+        #x1 = res.x
+        # ------------------
 
         # format ...
-        pos_opt = res.x[:n_c*3].reshape(-1,3)
-        lmk_opt = res.x[n_c*3:].reshape(-1,3)
+        pos_opt = x1[:n_c*3].reshape(-1,3)
+        lmk_opt = x1[n_c*3:].reshape(-1,3)
 
-        err1s = np.square(self.residual_BA(res.x,
+        err1s = np.square(self.residual_BA(x1,
             n_c, n_l,
             ci, li, p2))
         err1 = np.sqrt(err1s.mean())
