@@ -490,7 +490,7 @@ class ClassicalVO(object):
         self.flag_ &= ~ClassicalVO.VO_USE_HOMO # TODO : doesn't really work?
         #self.flag_ &= ~ClassicalVO.VO_USE_BA
         #self.flag_ |= ClassicalVO.VO_USE_PNP
-        self.flag_ &= ~ClassicalVO.VO_USE_FM_COR # performance
+        #self.flag_ &= ~ClassicalVO.VO_USE_FM_COR # performance
 
         # TODO : control stage-level verbosity
 
@@ -553,8 +553,9 @@ class ClassicalVO(object):
                 nfeatures=512,
                 scaleFactor=1.2,#np.sqrt(2),??
                 nlevels=8,
-                #scoreType=cv2.ORB_FAST_SCORE,
-                scoreType=cv2.ORB_HARRIS_SCORE,
+                # IMPORTANT : scoretype here influences response-based filters.
+                scoreType=cv2.ORB_FAST_SCORE,
+                #scoreType=cv2.ORB_HARRIS_SCORE,
                 )
         det = orb
         #det = cv2.FastFeatureDetector_create(
@@ -622,7 +623,6 @@ class ClassicalVO(object):
             ):
         # NOTE : somewhat confusing;
         # here suffix c=camera, l=landmark.
-t 
         # TODO : is it necessary / proper to take octaves into account?
         if pt2_l.size <= 0:
             # No registered landmarks to filter with.
@@ -640,7 +640,7 @@ t
         # too far from other landmarks to apply non-max
         msk_d = (d.min(axis=1) >= radius)
         # passed non-max
-        msk_v = np.all(rsp_l[i] < rsp_c[:,None], axis=1) # 
+        msk_v = np.all(rsp_l[i] <= rsp_c[:,None], axis=1) # 
 
         # format + return results
         msk = (msk_d | msk_v)
@@ -980,6 +980,7 @@ t
         # TODO : also, some landmarks may be invisible due to obstacles.
         # == (probably) filtering by view angle would help
         # TODO : revive cnt_lm if it becomes useful
+        # TODO : note that cnt_lm is a copy, not a view.
         # cnt_lm[i1_lax] -= 1
 
         # insert new landmarks
@@ -1011,7 +1012,7 @@ t
 
             # filter by map point distance
             lm_d  = np.linalg.norm(pt3[insert_idx], axis=-1)
-            msk_d = (lm_d < (20.0 / scale) ) # NOTE : heuristic to suppress super-far points
+            msk_d = (lm_d*scale < 20.0 / scale) # NOTE : heuristic to suppress super-far points
 
             # apply filter
             idx_d = np.where(msk_d)[0]
@@ -1837,6 +1838,14 @@ t
         pt2_p = self.cvt_.kpt_to_pt(kpt_p)
         rsp_p = np.float32([e.response for e in kpt_p])
 
+        #try:
+        #    fig = self.rfig_
+        #except Exception:
+        #    self.rfig_ = plt.figure()
+        #    fig = self.rfig_
+        #rax = fig.gca()
+        #rax.hist(rsp_p)
+
         idx_l, pt2_l = self.landmarks_.track_points()
         rsp_p_l = self.landmarks_.kpt[idx_l, 2]
 
@@ -1850,6 +1859,7 @@ t
             # mark points from landmarks that failed to track
             nidx_l = np.ones(len(pt2_l), dtype=np.bool)
             nidx_l[idx_t_l] = False
+            print_ratio('track', len(idx_t), len(pt2_p))
             print_ratio('lmk track', len(idx_t_l), len(pt2_l))
             self.landmarks_.untrack(idx_l[nidx_l])
 
@@ -1859,6 +1869,9 @@ t
                     pt2_c[idx_t], pt2_c_l[idx_t_l],
                     rsp_p[idx_t], rsp_p_l[idx_t_l],
                     )
+
+            # apply suppression indices
+            idx_t = idx_t[idx_s]
         else:
             # opt2 : points by match
             # TODO : not currently supporting landmarks extension
@@ -1874,31 +1887,31 @@ t
         # TODO : evaluate if the >1px constraint is necessary
         # msk_d = (np.max(np.abs(pt2_p - pt2_c), axis=-1) > 1.0) # enforce >1px difference
         # msk_t &= msk_d
-        print_ratio('track', len(idx_t), len(pt2_p))
         # TODO : also track landmark points?
         # =================================
 
         # merge data
+        cam_lim = len(idx_s)
         pt2_p_all = np.concatenate([
-            pt2_p[idx_t[idx_s]],
+            pt2_p[idx_t],
             pt2_l[idx_t_l],
             ], axis=0) # [N+M,2]
         pt2_c_all = np.concatenate([
-            pt2_c[idx_t[idx_s]], # new first
+            pt2_c[idx_t], # new first
             pt2_c_l[idx_t_l] # old last
             ], axis=0)
 
         # update points tracking reference
-        # np.concatenate() makes copies, so this can be modified in-place safely.
-        pt2_l[idx_t_l] = pt2_c_l[idx_t_l]
+        self.landmarks_.kpt[idx_l[idx_t_l], :2] = pt2_c_l[idx_t_l]
 
         # undistort
         pt2_u_p = self.cvt_.pt2_to_pt2u(pt2_p_all)
         pt2_u_c = self.cvt_.pt2_to_pt2u(pt2_c_all)
 
+        F = None
         if self.flag_ & ClassicalVO.VO_USE_FM_COR:
             # correct Matches by RANSAC consensus
-            # NOTE : cannot apply undistort() after correction
+            # NOTE : probably invalid to apply undistort() after correction
             # TODO : support VO_USE_FM_COR at some point
             # for landmark points.
             # WARN : RIGHT NOW, IT WILL NOT WORK due to idx_f application.
@@ -1910,12 +1923,27 @@ t
                     param2=self.pEM_['prob'],
                     )
             msk_f = msk_f[:,0].astype(np.bool)
-            idx_f = np.where(msk_f)[0]
-            idx_t = idx_t[idx_f]
+            print_ratio('FM correction', msk_f.sum(), msk_f.size)
+
+            ## compute masks on corresponding indices
+            #idx_f_c = np.where(msk_f[:cam_lim])[0]
+            #idx_f_l = np.where(msk_f[cam_lim:])[0]
+            #idx_f   = np.concatenate([idx_f_c,idx_f_l],axis=0)
+
+            ## retro-update corresponding indices
+            ## to where pt2_u_p will be
+            #idx_t   = idx_t[idx_f_c]
+            #idx_t_l = idx_t_l[idx_f_l]
+
+            #pt2_u_c, pt2_u_p = cv2.correctMatches(F,
+            #        pt2_u_c[idx_f][None,...],
+            #        pt2_u_p[idx_f][None,...])
+            #pt2_u_c = np.squeeze(pt2_u_c, axis=0)
+            #pt2_u_p = np.squeeze(pt2_u_p, axis=0)
 
             pt2_u_c, pt2_u_p = cv2.correctMatches(F,
-                    pt2_u_c[idx_f][None,...],
-                    pt2_u_p[idx_f][None,...])
+                    pt2_u_c[None,...],
+                    pt2_u_p[None,...])
             pt2_u_c = np.squeeze(pt2_u_c, axis=0)
             pt2_u_p = np.squeeze(pt2_u_p, axis=0)
 
@@ -1927,7 +1955,7 @@ t
                 )
 
         # index of idx_e that applies to new (camera) points
-        idx_e_msk_cam = (idx_e < len(idx_s))
+        idx_e_msk_cam = (idx_e < cam_lim)
         idx_e_msk_lmk = ~idx_e_msk_cam
 
         idx_idx_e_cam = np.where(idx_e_msk_cam)[0]
@@ -1986,13 +2014,12 @@ t
         t_c = t_c_u * scale_c2 # apply scale
         print 'scale_c #2', scale_c2
 
-        # TODO : revive with USE_FM_COR
-        #rh = 0.5
-        #if H is not None:
-        #    sF, msk_sF = score_F(pt2_u_c, pt2_u_p, F, self.cvt_)
-        #    sH, msk_sH = score_H(pt2_u_c, pt2_u_p, H, self.cvt_)
-        #    rh = float(sH) / (sH+sF)
-        #    print_ratio('RH-gp', sH, sH+sF)
+        rh = 0.25
+        if (H is not None) and (F is not None):
+            sF, msk_sF = score_F(pt2_u_c, pt2_u_p, F, self.cvt_)
+            sH, msk_sH = score_H(pt2_u_c, pt2_u_p, H, self.cvt_)
+            rh = float(sH) / (sH+sF)
+            print_ratio('RH-gp', sH, sH+sF)
         
         # NOTE: estimate #2 does not produce R_b1 / t_b1
         # because it does not need to.
@@ -2025,16 +2052,16 @@ t
         else:
             # facing the same direction
             # interpolate the results for time-domain scale stability.
-            alpha = 0.25 # TODO : tune
-            #alpha = 1.0 - lerp(rh, 1.0, 0.5) # TODO : revive with USE_FM_COR
+            #alpha = 0.25 # TODO : tune
+            alpha = 1.0 - lerp(rh, 1.0, 0.5)
             # USE score_F/score_H results
             # heuristic : generally in favor of GP
-            r_c  = np.ravel(tx.euler_from_matrix(R_c))
+            r_c1  = np.ravel(tx.euler_from_matrix(R_c1))
             r_c2 = np.ravel(tx.euler_from_matrix(R_c2))
-            R_c = tx.euler_matrix(*lerp(r_c, r_c2, alpha))[:3,:3]
-            t_c = lerp(t_c, t_c2, alpha) # TODO : better way to fuse?
+            R_c = tx.euler_matrix(*lerp(r_c1, r_c2, alpha))[:3,:3]
+            t_c = lerp(t_c1, t_c2, alpha) # TODO : better way to fuse?
             scale_c = np.linalg.norm(t_c)
-        print 'scale_c #2 (lerp)', scale_c
+        print 'scale_c #3 (lerp)', scale_c
 
         T_c2c1 = np.eye(4)
         T_c2c1[:3,:3] = R_c
@@ -2066,19 +2093,18 @@ t
             # estimate scale based on current pose guess
             # and recompute rectified pose_c_r
 
-
             # process old points first and obtain camera motion scale from correspondences
             scale_c = self.proc_f2m_old(
                     pose_c_r, scale_c,
                     pt3[idx_idx_e_lmk], # new points3
-                    idx_l[idx_t_l[idx_e_lmk - len(idx_s)]], # landmark indices; NOTE : apply lmk index start offset
+                    idx_l[idx_t_l[idx_e_lmk - cam_lim]], # landmark indices; NOTE : apply lmk index start offset
                     pt2_c_all[idx_e_lmk], # points here are needed to update kpt location
                     pt2_u_c[idx_e_lmk], # undistorted observations, required for obs. adding
                     )
 
             # new points
-            kpt_p_cam = kpt_p[idx_t[idx_s[idx_e_cam]]]
-            des_p_cam = des_p[idx_t[idx_s[idx_e_cam]]]
+            kpt_p_cam = kpt_p[idx_t[idx_e_cam]]
+            des_p_cam = des_p[idx_t[idx_e_cam]]
             # process new points (insert + update untracked old(?))
             scale_c = self.proc_f2m_new(
                     pose_c_r, scale_c, pt3[idx_idx_e_cam],
@@ -2227,7 +2253,6 @@ t
         pt3_m = self.landmarks_.pos
         col_m = self.landmarks_.col
 
-
         # filter by height
         # convert to base_link coordinates
         # pt3_m_b = pt3_m.dot(self.T_c2b_[:3,:3].T) + self.T_c2b_[:3,3]
@@ -2239,25 +2264,29 @@ t
 
         # NOTE: pt2_c_rec will not be 100% accurate of the tracked positions,
         # as (due to possible accuracy reasons) distortions have been disabled.
-        # pt2_c_rec, front_msk = self.project_BA(np.asarray([pose_c_r]), pt3_m,
-        #         return_msk=True
-        #         )
-        # rec_msk = np.logical_and.reduce([
-        #     front_msk,
-        #     0 <= pt2_c_rec[:,0],
-        #     pt2_c_rec[:,0] < 640, #TODO: hardcoded
-        #     0 <= pt2_c_rec[:,1],
-        #     pt2_c_rec[:,1] < 480
-        #     ])
-        # #pt2_c_rec, rec_msk = self.cvt_.pt3_pose_to_pt2_msk(pt3_m, pose_c_r, distort=False)
-        # rec_idx = np.where(rec_msk)[0]
-        # pt2_c_rec = pt2_c_rec[rec_idx]
-        # pt3_m = pt3_m[rec_idx]
-        # col_m = col_m[rec_idx]
+        pt2_c_rec, front_msk = self.project_BA(
+                np.asarray([pose_c_r]), pt3_m,
+                return_msk=True
+                )
+        rec_msk = np.logical_and.reduce([
+            front_msk,
+            0 <= pt2_c_rec[:,0],
+            pt2_c_rec[:,0] < 640, #TODO: hardcoded
+            0 <= pt2_c_rec[:,1],
+            pt2_c_rec[:,1] < 480
+            ])
+        #pt2_c_rec, rec_msk = self.cvt_.pt3_pose_to_pt2_msk(pt3_m, pose_c_r, distort=False)
+        rec_idx = np.where(rec_msk)[0]
+        pt2_c_rec = pt2_c_rec[rec_idx]
 
-        qres = self.landmarks_.query(pose_c_r, self.cvt_, atol=np.deg2rad(60.0) )
-        pt2_c_rec, pt3_m, _, _, _, lm_idx = qres
-        col_m = self.landmarks_.col[lm_idx]
+        # apply filter by project-able landmarks
+        #pt3_m = pt3_m[rec_idx]
+        #col_m = col_m[rec_idx]
+
+        # option : query only visible points
+        #qres = self.landmarks_.query(pose_c_r, self.cvt_, atol=np.deg2rad(60.0) )
+        #pt2_c_rec, pt3_m, _, _, _, lm_idx = qres
+        #col_m = self.landmarks_.col[lm_idx]
         pt3_m = pt3_m.dot(self.T_c2b_[:3,:3].T) + self.T_c2b_[:3,3]
         
         #if False: # == VIZ_ALL
@@ -2293,7 +2322,7 @@ t
         #    col_m = col_m[sel]
         # ================================
 
-        # TODO : propagate status messages for the GUI
+        # TODO : propagate status messages for the GUI title
         # namely, track status, pnp status(?),
         # ground-plane projection status,
         # landmark correspondence scale estimation status,

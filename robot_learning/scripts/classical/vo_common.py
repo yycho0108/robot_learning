@@ -89,7 +89,11 @@ def recover_pose_from_RT(perm, K,
         # here, threshold = ratio
         next_idx, best_idx = np.argsort(scores)[-2:]
         soft_idx = [next_idx, best_idx]
-        do_guess = (scores[next_idx] / scores[best_idx]) > threshold
+        if scores[best_idx] >= np.finfo(np.float32).eps:
+            do_guess = (scores[next_idx] / scores[best_idx]) > threshold
+        else:
+            # zero-division protection
+            do_guess = False
         # -- option 2 end --
 
         soft_scores = []
@@ -514,35 +518,38 @@ class Landmarks(object):
 
         self.pos[idx] = x_k[...,0]
         self.var[idx] = P_k
-        self.cnt[idx] += 1
+        np.add.at(self.cnt, idx, 1) # can't trust cnt[idx] to return a view.
+        #self.cnt[idx] += 1
 
     def prune(self, k=3, radius=0.025, keep_last=512):
         """
         Non-max suppression based pruning.
         set k=1 to disable  nmx. --> TODO: verify this
-        NOTE: keep_last is currently unused.
         """
         # TODO : Tune keep_last parameter
-        # TODO : Prune by tracking information and/or count
         # TODO : sometimes pruning can be too aggressive
+        # and get rid of desirable landmarks.
         # TODO : if(num_added_landmarks_since_last > x) == lots of new info
         #             search_and_add_keyframe()
-        # and get rid of desirable landmarks.
-        #v = np.linalg.norm(self.var[:,(0,1,2),(0,1,2)], axis=-1)
-        v = self.kpt[:, 2]
+
+        # NOTE: choose value to suppress with
+        v = 1.0 / np.linalg.norm(self.var[:,(0,1,2),(0,1,2)], axis=-1)
+        #v = self.kpt[:, 2]
+
         neigh = NearestNeighbors(n_neighbors=k)
         neigh.fit(self.pos)
         d, i = neigh.kneighbors(return_distance=True)
         # filter results by non-max suppression radius
         msk_d = np.min(d, axis=1) < radius
+
         # neighborhood count TODO : or np.sum() < 2?
-        msk_v = np.all(v[i]>v[:,None], axis=1)
+        msk_v = np.all(v[i] <= v[:,None], axis=1)
 
         # protect recent observations.
-        # opt 1: keep latest N landmarks
-        #msk_t = np.arange(self.size_) > (self.size_ - keep_last)
-        # opt 2: keep all landmarks since last prune
-        msk_t = np.arange(self.size_) >= self.pidx_
+        # keep latest N landmarks
+        msk_t = np.arange(self.size_) > (self.size_ - keep_last)
+        # and keep all landmarks added after last prune
+        msk_t |= np.arange(self.size_) >= self.pidx_
         # also keep all currently tracked landmarks
         msk_t |= self.trk[:,0]
         # TODO : IMPORTANT : exclude landmarks where (self.trk ==True).
