@@ -262,13 +262,13 @@ class CVORunner(object):
 
 def main():
     # convenience params defined here
-    auto  = True #True
+    auto  = True
     vfreq = 16
 
     np.set_printoptions(precision=4)
     #idx = np.random.choice(8)
     # 27, 34, 41 are currently used
-    idx = 27
+    idx = 41
     print('idx', idx)
 
     # load data

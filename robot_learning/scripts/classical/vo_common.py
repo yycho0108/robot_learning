@@ -521,7 +521,7 @@ class Landmarks(object):
         np.add.at(self.cnt, idx, 1) # can't trust cnt[idx] to return a view.
         #self.cnt[idx] += 1
 
-    def prune(self, k=3, radius=0.025, keep_last=512):
+    def prune(self, k=3, radius=0.05, keep_last=512):
         """
         Non-max suppression based pruning.
         set k=1 to disable  nmx. --> TODO: verify this

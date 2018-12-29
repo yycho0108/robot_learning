@@ -5,6 +5,7 @@ Semi-Urgent TODOs:
     - Try to apply the homography model from ORB_SLAM??
     - Keyframes?
     - Incorporate Variance information in BA?
+    - Cross-Frame (i.e. temporal displacement >1) Matching + Tracking
 """
 
 from collections import namedtuple, deque, defaultdict
@@ -548,7 +549,7 @@ class ClassicalVO(object):
         # TODO : what is FAST threshold?
         # TODO : tune nfeatures; empirically 2048 is pretty good
         orb = cv2.ORB_create(
-                nfeatures=512,
+                nfeatures=2048,
                 scaleFactor=1.2,#np.sqrt(2),??
                 nlevels=8,
                 # IMPORTANT : scoretype here influences response-based filters.
@@ -1000,6 +1001,7 @@ class ClassicalVO(object):
                 neigh.fit(pt2_lm)
                 d, _ = neigh.kneighbors(pt2_u_c[insert_idx], return_distance=True)
                 msk_knn = (d < 16.0)[:,0] # TODO : magic number
+                #print_ratio('msk_knn', msk_knn.sum(), msk_knn.size)
 
                 # dist to nearest landmark, less than 20px
                 msk_n[msk_knn] = False
@@ -1010,7 +1012,7 @@ class ClassicalVO(object):
 
             # filter by map point distance
             lm_d  = np.linalg.norm(pt3[insert_idx], axis=-1)
-            msk_d = (lm_d*scale < 20.0 / scale) # NOTE : heuristic to suppress super-far points
+            msk_d = (lm_d*scale < 20.0) # NOTE : heuristic to suppress super-far points
 
             # apply filter
             idx_d = np.where(msk_d)[0]
@@ -1765,7 +1767,7 @@ class ClassicalVO(object):
 
         idx_in = idx_p[idx_r] # overall, which indices were used?
 
-        return idx_in,  pt3, R, t
+        return idx_in, pt3, R, t
 
     def __call__(self, img, dt, scale=None,
             ax=None
@@ -1918,9 +1920,6 @@ class ClassicalVO(object):
         if self.flag_ & ClassicalVO.VO_USE_FM_COR:
             # correct Matches by RANSAC consensus
             # NOTE : probably invalid to apply undistort() after correction
-            # TODO : support VO_USE_FM_COR at some point
-            # for landmark points.
-            # WARN : RIGHT NOW, IT WILL NOT WORK due to idx_f application.
             F, msk_f = cv2.findFundamentalMat(
                     pt2_u_c,
                     pt2_u_p,
@@ -1932,31 +1931,82 @@ class ClassicalVO(object):
             print_ratio('FM correction', msk_f.sum(), msk_f.size)
 
             ## compute masks on corresponding indices
-            #idx_f_c = np.where(msk_f[:cam_lim])[0]
-            #idx_f_l = np.where(msk_f[cam_lim:])[0]
-            #idx_f   = np.concatenate([idx_f_c,idx_f_l],axis=0)
+            idx_f_c = np.where(msk_f[:cam_lim])[0]
+            idx_f_l = np.where(msk_f[cam_lim:])[0]
+            idx_f   = np.concatenate([idx_f_c, cam_lim + idx_f_l],axis=0)
 
-            ## retro-update corresponding indices
-            ## to where pt2_u_p will be
-            #idx_t   = idx_t[idx_f_c]
-            #idx_t_l = idx_t_l[idx_f_l]
+            # retro-update corresponding indices
+            # to where pt2_u_p will be, based on idx_f
+            idx_t   = idx_t[idx_f_c]
+            cam_lim = len(idx_t)
+            idx_t_l = idx_t_l[idx_f_l]
 
-            #pt2_u_c, pt2_u_p = cv2.correctMatches(F,
-            #        pt2_u_c[idx_f][None,...],
-            #        pt2_u_p[idx_f][None,...])
-            #pt2_u_c = np.squeeze(pt2_u_c, axis=0)
-            #pt2_u_p = np.squeeze(pt2_u_p, axis=0)
+            # update pt2_u_c definitions
+            pt2_u_c = pt2_u_c[idx_f]
+            pt2_u_p = pt2_u_p[idx_f]
 
-            pt2_u_c2, pt2_u_p2 = cv2.correctMatches(F,
-                    pt2_u_c[None,...],
-                    pt2_u_p[None,...])
+            pt2_p_all = pt2_p_all[idx_f] # log-only
+            pt2_c_all = pt2_c_all[idx_f]
 
-            # -- will sometimes return NaN.
-            check_c = np.all(np.isfinite(pt2_u_c2))
-            check_p = np.all(np.isfinite(pt2_u_p2))
-            if check_c and check_p:
-                pt2_u_c = np.squeeze(pt2_u_c2, axis=0)
-                pt2_u_p = np.squeeze(pt2_u_p2, axis=0)
+            #pt2_u_c2, pt2_u_p2 = cv2.correctMatches(F,
+            #        pt2_u_c[None,...],
+            #        pt2_u_p[None,...])
+
+            #pt2_u_c2 = np.squeeze(pt2_u_c2, axis=0)
+            #pt2_u_p2 = np.squeeze(pt2_u_p2, axis=0)
+
+            ## -- will sometimes return NaN.
+            #check_c = np.all(np.isfinite(pt2_u_c2))
+            #check_p = np.all(np.isfinite(pt2_u_p2))
+
+            #if check_c and check_p:
+            #    ## -- viz begin --
+            #    #try:
+            #    #    fig = self.cfig_
+            #    #    cax = fig.gca()
+            #    #except Exception as e:
+            #    #    self.cfig_ = plt.figure()
+            #    #    fig = self.cfig_
+            #    #    cax  = fig.add_subplot(1,1,1)#, projection='3d')
+            #    #cax.cla()
+
+            #    #pp = pt2_u_p
+            #    #pc = pt2_u_c
+            #    #print pp.shape
+            #    #print pc.shape
+
+            #    #col = np.random.uniform(size = (len(pp), 3))
+            #    #cax.quiver(
+            #    #        pp[:,0], pp[:,1],
+            #    #        pc[:,0]-pp[:,0], pc[:,1]-pp[:,1],
+            #    #        angles='xy',
+            #    #        scale=1.0,
+            #    #        scale_units='xy',
+            #    #        color='r',#col,
+            #    #        alpha=0.5,
+            #    #        label='prv',
+            #    #        )
+            #    #pp = pt2_u_p2
+            #    #pc = pt2_u_c2
+
+            #    #print pp.shape
+            #    #print pc.shape
+            #    #cax.quiver(
+            #    #        pp[:,0], pp[:,1],
+            #    #        pc[:,0]-pp[:,0], pc[:,1]-pp[:,1],
+            #    #        angles='xy',
+            #    #        scale=1.0,
+            #    #        scale_units='xy',
+            #    #        color='b',#col,
+            #    #        alpha=0.5,
+            #    #        label='cor'
+            #    #        )
+            #    #cax.legend()
+            #    #plt.pause(0.001)
+            #    ## -- viz end --
+
+            #    pt2_u_c = pt2_u_c2
+            #    pt2_u_p = pt2_u_c2
 
         # unscaled camera pose + reconstructed points from triangulation
         idx_e, pt3, R_em, t_em = self.run_EM(
