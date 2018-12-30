@@ -137,7 +137,6 @@ class VoGUI(object):
 
     @staticmethod
     def draw_err(ax, x, y):
-
         d = y - x 
         # normalize angle component
         d[:,2] = (d[:,2] + np.pi) % (2*np.pi) - np.pi
@@ -148,6 +147,46 @@ class VoGUI(object):
 
         ax.plot(dp, label='dp')
         ax.plot(dh, label='dh')
+        ax.legend()
+        ax.grid()
+        ax.set_axisbelow(True)
+        ax.set_title('VO Error')
+
+    @staticmethod
+    def draw_derr(ax, p0, p1):
+        dp0 = np.diff(p0, axis=0)
+        dp1 = np.diff(p1, axis=0)
+
+        # allocate space for inverse-z rotation matrix 
+        Rzi = np.empty((len(dp0),2,2), dtype=np.float32)
+
+        # relative dx (referencing previous frame)
+        h0 = p0[:-1, -1]
+        c,s = np.cos(h0), np.sin(h0)
+        Rzi[:,0,0] = c
+        Rzi[:,0,1] = -s
+        Rzi[:,1,0] = s
+        Rzi[:,1,1] = c
+        rdp0 = np.einsum('nij,nj->ni', Rzi, dp0[:,:2])
+
+        h1 = p1[:-1, -1]
+        c,s = np.cos(h1), np.sin(h1)
+        Rzi[:,0,0] = c
+        Rzi[:,0,1] = -s
+        Rzi[:,1,0] = s
+        Rzi[:,1,1] = c
+        rdp1 = np.einsum('nij,nj->ni', Rzi, dp1[:,:2])
+
+        # diff in pos displacement
+        ddp = np.linalg.norm(rdp0 - rdp1, axis=-1)
+
+        # diff in ang displacement
+        ddh = dp1[:,-1] - dp0[:,-1]
+        ddh = (ddh + np.pi) % (2 * np.pi) - np.pi # normalize
+        ddh = np.abs(ddh)
+
+        ax.plot(ddp, label='ddp')
+        ax.plot(ddh, label='ddh')
         ax.legend()
         ax.grid()
         ax.set_axisbelow(True)

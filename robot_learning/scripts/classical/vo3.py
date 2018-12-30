@@ -1607,20 +1607,28 @@ class ClassicalVO(object):
             ax['ba_1'].set_aspect('equal', 'datalim')
             ax['ba_1'].legend()
 
-        # apply BA results
-        pose_c_r = self.graph_.update(win, pos_opt)
+        # == apply BA results ==
+        ba_cov = cov_from_jac(res.jac)
+        ba_cov = extract_block_diag(ba_cov, 3)
+        print 'ba_cov', ba_cov.shape
+
+        # == camera pose updates : currently "soft" ==
+        # TODO : evaluate whether or not hard updates are better
+        ba_cov_c = ba_cov[:n_c]
+        ba_cov_c[:, (0,1,2), (0,1,2)] += (3e-2)**2 # regularization, ~3cm / ~1.7 deg.
+        pose_c_r = self.graph_.update(win, pos_opt,
+                cov = ba_cov_c
+                )
 
         # == landmark updates : hard vs. soft ==
         # -- opt 1 : hard update --
         #self.landmarks_.pos[li_u] = lmk_opt # << hard update
         # -- opt 2 : soft cov-based update --
-        ba_cov = cov_from_jac(res.jac)
-        ba_cov_l = ba_cov[n_c*3:, n_c*3:]
-        i = np.arange(len(ba_cov_l))
-        ba_cov_l[i, i] += (1e-1)**2 # regularization, ~10cm
-
-        ba_cov_l = extract_block_diag(ba_cov_l, 3)
+        ba_cov_l = ba_cov[n_c:]
+        ba_cov_l[:, (0,1,2), (0,1,2)] += (1e-1)**2 # regularization, ~10cm / ~5.7 deg.
         self.landmarks_.update(li_u, lmk_opt, ba_cov_l) # soft update
+
+        # == BA updates complete ==
 
         return pose_c_r
 
@@ -1657,7 +1665,7 @@ class ClassicalVO(object):
             self.y_gp_ = y_gp
         return self.y_gp_
 
-    def run_GP(self, pt_c, pt_p, pt3=None,
+    def run_GP(self, pt_c, pt_p,
             scale=None,
             guess=None
             ):
@@ -1670,134 +1678,105 @@ class ClassicalVO(object):
 
         camera_height = self.T_c2b_[2, 3]
 
-        if self.flag_ & ClassicalVO.VO_USE_GP_RSC:
-            # opt1 : estimate ground-plane for projection
-            # unfortunately, there's far too few points on the ground plane
-            # to compute a reasonable estimate.
+        # opt1 : estimate ground-plane for projection
+        # unfortunately, there's far too few points on the ground plane
+        # to compute a reasonable estimate.
 
-            y_min = self.y_GP
+        y_min = self.y_GP
 
-            gp_msk = np.logical_and.reduce([
-                pt_c[:,1] >= y_min,
-                pt_p[:,1] >= y_min])
+        gp_msk = np.logical_and.reduce([
+            pt_c[:,1] >= y_min,
+            pt_p[:,1] >= y_min])
 
-            gp_idx = np.where(gp_msk)[0]
+        gp_idx = np.where(gp_msk)[0]
 
-            if len(gp_idx) <= 3: # TODO : magic
-                # too few points, abort gp estimate
-                return None, scale, guess
+        if len(gp_idx) <= 3: # TODO : magic
+            # too few points, abort gp estimate
+            return None, scale, guess
 
-            # update pt_c and pt_p
-            pt_c = pt_c[gp_idx]
-            pt_p = pt_p[gp_idx]
+        # update pt_c and pt_p
+        pt_c = pt_c[gp_idx]
+        pt_p = pt_p[gp_idx]
 
-            # NOTE: debug; show gp plane points correspondences
-            # vsel = np.random.choice(len(gp_idx), size=32)
-            # try:
-            #     fig = self.gfig_
-            #     ax  = fig.gca()
-            # except Exception:
-            #     self.gfig_ = plt.figure()
-            #     ax = self.gfig_.gca()
-            # col = np.random.uniform(0.0, 1.0, size=(len(vsel), 3)).astype(np.float32)
-            # ax.cla()
-            # ax.scatter(pt_c[vsel,0], pt_c[vsel,1], color=col)
-            # ax.scatter(pt_p[vsel,0], pt_p[vsel,1], color=col)
-            # ax.quiver(
-            #         pt_p[vsel, 0], pt_p[vsel, 1],
-            #         pt_c[vsel, 0] - pt_p[vsel,0],
-            #         pt_c[vsel, 1] - pt_p[vsel,1],
-            #         angles='xy',
-            #         scale=1,
-            #         scale_units='xy',
-            #         color='g',
-            #         alpha=0.5
-            #         )
-            # ax.set_xlim(0, 640)
-            # ax.set_ylim(0, 480)
-            # if not ax.yaxis_inverted():
-            #     ax.invert_yaxis()
+        # NOTE: debug; show gp plane points correspondences
+        # vsel = np.random.choice(len(gp_idx), size=32)
+        # try:
+        #     fig = self.gfig_
+        #     ax  = fig.gca()
+        # except Exception:
+        #     self.gfig_ = plt.figure()
+        #     ax = self.gfig_.gca()
+        # col = np.random.uniform(0.0, 1.0, size=(len(vsel), 3)).astype(np.float32)
+        # ax.cla()
+        # ax.scatter(pt_c[vsel,0], pt_c[vsel,1], color=col)
+        # ax.scatter(pt_p[vsel,0], pt_p[vsel,1], color=col)
+        # ax.quiver(
+        #         pt_p[vsel, 0], pt_p[vsel, 1],
+        #         pt_c[vsel, 0] - pt_p[vsel,0],
+        #         pt_c[vsel, 1] - pt_p[vsel,1],
+        #         angles='xy',
+        #         scale=1,
+        #         scale_units='xy',
+        #         color='g',
+        #         alpha=0.5
+        #         )
+        # ax.set_xlim(0, 640)
+        # ax.set_ylim(0, 480)
+        # if not ax.yaxis_inverted():
+        #     ax.invert_yaxis()
 
-            # ground plane is a plane, so homography can (and should) be applied here
-            H, msk_h = cv2.findHomography(pt_c, pt_p,
-                    method=self.pEM_['method'],
-                    ransacReprojThreshold=self.pEM_['threshold']
-                    )
-            idx_h = np.where(msk_h)[0]
-            print_ratio('Ground-plane Homography', len(idx_h), msk_h.size)
+        # ground plane is a plane, so homography can (and should) be applied here
+        H, msk_h = cv2.findHomography(pt_c, pt_p,
+                method=self.pEM_['method'],
+                ransacReprojThreshold=self.pEM_['threshold']
+                )
+        idx_h = np.where(msk_h)[0]
+        print_ratio('Ground-plane Homography', len(idx_h), msk_h.size)
 
-            if len(idx_h) < 16: # TODO : magic number
-                # insufficient # of points -- abort
-                return None, scale, guess
+        if len(idx_h) < 16: # TODO : magic number
+            # insufficient # of points -- abort
+            return None, scale, guess
 
+        # update pt_c and pt_p
+        pt_c = pt_c[idx_h]
+        pt_p = pt_p[idx_h]
 
-            # update pt_c and pt_p
-            pt_c = pt_c[idx_h]
-            pt_p = pt_p[idx_h]
+        # TODO : lots of information is discarded here,
+        # Such as R/T from homography and the reconstructed 3D Points.
+        # Only Scale is propagated.
 
-            # TODO : lots of information is discarded here,
-            # Such as R/T from homography and the reconstructed 3D Points.
-            # Only Scale is propagated.
+        res_h, Hr, Ht, Hn = cv2.decomposeHomographyMat(H, self.K_)
+        Hn = np.float32(Hn)
+        Ht = np.float32(Ht)
+        Ht /= np.linalg.norm(Ht, axis=1, keepdims=True) # NOTE: Ht is N,3,1
+        gp_z = (Hn[...,0].dot(self.T_c2b_[:3,:3].T))
 
-            res_h, Hr, Ht, Hn = cv2.decomposeHomographyMat(H, self.K_)
-            Hn = np.float32(Hn)
-            Ht = np.float32(Ht)
-            Ht /= np.linalg.norm(Ht, axis=1, keepdims=True) # NOTE: Ht is N,3,1
-            gp_z = (Hn[...,0].dot(self.T_c2b_[:3,:3].T))
+        # filter by estimated plane z-norm
+        # ~15-degree deviation from the anticipated z-vector (0,0,1)
+        # TODO : collect these heuristics params
+        z_val = ( np.abs(np.dot(gp_z, [0,0,1])) > np.cos(np.deg2rad(15)) )
+        z_idx = np.where(z_val)[0]
+        if len(z_idx) <= 0:
+            # abort ground-plane estimation.
+            return None, scale, guess
+        # NOTE: honestly don't know why I need to pre-filter by z-norm at all
+        perm = zip(Hr,Ht)
+        perm = [perm[i] for i in z_idx]
+        n_in, R, t, msk_r, gpt3, sel = recover_pose_from_RT(perm, self.K_,
+                pt_c, pt_p, return_index=True, guess=guess, log=False)
+        gpt3 = gpt3.T # TODO : gpt3 not used
 
-            # filter by estimated plane z-norm
-            # ~15-degree deviation from the anticipated z-vector (0,0,1)
-            # TODO : collect these heuristics params
-            z_val = ( np.abs(np.dot(gp_z, [0,0,1])) > np.cos(np.deg2rad(15)) )
-            z_idx = np.where(z_val)[0]
-            if len(z_idx) <= 0:
-                # abort ground-plane estimation.
-                return None, scale, guess
-            # NOTE: honestly don't know why I need to pre-filter by z-norm at all
-            perm = zip(Hr,Ht)
-            perm = [perm[i] for i in z_idx]
-            n_in, R, t, msk_r, gpt3, sel = recover_pose_from_RT(perm, self.K_,
-                    pt_c, pt_p, return_index=True, guess=guess, log=False)
-            gpt3 = gpt3.T # TODO : gpt3 not used
+        # convert w.r.t base_link
+        gpt3_base = gpt3.dot(self.cvt_.T_c2b_[:3,:3].T)
+        h_gp = robust_mean(-gpt3_base[:,2])
+        scale_gp = (camera_height / h_gp)
+        print 'gp-ransac scale', scale_gp
+        if np.isfinite(scale_gp) and scale_gp > 0:
+            # project just in case scale < 0...
+            scale = scale_gp
 
-            # convert w.r.t base_link
-            gpt3_base = gpt3.dot(self.cvt_.T_c2b_[:3,:3].T)
-            h_gp = robust_mean(-gpt3_base[:,2])
-            scale_gp = (camera_height / h_gp)
-            print 'gp-ransac scale', scale_gp
-            if np.isfinite(scale_gp) and scale_gp > 0:
-                # project just in case scale < 0...
-                scale = scale_gp
-
-            # this is functionally the only time it's considered "success".
-            return H, scale, (R, t)
-        else:
-            # opt2 : directly estimate ground plane by simple height filter
-            # only works with "reasonable" initial scale guess.
-            # all it does is refine a good scale estimate to a potentially "better" one.
-
-            # only apply rotation: pt3_base still w.r.t camera offset @ base orientation
-            pt3_base = pt3.dot(self.cvt_.T_c2b_[:3,:3].T)
-
-            dh_thresh = 0.1
-            gp_msk = np.logical_and.reduce([
-                pt3_base[:,2] < (-camera_height + dh_thresh) / scale, # only filter for down-ness
-                (-camera_height -dh_thresh)/scale < pt3_base[:,2], # sanity check with large-ish height value
-                pt3_base[:,0] < 50.0 / scale  # sanity check with large-ish depth value
-                ])
-            gp_idx = np.where(gp_msk)[0]
-            pt_gp = pt3_base[gp_idx]
-
-            print_ratio('GP Inlier', len(gp_idx), gp_msk.size)
-
-            if len(gp_idx) > 3: # at least 3 points
-                h_gp = robust_mean(-pt_gp[:,2])
-                if not np.isnan(h_gp):
-                    scale_gp = camera_height / h_gp
-                    print_ratio('scale_gp', scale_gp, scale)
-                    # use gp scale instead
-                    scale = scale_gp
-        return None, scale, guess
+        # this is functionally the only time it's considered "success".
+        return H, scale, (R, t)
 
     def run_PNP(self, pt3_map, pt2_cam, pose,
             p_min=16, ax=None, msg=''):
@@ -2351,7 +2330,7 @@ class ClassicalVO(object):
         t_c1_u = (t_c1 / scale_c if scale_c >= np.finfo(np.float32).eps else t_c1)
 
         H, scale_c2, (R_c, t_c_u) = self.run_GP(
-                pt2_u_c, pt2_u_p, pt3,
+                pt2_u_c, pt2_u_p,
                 scale_c, guess=(R_c1, t_c1_u)
                 ) # note returned t_c is uvec
         t_c = t_c_u * scale_c2 # apply scale

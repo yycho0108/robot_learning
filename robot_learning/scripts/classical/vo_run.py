@@ -119,7 +119,8 @@ class CVORunner(object):
         VoGUI.draw_top(self.ax_['main'], rec_path, pts2, odom[:i+1], scan_c, col=pts_col)
         VoGUI.draw_3d(self.ax_['cloud'], pts3, pts_col)
         VoGUI.draw_2d_proj(self.ax_['proj2'], imgs[i, ..., ::-1], pts_r)
-        VoGUI.draw_err(self.ax_['terr'], rec_path, odom[:i])
+        #VoGUI.draw_err(self.ax_['terr'], rec_path, odom[:i])
+        VoGUI.draw_derr(self.ax_['terr'], rec_path, odom[:i])
         # TODO : plot error in stepwise difference
         #VoGUI.draw_err(self.ax_['derr'], rec_path, odom[:i])
 
