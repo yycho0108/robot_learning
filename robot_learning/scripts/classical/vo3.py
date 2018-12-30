@@ -242,11 +242,11 @@ def score_F(pt1, pt2, F, cvt, sigma=1.0):
 def lsq(f, x0, jac, args,
         ftol=1e-8, xtol=1e-8,
         max_nfev=1000,
-        Wi=None, # << lsq-only parameter
         # below, currently ignored parameters
         loss=None,
         method=None,
         verbose=None,
+        W=None,
         tr_solver=None,
         f_scale=1.0,
         ):
@@ -267,7 +267,7 @@ def lsq(f, x0, jac, args,
         J = jac(x, *args)
         ts.append( time.time()) 
         # NOTE: *args[:2] is a hack to get n_c & n_l populated
-        dx = schur_trick(J, F, Wi=Wi, *args[:2])
+        dx = schur_trick(J, F, W=W, *args[:2])
         ts.append( time.time()) 
         # TODO: check xtol
         x += dx
@@ -296,13 +296,51 @@ def lsq(f, x0, jac, args,
 
     return x
 
+from scipy.sparse.linalg import svds as sparse_svd
+
+def cov_from_jac(J):
+    """ from scipy/optimize/minpack.py#L739 """
+    #_, s, VT = np.linalg.svd(J, full_matrices=False)
+    res = sparse_svd(J, return_singular_vectors='vh')
+    _, s, VT = res
+    thresh = np.finfo(np.float32).eps * max(J.shape) * s[0]
+    s = s[s > thresh]
+    VT = VT[:s.size]
+    pcov = np.dot(VT.T / s**2, VT)
+    return pcov
+
+def extract_block_diag(a, n, k=0):
+    a = np.asarray(a)
+    if a.ndim != 2:
+        raise ValueError("Only 2-D arrays handled")
+    if not (n > 0):
+        raise ValueError("Must have n >= 0")
+
+    if k > 0:
+        a = a[:,n*k:] 
+    else:
+        a = a[-n*k:]
+
+    n_blocks = min(a.shape[0]//n, a.shape[1]//n)
+
+    new_shape = (n_blocks, n, n)
+    new_strides = (n*a.strides[0] + n*a.strides[1],
+                   a.strides[0], a.strides[1])
+    return np.lib.stride_tricks.as_strided(a, new_shape, new_strides)
+
 class VGraph(object):
     """ Simple wrapper for visibility graph """
     # TODO : unify dynamic container interface or something.
     # (i.e. with Landmarks() )
     def __init__(self, cap0=1024):
-        # list of poses (somewhat special)
-        self.pose_ = []
+        # pose data
+        # self.index_ points to current pose index.
+        # current pose is empty (invalid), so setting to -1
+        self.index_ = -1
+        self.pos_ = []
+        self.cov_ = [] # TODO : is it necessary to store "non-diagonal" pos->lmk cov?
+        self.kf_ = build_ukf() # << sets x0,P0 to modest defaults.
+        # NOTE: landmark data is stored in ClassicalVO.landmarks_
 
         # pose index
         self.pi_ = np.empty( (cap0,), dtype=np.int32 )
@@ -332,18 +370,20 @@ class VGraph(object):
             d[f] = d_new
         self.capacity_ = c_new
 
-    def append(self, li, p2):
+    def add_obs(self, li, p2, pi=None):
         """
         Add observation to lmk[li]
-        WARNING: .append() should be called AFTER add_pos().
+        WARN: .add_obs() should be called AFTER predict() if pi=None.
         """
-        # automatically figure out pose index.
-        # TODO : validate
-        pi = len(self.pose_)
+        if pi is None:
+            # automatically figure out current pose index.
+            # TODO : validate
+            pi = self.index_
+
         n = len(li) # NOTE: in general, cannot use len(pi).
         if self.size_ + n > self.capacity_:
             self.resize(self.capacity_ * 2)
-            self.append(li, p2)
+            self.add_obs(li, p2)
         else:
             i = np.s_[self.size_:self.size_+n]
             self.pi_[i] = pi
@@ -352,7 +392,10 @@ class VGraph(object):
             self.size_ += n
 
     def prune(self, keep_idx):
-        """ reindex graph with keep_idx """
+        """
+        Reindex observation graph with keep_idx.
+        i.e. assume lmk_c = lmk_p[keep_idx] due to pruning.
+        """
         # naive iterative version
         #for (i_new, i_prv) in enumerate(keep_idx):
         #    self.li_[ np.where(self.li_ == i_prv)[0] ] = i_new
@@ -369,50 +412,126 @@ class VGraph(object):
         self.p2_[:n] = self.p2[i0].copy()
         self.size_ = n
 
-    def query(self, t, return_A=False):
-        """ t = how much to look back """
+    def query(self, t):
+        """
+        t = how much to look back.
+        
+        Note that by the time query() is called,
+        VGraph.predict(append=True) must have been called
+        such that current pose at VGraph.pos_[VGraph.index] is valid.
+        """
         # assume (0...,1...,2...,3...,4..,5..,6...)
         # then self.pi[-1] = 6
         # if t = 3, then desired result is [4...,5...,6...]
-        mx  = self.pi[-1]
-        msk = (self.pi >= (mx+1-t))
+
+        i1 = self.index + 1 # == retrieve up to self.index
+        msk = (self.pi >= (i1 - t)) # expresses range [i0,i1)
         idx = np.where(msk)[0]
 
-        p0 = np.asarray(self.pose_[-t:])
-        pi = self.pi[idx] - self.pi[idx[0]] # return offset index for p0
+        p0 = np.asarray(self.pos_[-t:])
+        v0 = np.asarray(self.cov_[-t:])
+        pi = self.pi[idx] 
+        pi -= pi[0] # normalized p0 index, with offset removed
+
         li = self.li[idx]
         p2 = self.p2[idx]
+        return p0[:,:3], v0, pi, li, p2
 
-        if return_A:
-            # validation: anticipated sparsity structure
-            n_o = len( idx ) # number of observations
-            n_p = len( p0  )
-            n_l = 1 + li.max()   # assume un-pruned n_l
-            n_x = n_p + n_l
+    """ pose-related """
+    def initialize(self, x=None, P=None):
+        # pose[i] = {x, P, dt}, where dt[i] = t[i] - t[i-1]
+        if x is not None:
+            self.kf_.x = x
+        if P is not None:
+            self.kf_.P = P
 
-            # raw sparsity matrix
-            A = np.zeros((n_o,2,n_x,3), dtype=int)
-            A[np.arange(n_o), :, pi, :] = 1
-            A[np.arange(n_o), :, n_p+li, :] = 1
+        # initialize cache
+        self.pos_ = [self.kf_.x.copy()]
+        self.cov_ = [self.kf_.P.copy()]
+        self.dt_  = [0.0] # dt[i] = 0, dt[1] = t[1] - t[0] ...
+        self.index_ = 0 # < now points to a valid location
 
-            # pruned sparsity matrix
-            li_u = np.unique( li )
-            i    = np.r_[:n_p, n_p+li_u]
-            Ap = A[:, :, i, :] # pruned
-            Ap = Ap.reshape(n_o*2, -1)
+    def predict(self, dt, commit=True):
+        """
+        Predict what the next state will be given the current state.
+        with commit:=True, the state information will be updated with the predictions.
+        """
+        if not commit:
+            # look-only; system state must not be changed.
+            # need to restore everything afterwards.
+            state0 = (
+                    self.kf_.x.copy(), self.kf_.P.copy(),
+                    self.kf_.Q.copy(), self.kf_.R.copy()
+                    )
 
-            return p0, pi, li, p2, Ap
+        prv = self.kf_.x[:3].copy()
+        Q, R = get_QR(prv, dt)
+        self.kf_.Q = Q
+        self.kf_.R = R
+        self.kf_.predict(dt) # self.kf_.x, P holds new pose
+        cur = self.kf_.x[:3].copy() # TODO : support reset
+        scale = np.linalg.norm(cur[:2] - prv[:2])
 
-        return p0, pi, li, p2
+        if commit:
+            # update + save cache
+            self.index_ += 1
+            self.pos_.append( self.kf_.x.copy() )
+            self.cov_.append( self.kf_.P.copy() )
+            self.dt_.append( dt )
+        else:
+            # restore
+            self.kf_.x = state0[0]
+            self.kf_.P = state0[1]
+            self.kf_.Q = state0[2]
+            self.kf_.R = state0[3]
 
-    def update(self, t, pos):
-        self.pose_[-t:] = pos
-    
-    def add_pos(self, v):
-        self.pose_.append(v)
+        return prv, cur, scale
+
+    def update(self, win, pos,
+            cov=None, hard=False, dw=1):
+        """
+        Update pose[-win:] part of VGraph.
+        if hard:=True, then the values are completely overwritten.
+        Otherwise, kf-filtered results are written instead.
+        """
+        if hard:
+            # hard update
+            self.pos_[-win:] = pos
+            if cov is not None:
+                self.cov_[-win:] = cov
+        else:
+            # soft update; filter
+
+            # initialize from cache
+            self.kf_.x = self.pos_[-win-1] # set to prior
+            self.kf_.P = self.cov_[-win-1]
+
+            if cov is None:
+                # make into array
+                cov = [None for _ in range(win)]
+
+            u_idx = np.arange(-win, 0)
+            for (i, x, R) in zip(u_idx, pos, cov):
+                # TODO : check if dt indexing is valid
+                dt = self.dt_[i]
+
+                Q, R_ = get_QR(self.kf_.x[:3], dt)
+                if R is None:
+                    R = R_
+                self.kf_.Q = Q
+                self.kf_.R = R
+
+                self.kf_.predict(dt) # NOTE: dt[i] = t[i] - t[i-1]
+                self.kf_.update(x)
+
+                # set filtered data
+                self.pos_[i] = self.kf_.x
+                self.cov_[i] = self.kf_.P
+
+        return self.pos_[-1][:3] # x-y-h components, for convenience
 
     def draw(self, ax, cvt, lmk):
-        p0, pi, li, p2 = self.query(t=len(self.pi))
+        p0, v0, pi, li, p2 = self.query(t=self.index+1)
 
         # convert to map coord
         lmk_m = lmk.pos.dot(cvt.T_c2b_[:3,:3].T) + cvt.T_c2b_[:3,3:].T
@@ -517,38 +636,11 @@ class VGraph(object):
         return self.p2_[:self.size_]
     @property
     def index(self):
-        return len(self.pose_)
-
-class StateHistory(object):
-    """
-    Circular Buffer of State History.
-    Minor Thing : Will NOT reject invalid queries,
-    such as ones without sufficient initialization
-    or overflow.
-    """
-    def __init__(self, maxlen=32):
-        self.i_ = 0
-        self.n_ = maxlen
-        self.x_ = np.empty((maxlen, 6))
-        self.P_ = np.empty((maxlen, 6, 6))
-        self.dt_ = np.empty((maxlen,))
-
-    def query(self, t):
-        i = np.arange(self.i_-t, self.i_) % self.n_
-        return self.x_[i], self.P_[i], self.dt_[i]
-
-    def update(self, t, x, P, dt):
-        i = np.arange(self.i_-t, self.i_) % self.n_
-        self.x_[i] = x
-        self.P_[i] = P
-        self.dt_[i] = dt
-
-    def append(self, x, P, dt):
-        i = self.i_
-        self.x_[i] = x
-        self.P_[i] = P
-        self.dt_[i] = dt
-        self.i_ = (self.i_ + 1) % self.n_
+        """
+        NOTE: current pose index.
+        WARN: VGraph.predict(commit=True) will increment the index.
+        """
+        return self.index_
 
 class ClassicalVO(object):
     # define flags
@@ -674,24 +766,13 @@ class ClassicalVO(object):
 
         # bundle adjustment + loop closure
         # sort ba pyramid by largest first
-        ba_pyr = [16, 64, 256, 1024] # [16,64]
+        ba_pyr = [16] # [16,64]
         self.ba_pyr_  = np.sort(ba_pyr)[::-1]
         self.graph_ = VGraph()
 
-        # UKF
-        # NOTE : ALWAYS enforce s_hist_.maxlen >= self.ba_pyr_.max()
-        # TODO : evaluate EKF vs. UKF? empirically similar.
-        # TODO : rename such that ukf/ekf naming is not confusing.
-        # to avoid bugs due to circular buffer.
-        self.ukf_l_  = build_ekf() # local incremental UKF
-        self.ukf_h_  = build_ekf() # global historic UKF
-
-        # State History
-        if len(ba_pyr) >= 1:
-            slen = self.ba_pyr_.max() + 1
-        else:
-            slen = 1
-        self.s_hist_ = StateHistory(maxlen=slen) # stores cache of prior.
+        # reference scale
+        self.scale0_ = 1.0 # set to 1 by default
+        self.use_s0_ = True
 
         # logging / visualization
         self.lm_cnt_ = []
@@ -900,7 +981,7 @@ class ClassicalVO(object):
             self.landmarks_.update(lm_idx, pt3_new_c_0, var_lm_new)
 
             # Add correspondences to BA Cache
-            self.graph_.append(lm_idx, pt2_new_u)
+            self.graph_.add_obs(lm_idx, pt2_new_u)
 
         # == PNP ===================
         # flag to decide whether to run PNP
@@ -1121,7 +1202,7 @@ class ClassicalVO(object):
             # NOTE : using undistorted version of pt2.
             # WARN : pt2_u_c = undistort( pt2_c[idx_t])
             # for whatever reason, indexing was somewhat messed up.
-            self.graph_.append(np.arange(li_0, li_1),
+            self.graph_.add_obs(np.arange(li_0, li_1),
                     pt2_u_c[insert_idx]
                     )
         # TODO : evaluate what to return from here
@@ -1342,8 +1423,7 @@ class ClassicalVO(object):
             return
 
         # create np arrays
-        p0, ci, li, p2 = self.graph_.query(win)
-        _, vp, _ = self.s_hist_.query(win) # n_cx3x3
+        p0, vp, ci, li, p2 = self.graph_.query(win)
 
         # gather stats
         n_c = len(p0)
@@ -1360,17 +1440,16 @@ class ClassicalVO(object):
 
         vl = self.landmarks_.var[li_u] # n_lx3x3
 
-        # compute BA sparsity structure : deprecated with analytical jac_BA()
-        # A = self.sparsity_BA(n_c, n_l, ci, li)
-
-        # create covariance weight omega.
-        # TODO : potentially clip variance? idk
-        Wdata  = np.concatenate([vp[:, :3,:3],vl], axis=0) # << only works because 3x3!
-        Widata = np.linalg.inv(Wdata) # inverse
+        # Construct Vx, parameter covariance
+        # This will help compute Vy, error covariance
+        Wdata  = np.concatenate([vp[:, :3,:3],vl], axis=0)
         wip = np.arange( len(Wdata) + 1)
         wix = np.arange( len(Wdata) )
-        Wi  = bsr_matrix((Widata, wix, wip),
+        W   = bsr_matrix((Wdata, wix, wip),
                 shape=( len(Wdata)*3, len(Wdata)*3))
+
+        # compute BA sparsity structure : deprecated with analytical jac_BA()
+        # A = self.sparsity_BA(n_c, n_l, ci, li)
 
         if ax is not None:
             ## prep data for viz
@@ -1409,24 +1488,24 @@ class ClassicalVO(object):
 
         ## actually run BA
         # -- opt1 : custom --
-        # setup variables
-        x1 = lsq(self.residual_BA, x0,
+        #x1 = lsq(self.residual_BA, x0,
+        #        jac=self.jac_BA,
+        #        args=(n_c, n_l, ci, li, p2),
+        #        **self.pBA_
+        #        )
+        # -- opt2 : scipy --
+
+        res = least_squares(
+                self.residual_BA, x0,
+                #jac_sparsity=A,
                 jac=self.jac_BA,
+                #x_scale = sc,
+                x_scale='jac',
                 args=(n_c, n_l, ci, li, p2),
-                Wi=Wi,
                 **self.pBA_
                 )
-        # -- opt2 : scipy --
-        # res = least_squares(
-        #         self.residual_BA, x0,
-        #         #jac_sparsity=A,
-        #         jac=self.jac_BA,
-        #         #x_scale = sc,
-        #         x_scale='jac',
-        #         args=(n_c, n_l, ci, li, p2),
-        #         **self.pBA_
-        #         )
-        # x1 = res.x
+
+        x1 = res.x
         # ------------------
 
         # format ...
@@ -1529,29 +1608,22 @@ class ClassicalVO(object):
             ax['ba_1'].legend()
 
         # apply BA results
-        # TODO : can we INPUT variance information to scipy.least_squares?
-        # TODO : can we extract variance information out of least_squares?
-        self.graph_.update(win, pos_opt) # TODO : or result from UKF? may not matter.
-        self.landmarks_.pos[li_u] = lmk_opt
+        pose_c_r = self.graph_.update(win, pos_opt)
 
-        return pos_opt
+        # == landmark updates : hard vs. soft ==
+        # -- opt 1 : hard update --
+        #self.landmarks_.pos[li_u] = lmk_opt # << hard update
+        # -- opt 2 : soft cov-based update --
+        ba_cov = cov_from_jac(res.jac)
+        ba_cov_l = ba_cov[n_c*3:, n_c*3:]
+        i = np.arange(len(ba_cov_l))
+        ba_cov_l[i, i] += (1e-1)**2 # regularization, ~10cm
 
-    def run_UKF(self, dt, scale=None):
-        """ motion-based prediction """
-        pose_p = self.ukf_l_.x[:3].copy()
-        Q, R = get_QR(pose_p, dt)
-        self.ukf_l_.Q = Q
-        self.ukf_l_.R = R
-        self.ukf_l_.predict(dt)
-        pose_c = self.ukf_l_.x[:3].copy()
-        if scale is None:
-            # initialize scale from UKF
-            scale = np.linalg.norm(pose_c[:2] - pose_p[:2])
-        else:
-            # implicit : scale is kept
-            pass
-        return pose_p, pose_c, scale
-    
+        ba_cov_l = extract_block_diag(ba_cov_l, 3)
+        self.landmarks_.update(li_u, lmk_opt, ba_cov_l) # soft update
+
+        return pose_c_r
+
     @property
     def y_GP(self):
         """
@@ -1974,10 +2046,23 @@ class ClassicalVO(object):
 
         return idx_in, pt3, R, t
 
-    def __call__(self, img, dt, scale=None,
-            ax=None
+    def initialize(self, img0, scale0,
+            x0=None, P0=None
             ):
-        index = self.graph_.index
+        # 1. initialize graph
+        self.graph_.initialize(x0, P0)
+
+        # 2. initialize data cache
+        kpt0 = self.cvt_.img_to_kpt(img0,
+                subpix=(self.flag_ & ClassicalVO.VO_USE_KPT_SPX))
+        kpt0, des0 = self.cvt_.img_kpt_to_kpt_des(img0, kpt0)
+        self.hist_.append( [kpt0, des0, img0] )
+
+        # 3. initialize scale
+        self.scale0_ = scale0
+        self.use_s0_ = True
+
+    def __call__(self, img, dt, ax=None):
         msg = ''
         # suffix designations:
         # o/0 = origin (i=0)
@@ -1995,20 +2080,22 @@ class ClassicalVO(object):
 
         # update history
         self.hist_.append( [kpt_c, des_c, img_c] )
-        if len(self.hist_) <= 1:
-            return None
+
         # query data from previous time-frame
         # NOTE : -2 since -1 = current
         kpt_p, des_p, img_p = self.hist_[-2]
 
-        # ukf
-        # store priors
-        self.s_hist_.append(
-                self.ukf_l_.x,
-                self.ukf_l_.P,
-                dt)
+        # with commit:=True, current pose index will also be updated
+        pose_p, pose_c, sc = self.graph_.predict(dt, commit=True)
+        index = self.graph_.index # << index will not change after predict()
 
-        pose_p, pose_c, scale = self.run_UKF(dt, scale)
+        if self.use_s0_:
+            # use recently supplied reference scale
+            scale = self.scale0_
+            self.use_s0_ = False
+        else:
+            # use predicted scale if scale was not supplied
+            scale = sc
 
         # Estimate #0 : Based on UKF Motion
         # TODO : is it possible to pass R_c/t_c
@@ -2408,10 +2495,7 @@ class ClassicalVO(object):
             # == #4 finished ==
 
         # Estimate #5 : return Post-filter results as UKF Posterior
-        # NOTE: self.graph_ contains pose posterior.
-        self.ukf_l_.update(pose_c_r)
-        pose_c_r = self.ukf_l_.x[:3].copy()
-        self.graph_.add_pos(pose_c_r.copy())
+        pose_c_r = self.graph_.update(1, [pose_c_r])
         # NOTE: estimate #5 does not produce R_c, t_c, R_b, t_c
         # because it is not needed.
         # == #5 finished ==
@@ -2419,7 +2503,7 @@ class ClassicalVO(object):
         # prune
         # NOTE : indexing offset here is 100% because of visualization.
         # TODO : make more robust
-        if (index+1 >= self.prune_freq_) and ( (index+1) % self.prune_freq_)==0 :
+        if (index >= self.prune_freq_) and ( (index) % self.prune_freq_)==0 :
             # 1. prep viz (if available)
             if ax is not None:
                 ax['prune_0'].cla()
@@ -2451,8 +2535,8 @@ class ClassicalVO(object):
                 # Survey list of BA frequencies (windows)
                 # And run the largest possible BA
                 # if multiple windows satisfy the condition.
-                s_check = (len(self.graph_.pose_) >= win)
-                f_check = (len(self.graph_.pose_) % win == 0)
+                s_check = (index >= win)
+                f_check = (index % win == 0)
                 if s_check and f_check:
                     ba_win = win
                     run_ba = True
@@ -2461,35 +2545,9 @@ class ClassicalVO(object):
             if run_ba:
                 # run BA every [win] frames
                 print('Running BA @ scale={}'.format(ba_win))
-                ba_res = self.run_BA(ba_win, ax=ax)
-                if ba_res is not None:
-                    # "historic" UKF
-                    xs, Ps, dts = self.s_hist_.query(ba_win)
-                    self.ukf_h_.x = xs[0]
-                    self.ukf_h_.P = Ps[0]
+                pose_c_r = self.run_BA(ba_win, ax=ax)
 
-                    xs = []
-                    Ps = []
-                    for (h_dt, h_z) in zip(dts, ba_res):
-                        xs.append( self.ukf_h_.x.copy() )
-                        Ps.append( self.ukf_h_.P.copy() )
-                        ukf_Q, ukf_R = get_QR(self.ukf_h_.x[:3], dt)
-                        self.ukf_h_.Q = ukf_Q
-                        self.ukf_h_.R = ukf_R
-                        self.ukf_h_.predict(h_dt)
-                        self.ukf_h_.update(h_z)
-
-                    # overwrite state history
-                    # note that self.s_hist_ only stores priors. (prv)
-                    # self.graph_ stores posteriors. (current)
-                    self.s_hist_.update(ba_win, xs, Ps, dts)
-
-                    # copy to local ukf posterior
-                    self.ukf_l_.x = self.ukf_h_.x.copy()
-                    self.ukf_l_.P = self.ukf_h_.P.copy()
-
-                    # result
-                    pose_c_r = self.ukf_l_.x[:3].copy()
+        ## === FROM THIS POINT ALL VIZ === 
 
         # plot scale
         if ax is not None:
@@ -2498,8 +2556,6 @@ class ClassicalVO(object):
                 s_i, s_v = zip(*v)
                 ax['scale'].plot(s_i, s_v, label=k)
             ax['scale'].legend()
-
-        ## === FROM THIS POINT ALL VIZ === 
 
         # construct visualizations
 

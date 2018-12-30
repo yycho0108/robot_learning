@@ -60,7 +60,8 @@ class CVORunner(object):
         self.map_ = np.empty((0, 2), dtype=np.float32)
         self.vo_ = ClassicalVO(cinfo)
 
-        self.vo_(imgs[0], 0.0) # initialize GUI
+        s0 = np.linalg.norm(odom[1, :2] - odom[0, :2]) # NOTE : assume odom layout (x,y,h)
+        self.vo_.initialize(imgs[0], s0) # initialize vo reference scale
 
         self.tx_ = []
         self.ty_ = []
@@ -97,7 +98,6 @@ class CVORunner(object):
             pts2,
             scan_c,
             pts_r,
-            cov,
             pts_col,
             msg='title'
             ):
@@ -116,7 +116,7 @@ class CVORunner(object):
 
         self.ax_['track'].set_title('Tracking Visualization')
         VoGUI.draw_img(self.ax_['track'], aimg[..., ::-1])
-        VoGUI.draw_top(self.ax_['main'], rec_path, pts2, odom[:i+1], scan_c, cov, pts_col)
+        VoGUI.draw_top(self.ax_['main'], rec_path, pts2, odom[:i+1], scan_c, col=pts_col)
         VoGUI.draw_3d(self.ax_['cloud'], pts3, pts_col)
         VoGUI.draw_2d_proj(self.ax_['proj2'], imgs[i, ..., ::-1], pts_r)
         VoGUI.draw_err(self.ax_['terr'], rec_path, odom[:i])
@@ -192,8 +192,7 @@ class CVORunner(object):
             # implicit : scale = None
             pass
 
-        res = vo(
-                img, dt, scale=scale,
+        res = vo(img, dt,
                 ax = (self.ax_ if viz else None)
                 )
 
@@ -227,8 +226,7 @@ class CVORunner(object):
 
         ### EVERYTHING FROM HERE IS PLOTTING + VIZ ###
         if viz:
-            P = self.vo_.ukf_l_.P
-            self.show(aimg, pts3, pts2, scan_c, pts_r, P, col_p, ('[%d/%d] '%(i,n)) + msg)
+            self.show(aimg, pts3, pts2, scan_c, pts_r, col_p, ('[%d/%d] '%(i,n)) + msg)
             plt.pause(0.01) # supply enough time to draw everything
 
     def quit(self):

@@ -273,12 +273,15 @@ def block_inv(A, n_rows, n_cols):
     print Ai.shape, Ai.nnz, Ai.size
     return Ai
 
-def schur_trick(J, F, n_c, n_l, s_c=3, s_l=3, mu=1e-2,
+def schur_trick(J, F, n_c, n_l,
+        s_c=3, s_l=3,
+        mu=1e-2,
         Wi=None
         ):
     """
     """
     ts = []
+
     # H.dot(dx) = -g
 
     # H of form [[B E],[E.T,C]] 
@@ -289,9 +292,17 @@ def schur_trick(J, F, n_c, n_l, s_c=3, s_l=3, mu=1e-2,
     # S : E.C^{-1}.E', Schur complement of C in H, "reduced camera matrix"
     # B - S.dy = v - E.C^{-1}.w (NOTE: x' = x.T)
 
-    #H0 = J.T.dot(J)
+    if Wi is not None:
+        O = J.dot(W).dot(J.T) # sparsity ~7%, still quite sparse.
+        #Oi = sinv(O)
+        Oi = np.linalg.inv(O.todense())
+        #Jl = J.T
+        Jl = J.T.dot(Oi)
+    else:
+        Jl = J.T
+
     ts.append(time.time())
-    H0 = J.T.dot(J) # << takes a long time?
+    H0 = Jl.dot(J) # << takes a long time?
     ts.append(time.time())
 
     # opt1
@@ -306,11 +317,7 @@ def schur_trick(J, F, n_c, n_l, s_c=3, s_l=3, mu=1e-2,
     #H = H0 + mu * D.T.dot(D) # mu, D are regularization terms
     #print 'dbg -1'
     #H = H0
-
-    if Wi is not None:
-        g = J.T.dot(F) # << sometimes consumes a lot of time as well
-    else:
-        g = J.T.dot(Wi).dot(F) # << sometimes consumes a lot of time as well
+    g = Jl.dot(F) # << sometimes consumes a lot of time as well
     ts.append(time.time())
 
     o_l = n_c*s_c # landmark index offset
