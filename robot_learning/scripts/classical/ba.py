@@ -273,7 +273,9 @@ def block_inv(A, n_rows, n_cols):
     print Ai.shape, Ai.nnz, Ai.size
     return Ai
 
-def schur_trick(J, F, n_c, n_l, s_c=3, s_l=3, mu=1e-2):
+def schur_trick(J, F, n_c, n_l, s_c=3, s_l=3, mu=1e-2,
+        Wi=None
+        ):
     """
     """
     ts = []
@@ -289,7 +291,7 @@ def schur_trick(J, F, n_c, n_l, s_c=3, s_l=3, mu=1e-2):
 
     #H0 = J.T.dot(J)
     ts.append(time.time())
-    H0 = J.T.dot(J) # << most time-consuming step
+    H0 = J.T.dot(J) # << takes a long time?
     ts.append(time.time())
 
     # opt1
@@ -304,7 +306,11 @@ def schur_trick(J, F, n_c, n_l, s_c=3, s_l=3, mu=1e-2):
     #H = H0 + mu * D.T.dot(D) # mu, D are regularization terms
     #print 'dbg -1'
     #H = H0
-    g = J.T.dot(F) # << sometimes consumes a lot of time as well
+
+    if Wi is not None:
+        g = J.T.dot(F) # << sometimes consumes a lot of time as well
+    else:
+        g = J.T.dot(Wi).dot(F) # << sometimes consumes a lot of time as well
     ts.append(time.time())
 
     o_l = n_c*s_c # landmark index offset

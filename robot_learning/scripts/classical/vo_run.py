@@ -123,26 +123,6 @@ class CVORunner(object):
         # TODO : plot error in stepwise difference
         #VoGUI.draw_err(self.ax_['derr'], rec_path, odom[:i])
 
-        if self.vo_.pnp_p_ is not None:
-            self.ax_['main'].plot(
-                    [self.vo_.pnp_p_[0]],
-                    [self.vo_.pnp_p_[1]],
-                    'go',
-                    label='pnp',
-                    alpha=0.5
-                    )
-            self.ax_['main'].quiver(
-                    [self.vo_.pnp_p_[0]],
-                    [self.vo_.pnp_p_[1]],
-                    [np.cos(self.vo_.pnp_h_)],
-                    [np.sin(self.vo_.pnp_h_)],
-                    angles='xy',
-                    #scale=1,
-                    color='g',
-                    alpha=0.5
-                    )
-
-
         self.fig_.canvas.draw()
         self.fig_.suptitle(msg)
 
@@ -154,6 +134,26 @@ class CVORunner(object):
 
         if i >= n:
             return
+
+        # if viz, clear everything beforehand
+        if viz:
+
+            for k in ['track', 'cloud', 'proj2', 'main', 'terr', 'scale',]:
+                self.ax_[k].cla()
+                #'track' : G(gs[0,0]),
+                #'cloud' : G(gs[1,0], projection='3d'),
+                #'proj2' : G(gs[2,0]),
+                #'main'  : G(gs[0:2,1:3]),
+                #'terr'  : G(gs[2,1:3]),
+                #'ba_0'  : G(gs[0,3]),
+                #'ba_1'  : G(gs[0,4]),
+                #'ba_2'  : G(gs[0,5]),
+                #'prune_0' : G(gs[1,3]),
+                #'prune_1' : G(gs[1,4]),
+                #'lmk_cnt' : G(gs[2,3:5]),
+                #'scale' : G(gs[1,5]),
+                #'pnp'   : G(gs[2,5])
+                #a.cla()
 
         # unroll properties
         odom   = self.odom_
@@ -234,7 +234,7 @@ class CVORunner(object):
     def quit(self):
         self.quit_ = True
 
-    def run(self, auto=False, vfreq=1):
+    def run(self, auto=False, vfreq=1, anim=False):
         #self.gui_.run()
         self.fig_.canvas.mpl_connect('key_press_event', self.handle_key)
         self.fig_.canvas.mpl_connect('close_event', sys.exit)
@@ -245,8 +245,10 @@ class CVORunner(object):
                     viz = ( (self.index_ % vfreq) == 0)
                     self.step(viz=viz)
                 else:
+                    # done with processing
                     plt.pause(0.01)
-                #plt.savefig('/tmp/{:04d}.png'.format(self.index_))
+                if anim:
+                    plt.savefig('/tmp/{:04d}.png'.format(self.index_))
         else:
             plt.show()
 
@@ -267,6 +269,7 @@ def main():
     # convenience params defined here
     auto  = True
     vfreq = 16
+    anim  = False # save figures for later animation
 
     np.set_printoptions(precision=4)
     #idx = np.random.choice(8)
@@ -303,7 +306,7 @@ def main():
     stamps -= stamps[0] # t0 = 0
 
     app = CVORunner(imgs, stamps, odom, scan, cinfo)
-    app.run(auto=auto, vfreq=vfreq)
+    app.run(auto=auto, vfreq=vfreq, anim=anim)
 
 if __name__ == "__main__":
     main()

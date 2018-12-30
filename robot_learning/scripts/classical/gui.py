@@ -43,13 +43,14 @@ class VoGUI(object):
             cov=None,
             col=None
             ):
-        ax.cla()
 
         # reconstruction
         if col is None:
             ax.plot(pts[:,0], pts[:,1], 'r.', label='points')
         else:
-            ax.scatter(pts[:,0], pts[:,1], c=col[...,::-1]/255., label='points')
+            ax.scatter(pts[:,0], pts[:,1], c=col[...,::-1]/255., label='points',
+                    zorder=-1
+                    )
 
         # origin
         ax.plot([0],[0],'k+')
@@ -74,7 +75,6 @@ class VoGUI(object):
         ax.plot(path1[:,0], path1[:,1], 'r--')
         ax.plot(path1[-1:,0], path1[-1:,1], 'ro', markersize=5, label='ground truth')
 
-
         ax.set_title('VO Status Overview')
         ax.legend()
 
@@ -95,7 +95,7 @@ class VoGUI(object):
         ymin = min(cy1,cy2)
         ymax = max(cy1,cy2)
 
-        r_lim = 3.0 # TODO : hardcoded
+        r_lim = 8.0 # TODO : hardcoded
         ax.set_xlim(xmin-r_lim, xmax+r_lim)
         ax.set_ylim(ymin-r_lim, ymax+r_lim)
         ax.grid()
@@ -104,7 +104,6 @@ class VoGUI(object):
 
     @staticmethod
     def draw_3d(ax, pts, col=None):
-        ax.cla()
         if col is None:
             ax.plot(pts[:,0], pts[:,1], pts[:,2], '.')
         else:
@@ -121,7 +120,6 @@ class VoGUI(object):
     @staticmethod
     def draw_2d_proj(ax, img, pts, color=None):
         # TODO : support color
-        ax.cla()
         VoGUI.draw_img(ax, img)
         n, m = np.shape(img)[:2]
         ax.plot(pts[:,0], pts[:,1], '.')
@@ -134,13 +132,11 @@ class VoGUI(object):
 
     @staticmethod
     def draw_img(ax, img):
-        ax.cla()
         ax.imshow(img)
         ax.axis('off')
 
     @staticmethod
     def draw_err(ax, x, y):
-        ax.cla()
 
         d = y - x 
         # normalize angle component

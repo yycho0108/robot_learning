@@ -6,6 +6,7 @@ Semi-Urgent TODOs:
     - Keyframes?
     - Incorporate Variance information in BA?
     - Cross-Frame (i.e. temporal displacement >1) Matching + Tracking
+    - Currently, All frames are processed twice?
 """
 
 from collections import namedtuple, deque, defaultdict
@@ -24,7 +25,7 @@ from sklearn.neighbors import NearestNeighbors
 from matplotlib.patches import Ellipse
 from mpl_toolkits.mplot3d import Axes3D
 
-from scipy.sparse import lil_matrix, csr_matrix
+from scipy.sparse import lil_matrix, csr_matrix, bsr_matrix
 from scipy.optimize import least_squares
 from scipy.optimize._lsq.common import scale_for_robust_loss_function
 from scipy.optimize._lsq.least_squares import construct_loss_function
@@ -241,6 +242,7 @@ def score_F(pt1, pt2, F, cvt, sigma=1.0):
 def lsq(f, x0, jac, args,
         ftol=1e-8, xtol=1e-8,
         max_nfev=1000,
+        Wi=None, # << lsq-only parameter
         # below, currently ignored parameters
         loss=None,
         method=None,
@@ -265,7 +267,7 @@ def lsq(f, x0, jac, args,
         J = jac(x, *args)
         ts.append( time.time()) 
         # NOTE: *args[:2] is a hack to get n_c & n_l populated
-        dx = schur_trick(J, F, *args[:2])
+        dx = schur_trick(J, F, Wi=Wi, *args[:2])
         ts.append( time.time()) 
         # TODO: check xtol
         x += dx
@@ -599,6 +601,7 @@ class ClassicalVO(object):
                     #angles=[-np.pi/2,0.0,-np.pi/2],
                     translate=[0.174,0,0.113])
 
+
         # define "system" parameters
         self.pEM_ = dict(
                 method=cv2.FM_RANSAC,
@@ -613,7 +616,7 @@ class ClassicalVO(object):
         self.pBA_ = dict(
                 ftol=1e-3,
                 xtol=np.finfo(float).eps,
-                loss='linear',
+                loss='soft_l1',
                 max_nfev=1024,
                 method='trf',
                 verbose=2,
@@ -636,7 +639,7 @@ class ClassicalVO(object):
                 nfeatures=1024,
                 scaleFactor=1.2,#np.sqrt(2),??
                 nlevels=8,
-                # IMPORTANT : scoretype here influences response-based filters.
+                # NOTE : scoretype here influences response-based filters.
                 scoreType=cv2.ORB_FAST_SCORE,
                 #scoreType=cv2.ORB_HARRIS_SCORE,
                 )
@@ -669,13 +672,9 @@ class ClassicalVO(object):
         self.hist_ = deque(maxlen=3)
         self.prune_freq_ = 16
 
-        # pnp (NOTE : temporary for viz + should be deleted)
-        self.pnp_p_ = None
-        self.pnp_h_ = None
-
         # bundle adjustment + loop closure
         # sort ba pyramid by largest first
-        ba_pyr = [16] # [16,64]
+        ba_pyr = [16, 64, 256, 1024] # [16,64]
         self.ba_pyr_  = np.sort(ba_pyr)[::-1]
         self.graph_ = VGraph()
 
@@ -861,7 +860,6 @@ class ClassicalVO(object):
         update_lm = (run_lm and self.flag_ & ClassicalVO.VO_USE_LM_KF)
         if update_lm:
             # update landmarks from computed correspondences
-            # TODO: apply scale_est (aggregate) or rel (individual)?
             pt3_new_c_s = pt3_new_c * scale
             var_lm_new = self.landmarks_.lm_var(self.cvt_,
                     pose, pt3_new_c_s)
@@ -902,7 +900,6 @@ class ClassicalVO(object):
             self.landmarks_.update(lm_idx, pt3_new_c_0, var_lm_new)
 
             # Add correspondences to BA Cache
-            # wow, that's a lot of chained indices.
             self.graph_.append(lm_idx, pt2_new_u)
 
         # == PNP ===================
@@ -911,8 +908,6 @@ class ClassicalVO(object):
         run_pnp &= lm_idx.size >= 16 # use at least > 16 points
         # TODO : REVIVE PNP AT SOME POINT
         # reset PNP data no matter what
-        self.pnp_p_ = None
-        self.pnp_h_ = None
         if run_pnp:
             # either landmarks are wrong, or poses are wrong, which influences PNP performance.
             # The issue is that both of them must be simultaneously optimized.
@@ -937,7 +932,6 @@ class ClassicalVO(object):
                     pt_map, pose) # updated version
 
             # == debugging ==
-            # TODO : make slot for pnp
             if ax is not None:
                 ax['pnp'].cla()
                 #ax['pnp'].imshow(img_c[...,::-1])
@@ -946,7 +940,7 @@ class ClassicalVO(object):
                 if not ax['pnp'].yaxis_inverted():
                     ax['pnp'].invert_yaxis()
             # == debugging ==
-            msg = self.run_PNP(pt_map, pt_cam, pose, msg=msg)
+            msg = self.run_PNP(pt_map, pt_cam, pose, ax=ax, msg=msg)
         # ========================
 
         # == visualize filtering process ==
@@ -976,10 +970,13 @@ class ClassicalVO(object):
             img_c,
             msg=''
             ):
+        """
+        Frame-To-Map Processing: New points.
+        Mostly focused on pre-insertion filtering.
 
-        # mostly targetted at processing new points.
-        # should not really return scale, since
-        # only a few landmarks should have correspondences here.
+        TODO: should not really return scale, since
+        only a few landmarks should have correspondences here.
+        """
 
         # query visible points from landmarks database
         # atol here, chosen based on fov
@@ -1131,23 +1128,6 @@ class ClassicalVO(object):
         # really shouldn't return scale?
         return scale
 
-    def proc_f2m(self,
-            pose, scale, pt3,
-            kpt_p, des_p,
-            pt2_c, pt2_u_c,
-            img_c,
-            msg=''
-            ):
-        """
-        """
-        # frame-to-map processing
-        # (i.e. uses landmark data)
-
-        # control flags
-        # update existing landmarks
-
-        return scale, msg
-
     def pRt2pose(self, p, R, t):
         """
         returns pose updated with input rotation + translation.
@@ -1191,7 +1171,7 @@ class ClassicalVO(object):
 
         # Rotation Part
         T_o2b[:,0,0] = c
-        T_o2b[:,0,1] = s # important : note transposed
+        T_o2b[:,0,1] = s # NOTE: transposed z-axis rotation.
         T_o2b[:,1,0] = -s
         T_o2b[:,1,1] = c
         T_o2b[:,2,2] = 1
@@ -1205,12 +1185,14 @@ class ClassicalVO(object):
 
         lmk_h = self.cvt_.pt_to_pth(lmk)
 
+        # NOTE : einsum was not faster.
         pt2_h = reduce(np.matmul,[
             self.K_, # 3x3
             self.cvt_.T_b2c_[:3], # 3x4
-            T_o2b, # 4x4
+            T_o2b, # Nx4x4
             self.cvt_.T_c2b_, # 4x4
-            lmk_h[...,None]])[...,0] # 4x1
+            lmk_h[...,None]])[...,0] # Nx4x1
+        
         if return_h:
             return pt2_h
 
@@ -1361,7 +1343,7 @@ class ClassicalVO(object):
 
         # create np arrays
         p0, ci, li, p2 = self.graph_.query(win)
-        _, vp, _ = self.s_hist_.query(win)
+        _, vp, _ = self.s_hist_.query(win) # n_cx3x3
 
         # gather stats
         n_c = len(p0)
@@ -1376,32 +1358,19 @@ class ClassicalVO(object):
             self.landmarks_.pos[li_u].ravel()
             ])
 
-        # compute BA sparsity structure
-        A  = self.sparsity_BA(n_c, n_l, ci, li)
-        #J_test = self.jac_BA(x0, n_c, n_l, ci, li, p2)
-        #print 'JTEST!!'
-        #print J_test.todense()[A.todense() == 1]
+        vl = self.landmarks_.var[li_u] # n_lx3x3
 
-        # EXPERIMENTAL: setting x_scale
-        # "characteristic scale", standard deviation
-        si = np.arange(3)
-        vp = vp[:,si, si]
-        vl = self.landmarks_.var[li_u][:, si, si]
+        # compute BA sparsity structure : deprecated with analytical jac_BA()
+        # A = self.sparsity_BA(n_c, n_l, ci, li)
 
-        # scales -- avoid hyper-strong outliers
-        # NOTE : lower scale needs to be regulated, not high.
-        # TODO : x_scale=sc is very very unstable.
-        sp = np.sqrt(vp)
-        sl = np.sqrt(vl)
-        sl_lo = np.percentile(sp, 50) # lower bounds on pose
-        #sl_lo = np.percentile(sl, 20)
-        #sl_hi = np.percentile(sl, 80)
-        #sl = np.clip(sl, sl_lo, a_max=None)
-        sl_mx = sl.max()
-        sl_mn = sl.min()
-
-        sl = (sl - sl_mn) * ( (sl_mx - sl_lo) / (sl_mx - sl_mn) ) + sl_lo
-        sc = np.concatenate([sp.ravel(), sl.ravel()])
+        # create covariance weight omega.
+        # TODO : potentially clip variance? idk
+        Wdata  = np.concatenate([vp[:, :3,:3],vl], axis=0) # << only works because 3x3!
+        Widata = np.linalg.inv(Wdata) # inverse
+        wip = np.arange( len(Wdata) + 1)
+        wix = np.arange( len(Wdata) )
+        Wi  = bsr_matrix((Widata, wix, wip),
+                shape=( len(Wdata)*3, len(Wdata)*3))
 
         if ax is not None:
             ## prep data for viz
@@ -1416,6 +1385,10 @@ class ClassicalVO(object):
             #ax['ba_1'].plot(lop, '--')
             ##ax['ba_1'].hist(sc[:n_c], alpha=0.5, label='cam')
 
+
+            vl_d = vl[:, (0,1,2), (0,1,2)]
+            sl = np.sqrt(vl_d)
+
             wl = (1.0 / sl) # << is how it will actually be reflected
             hil = np.full(len(sl), np.percentile(wl, 80))
             lol = np.full(len(sl), np.percentile(wl, 20))
@@ -1427,7 +1400,6 @@ class ClassicalVO(object):
             ax['ba_2'].plot(lol, '--')
             #ax['ba_2'].set_title('lmk-sc')
             #ax['ba_2'].hist(sc[n_c:], alpha=0.5, label='lmk')
-
 
         # mean reprojection error
         err0s = np.square(self.residual_BA(x0,
@@ -1441,6 +1413,7 @@ class ClassicalVO(object):
         x1 = lsq(self.residual_BA, x0,
                 jac=self.jac_BA,
                 args=(n_c, n_l, ci, li, p2),
+                Wi=Wi,
                 **self.pBA_
                 )
         # -- opt2 : scipy --
@@ -1465,7 +1438,6 @@ class ClassicalVO(object):
             ci, li, p2))
         err1 = np.sqrt(err1s.mean())
         #print err0, err1
-
 
         if ax is not None:
             # visualize best improvements
@@ -1500,9 +1472,7 @@ class ClassicalVO(object):
             elems = [vp0, vl0, vp1, vl1]
 
             mnlim = np.min([e.min(axis=0) for e in elems], axis=0)
-            print mnlim.shape
             mxlim = np.max([e.max(axis=0) for e in elems], axis=0)
-            print mxlim.shape
             xlim, ylim, _ = zip(*[mnlim, mxlim])
 
             # apply padding
@@ -1758,7 +1728,7 @@ class ClassicalVO(object):
         return None, scale, guess
 
     def run_PNP(self, pt3_map, pt2_cam, pose,
-            p_min=16, msg=''):
+            p_min=16, ax=None, msg=''):
 
         if len(pt3_map) < p_min or len(pt2_cam) < p_min:
             return msg
@@ -1820,10 +1790,25 @@ class ClassicalVO(object):
                 print('pnp : {}, {}'.format(pnp_p, pnp_h))
                 print_ratio('PNP Ratio', len(inliers), len(pt3_map))
                 msg += '(pnp:{}/{})'.format( len(inliers), len(pt3_map))
-                # NOTE : uncomment this to revive pnp visualization
-                # NOTE : standardize visualizations
-                self.pnp_p_ = pnp_p
-                self.pnp_h_ = pnp_h
+
+                if ax is not None:
+                    ax['main'].plot(
+                            [pnp_p[0]],
+                            [pnp_p[1]],
+                            'go',
+                            label='pnp',
+                            alpha=0.75
+                            )
+                    ax['main'].quiver(
+                            [pnp_p[0]],
+                            [pnp_p[1]],
+                            [np.cos(pnp_h)],
+                            [np.sin(pnp_h)],
+                            angles='xy',
+                            #scale=1,
+                            color='g',
+                            alpha=0.75
+                            )
         except Exception as e:
             # ignore exception
             print('PNP Error : {}'.format(e))
@@ -2067,32 +2052,23 @@ class ClassicalVO(object):
         #rax.hist(rsp_p)
 
         idx_l, pt2_l = self.landmarks_.track_points()
-        rsp_p_l = self.landmarks_.kpt[idx_l, 2]
+        rsp_p_l = self.landmarks_.kpt[idx_l, 2] # query responses for nmx
 
         # == obtain next-frame keypoints ==
         if self.flag_ & ClassicalVO.VO_USE_TRACK:
             # opt1 : points by track
-            # TODO : support pyramid
-            #pyr_p = cv2.buildOpticalFlowPyramid(img_p,
-            #        self.pLK_['winSize'],
-            #        self.pLK_['maxLevel']
-            #        )
-            #pyr_c = cv2.buildOpticalFlowPyramid(img_p,
-            #        self.pLK_['winSize'],
-            #        self.pLK_['maxLevel']
-            #        )
+            # NOTE : pyramids not supported. see https://github.com/opencv/opencv/issues/4777
             pt2_c,   idx_t   = self.track(img_p, img_c, pt2_p)
             pt2_c_l, idx_t_l = self.track(img_p, img_c, pt2_l)
 
             # mark points from landmarks that failed to track
-            nidx_l = np.ones(len(pt2_l), dtype=np.bool)
-            nidx_l[idx_t_l] = False
+            nmsk_l = np.ones(len(pt2_l), dtype=np.bool)
+            nmsk_l[idx_t_l] = False
             print_ratio('track', len(idx_t), len(pt2_p))
             print_ratio('lmk track', len(idx_t_l), len(pt2_l))
-            self.landmarks_.untrack(idx_l[nidx_l])
+            self.landmarks_.untrack(idx_l[nmsk_l])
 
             # non-max suppression on remaining points
-            # NOTE: requires refactoring indexing architecture
             idx_s = self.pts_nmx(
                     pt2_c[idx_t], pt2_c_l[idx_t_l],
                     rsp_p[idx_t], rsp_p_l[idx_t_l],
@@ -2100,6 +2076,9 @@ class ClassicalVO(object):
 
             # apply suppression indices
             idx_t = idx_t[idx_s]
+
+            # update points tracking reference
+            self.landmarks_.kpt[idx_l[idx_t_l], :2] = pt2_c_l[idx_t_l]
         else:
             # opt2 : points by match
             # TODO : not currently supporting landmarks extension
@@ -2115,11 +2094,10 @@ class ClassicalVO(object):
         # TODO : evaluate if the >1px constraint is necessary
         # msk_d = (np.max(np.abs(pt2_p - pt2_c), axis=-1) > 1.0) # enforce >1px difference
         # msk_t &= msk_d
-        # TODO : also track landmark points?
         # =================================
 
         # merge data
-        cam_lim = len(idx_s)
+        cam_lim = len(idx_s) # offset index
         pt2_p_all = np.concatenate([
             pt2_p[idx_t],
             pt2_l[idx_t_l],
@@ -2128,9 +2106,6 @@ class ClassicalVO(object):
             pt2_c[idx_t], # new first
             pt2_c_l[idx_t_l] # old last
             ], axis=0)
-
-        # update points tracking reference
-        self.landmarks_.kpt[idx_l[idx_t_l], :2] = pt2_c_l[idx_t_l]
 
         # undistort
         pt2_u_p = self.cvt_.pt2_to_pt2u(pt2_p_all)
@@ -2517,7 +2492,6 @@ class ClassicalVO(object):
                     pose_c_r = self.ukf_l_.x[:3].copy()
 
         # plot scale
-
         if ax is not None:
             ax['scale'].cla()
             for (k, v) in self.scales_.items():
