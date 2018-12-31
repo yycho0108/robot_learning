@@ -50,6 +50,47 @@ def print_ratio(msg, a, b):
 def lerp(a,b,w):
     return (a*(1.0-w)) + (b*w)
 
+def resolve_Rt(R0, R1, t0, t1, alpha=0.5, guess=None):
+    # TODO : deal with R0/R1 disagreement?
+    # usually not a big issue.
+    if np.dot(t0.ravel(), t1.ravel()) < 0:
+        # disagreement : choose
+        if guess is not None:
+            # reference
+            R_ref, t_ref = guess
+
+            # precompute norms
+            d_ref = np.linalg.norm(t_ref)
+            d0 = np.linalg.norm(t0)
+            d1 = np.linalg.norm(t1)
+
+            # compute alignment score
+            score0 = np.dot(t_ref.ravel(), t0.ravel()) / (d_ref * d0)
+            score1 = np.dot(t_ref.ravel(), t1.ravel()) / (d_ref * d1)
+        else:
+            # reference does not exist, choose smaller t
+            score0 = np.linalg.norm(t0)
+            score1 = np.linalg.norm(t1)
+
+        idx = np.argmax([score0, score1])
+
+        return [(R0,t0), (R1,t1)][idx]
+    else:
+        # agreement : interpolate
+        # rotation part
+        R0h = np.eye(4, dtype=np.float32)
+        R0h[:3,:3] = R0
+        R1h = np.eye(4, dtype=np.float32)
+        R1h[:3,:3] = R1
+        q0 = tx.quaternion_from_matrix(R0h)
+        q1 = tx.quaternion_from_matrix(R1h)
+        q = tx.quaternion_slerp(q0, q1, alpha)
+        R = tx.quaternion_matrix(q)[:3,:3]
+
+        # translation part
+        t = lerp(t0, t1, alpha)
+        return (R, t)
+
 def p2vec(p2, p, l, cvt):
     # where they are 'supposed to be'
     # Nx2, image coordinates
@@ -380,7 +421,9 @@ class VGraph(object):
                 subpix=None
                 )
         kpt, des = self.cvt_.img_kpt_to_kpt_des(img, kpt)
-        dat = (img, kpt, des)
+        pt2 = self.cvt_.kpt_to_pt(kpt)
+        rsp = np.float32([e.response for e in kpt])
+        dat = (img, kpt, des, pt2, rsp)
 
         # 2. delegate to set_data routine
         self.set_data(dat, i)
@@ -1823,7 +1866,7 @@ class ClassicalVO(object):
             scale = scale_gp
 
         # this is functionally the only time it's considered "success".
-        return H, scale, (R, t)
+        return H, scale, (R, t), (gpt3, gp_idx[idx_h])
 
     def run_PNP(self, pt3_map, pt2_cam, pose,
             p_min=16, ax=None, msg=''):
@@ -2086,9 +2129,125 @@ class ClassicalVO(object):
         self.scale0_ = scale0
         self.use_s0_ = True
 
-    def proc_f2f(self, fi0, fi1):
-        # frame-to-frame processing
-        pass
+    def pp2RcTc(self, p0, p1):
+        # convert p1 - p0 to R, T
+        dx, dy, dh = (p1 - p0)
+        R_b = tx.euler_matrix(0, 0, dh)[:3,:3]
+        t_b = np.reshape([dx, dy, 0], (3,1))
+
+        T_b2b1 = np.eye(4)
+        T_b2b1[:3,:3] = R_b
+        T_b2b1[:3,3:] = t_b
+        T_c2c1 = np.linalg.multi_dot([
+            self.cvt_.T_b2c_,
+            T_b2b1,
+            self.cvt_.T_c2b_
+            ])
+        R_c = T_c2c1[:3,:3]
+        t_c = T_c2c1[:3,3:]
+
+        return R_c, t_c
+
+    def proc_f2f_i(self, fi0, fi1, pt3=None, msk3=None):
+        """ call proc_f2f from indices """
+        # NOTE : pt3/msk3 references fi1.
+        # NOTE: currently only img1 data is used
+        # query frame data
+        img0, _, _, _, _ = self.graph_.get_data( fi0 )
+        img1, kpt1, des1, pt21, rsp1= self.graph_.get_data( fi1 )
+
+        # query initial pose (may be guesses)
+        pose0 = self.graph_.pos_[fi0]
+        pose1 = self.graph_.pos_[fi1]
+
+        return self.proc_f2f(
+                img0, img1,
+                pose0, pose1,
+                kpt1, des1, pt21, pt3=pt3, msk3=msk3
+                )
+
+    def proc_f2f(self, 
+            img0, img1,
+            pose0, pose1,
+            kpt1, des1, pt21,
+            pt3=None,
+            msk3=None
+            ):
+        # ^^ TODO : also input pt3 cov?
+        # NOTE :  pt21 **MAY** contain landmark information later.
+        # I think that might be a better idea.
+
+        if pt3 is None:
+            # construct initial pt3 guess if it doesn't exist
+            pt3  = np.zeros((len(pt21),3), dtype=np.float32 )
+            msk3 = np.zeros((len(pt21)), dtype=np.bool)
+        idx3 = np.where(msk3)[0]
+        # compose initial dR&dt guess
+        R_c0, t_c0 = self.pp2RcTc(pose0, pose1)
+        sc0 = np.linalg.norm(t_c0)
+
+        # track
+        # NOTE: distort=false assuming images and points are all pre-undistorted
+        pt20_G = pt21.copy() # expected pt2 locations @ pose0
+
+        if len(idx3) > 0:
+            # fill in guesses if 3D information for pts exists
+            pt20_G[idx3] = cv2.projectPoints(
+                    # project w.r.t pose0.
+                    # this works because T_c0 (R_c0|t_c0)
+                    # represents the transform that takes everything to pose0 coordinates.
+                    pt3[idx3],
+                    cv2.Rodrigues(R_c0)[0], # rvec needs to be formatted as such.
+                    t_c0, # TODO : ravel needed?
+                    cameraMatrix=self.K_,
+                    distCoeffs=self.D_*0,
+                    )[0]
+
+        pt20, idx_t = self.track(img1, img0, pt21, pt2=pt20_G) # NOTE: track backwards
+
+        # TODO : FM Correction with self.run_fm_cor() ??
+
+        # stage 1 : EM
+        res = self.run_EM(pt21, pt20, no_gp=False, guess=(R_c0, t_c0) )
+        idx_e, pt3_em_u, R_em, t_em_u = res # parse run_EM, no scale info
+        # ^ note pt3_em_u in camera (pose1) coord
+
+        # stage 2 : GP
+        # guess based on em or c0 ?? Is it double-dipping to use R_em/t_em for GP?
+        res = self.run_GP(pt21, pt20, sc0, guess=(R_em, t_em_u) )
+        H, sc2, (R_gp, t_gp_u), (pt3_gp_u, idx_g) = res # parse run_GP
+        # ^ note pt3_gp_u also in camera (pose1) coord
+
+        # stage 3 : resolve scale based on guess + GP measurement
+        alpha = 0.75 # bias towards GP estimation
+        sc = lerp(sc0, sc2, alpha) # TODO : adjust alpha based on t_c0 confidence
+
+        # fill in pt3 information
+        # ( TODO : incorporate confidence information )
+        pt3[idx_e] = pt3_em_u * sc
+        pt3[idx_g] = pt3_gp_u * sc # << NOTE: overwrote idx_e with idx_g
+        msk3[idx_e] = True
+        msk3[idx_g] = True
+
+        # return observations
+
+        # 1. relative pose observation
+        o_R, o_t = resolve_Rt(R_em, R_gp, t_em_u*sc, t_gp_u*sc,
+                alpha=alpha,
+                guess=(R_c0, t_c0))
+
+        # 2. individual landmarks observation
+        o_msk = np.zeros((len(pt21)), dtype=np.bool) # NOTE: can't use msk3, which is aggregate info.
+        o_msk[idx_e] = True
+        o_msk[idx_g] = True
+        o_idx = np.where(o_msk)[0]
+        o_pt20, o_pt21 = pt20[o_idx], pt21[o_idx]
+
+        # NOTE : final result
+        # 1. refined 3d positions + masks,
+        # 2. observation of the points at the respective poses,
+        # 3. observation of the relative pose from p0->p1. NOTE: specified in camera coordinates.
+        return pt3, msk3, (o_pt20, o_pt21), (o_R, o_t)
 
     def __call__(self, img, dt, ax=None):
         msg = ''
@@ -2097,19 +2256,17 @@ class ClassicalVO(object):
         # p = previous (i=t-1)
         # c = current  (i=t)
 
-        # process current frame
-        # TODO : enable lazy evaluation
-        # (currently very much eager)
-
-        #img_c = img
-
         # estimate current pose and update state to current index
         pose_p, pose_c, sc = self.graph_.predict(dt, commit=True) # with commit:=True, current pose index will also be updated
         index = self.graph_.index # << index should NOT change after predict()
         self.graph_.set_data_from( img ) # << this must be called after predict()
 
-        img_p, kpt_p, des_p = self.graph_.get_data(-2) # previous
-        img_c, kpt_c, des_c = self.graph_.get_data(-1) # current
+        # query graph for processing data (default : neighboring frames only)
+        # TODO : currently preparing architecture from cross-frame matching/tracking
+        img_p, kpt_p, des_p, pt2_p, rsp_p = self.graph_.get_data(-2) # previous
+        img_c, kpt_c, des_c, pt2_c, _ = self.graph_.get_data(-1) # current
+        # NOTE : as of right now, pt2_c, rsp_c are propagated from pt2_p and rsp_p
+        # and are not the results from self.graph_.get_data()
 
         if self.use_s0_:
             # use recently supplied reference scale
@@ -2118,6 +2275,16 @@ class ClassicalVO(object):
         else:
             # use predicted scale if scale was not supplied
             scale = sc
+
+        pt3, msk3 = None, None
+        pt3, msk3, (o_pt20, o_pt21), (o_R, o_t) = self.proc_f2f(
+                img_p, img_c,
+                pose_p, pose_c,
+                kpt_c, des_c, pt2_c,
+                pt3=pt3, msk3=msk3) # test if this works.
+
+        print 'proc_f2f validation (of equivalence)'
+        print_Rt(o_R, o_t)
 
         # Estimate #0 : Based on UKF Motion
         # TODO : is it possible to pass R_c/t_c
@@ -2148,18 +2315,6 @@ class ClassicalVO(object):
         self.scales_['b0'].append([index, np.linalg.norm(t_b0)])
         pose_c_r = self.pRt2pose(pose_p, R_b, t_b)
         # == #0 finished ==
-
-        # frame-to-frame processing
-        pt2_p = self.cvt_.kpt_to_pt(kpt_p)
-        rsp_p = np.float32([e.response for e in kpt_p])
-
-        #try:
-        #    fig = self.rfig_
-        #except Exception:
-        #    self.rfig_ = plt.figure()
-        #    fig = self.rfig_
-        #rax = fig.gca()
-        #rax.hist(rsp_p)
 
         idx_l, pt2_l = self.landmarks_.track_points()
         rsp_p_l = self.landmarks_.kpt[idx_l, 2] # query responses for nmx
@@ -2386,7 +2541,7 @@ class ClassicalVO(object):
         # <<-- initial guess, provided defaults in case of abort
         t_c1_u = (t_c1 / scale_c if scale_c >= np.finfo(np.float32).eps else t_c1)
 
-        H, scale_c2, (R_c, t_c_u) = self.run_GP(
+        H, scale_c2, (R_c, t_c_u), (gpt3, gp_idx) = self.run_GP(
                 pt2_u_c, pt2_u_p,
                 scale_c, guess=(R_c1, t_c1_u)
                 ) # note returned t_c is uvec
@@ -2460,6 +2615,7 @@ class ClassicalVO(object):
             scale_c = np.linalg.norm(t_c)
         print 'scale_c #3 (lerp)', scale_c
 
+
         T_c2c1 = np.eye(4)
         T_c2c1[:3,:3] = R_c
         T_c2c1[:3,3:] = t_c.reshape(3,1)
@@ -2477,6 +2633,9 @@ class ClassicalVO(object):
         R_b3 = R_b
         t_c3 = t_c
         t_b3 = t_b
+
+        print ('proc-f2f validation #2')
+        print_Rt(R_c, t_c)
 
         self.scales_['c3'].append([index, np.linalg.norm(t_c3)])
         self.scales_['b3'].append([index, np.linalg.norm(t_b3)])
