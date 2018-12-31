@@ -2154,7 +2154,7 @@ class ClassicalVO(object):
         # NOTE: currently only img1 data is used
         # query frame data
         img0, _, _, _, _ = self.graph_.get_data( fi0 )
-        img1, kpt1, des1, pt21, rsp1= self.graph_.get_data( fi1 )
+        img1, _, des1, pt21, rsp1= self.graph_.get_data( fi1 )
 
         # query initial pose (may be guesses)
         pose0 = self.graph_.pos_[fi0]
@@ -2163,16 +2163,44 @@ class ClassicalVO(object):
         return self.proc_f2f(
                 img0, img1,
                 pose0, pose1,
-                kpt1, des1, pt21, pt3=pt3, msk3=msk3
+                des1, pt21, pt3=pt3, msk3=msk3
                 )
 
     def proc_f2f(self, 
             img0, img1,
             pose0, pose1,
-            kpt1, des1, pt21,
+            des1, pt21,
             pt3=None,
-            msk3=None
+            msk3=None,
+            ref=1
             ):
+        if ref == 0:
+            # (des-pt2), (pt3-msk) all refer to img0
+
+            # format input - because it is flipped,
+            # -> pt3 must be in coord0
+
+            # flip
+            res = self.proc_f2f(img1, img0, pose1, pose0,
+                    des1, pt21, pt3, msk3, ref=1)
+
+            pt3, msk3, (o_pt21, o_pt20), (o_R, o_t) = res
+
+            # o_R/o_t is a transform from coord0 to coord1; flip
+            # TODO : replace below with more efficient computation
+            T = np.eye(4)
+            T[:3, :3] = o_R
+            T[:3, 3:] = o_t.reshape(3,1)
+            Ti = tx.inverse_matrix(T)
+            o_R = Ti[:3, :3]
+            o_t = Ti[:3, 3:] #.ravel() necessary?
+
+            # pt3 is in coord. frame of 0; must convert to coord1
+            pt3 = pt3.dot(o_R.T) + o_t.T
+
+            # msk3 is fine.
+            return pt3, msk3, (o_pt20, o_pt21), (o_R, o_t)
+
         # ^^ TODO : also input pt3 cov?
         # NOTE :  pt21 **MAY** contain landmark information later.
         # I think that might be a better idea.
@@ -2198,10 +2226,10 @@ class ClassicalVO(object):
                     # represents the transform that takes everything to pose0 coordinates.
                     pt3[idx3],
                     cv2.Rodrigues(R_c0)[0], # rvec needs to be formatted as such.
-                    t_c0, # TODO : ravel needed?
+                    t_c0.ravel(), # TODO : ravel needed?
                     cameraMatrix=self.K_,
                     distCoeffs=self.D_*0,
-                    )[0]
+                    )[0][:,0]
 
         pt20, idx_t = self.track(img1, img0, pt21, pt2=pt20_G) # NOTE: track backwards
 
@@ -2276,12 +2304,52 @@ class ClassicalVO(object):
             # use predicted scale if scale was not supplied
             scale = sc
 
-        pt3, msk3 = None, None
-        pt3, msk3, (o_pt20, o_pt21), (o_R, o_t) = self.proc_f2f(
+
+        # query LMK
+        idx_l, pt2_l = self.landmarks_.track_points()
+        pt3_l = self.cvt_.map_to_cam(
+                self.landmarks_.pos[idx_l],
+                pose_p
+                ) # pt3 references coord0.
+        des_l = self.landmarks_.des[idx_l]
+
+        # format inputs
+        li0 = len(pt2_p)
+        pt2_p_all = np.concatenate([pt2_p, pt2_l], axis=0)
+        des_p_all = np.concatenate([des_p, des_l], axis=0)
+        #pt2_p_all = pt2_p
+        #des_p_all = des_p
+        pt3 = None
+        msk3 = None
+
+        #pt3  = np.zeros((len(pt2_p_all), 3), dtype=np.float32)
+        #pt3[li0:] = pt3_l # pre-populate known 3D locatinos
+        #msk3 = np.zeros(len(pt2_p_all), dtype=np.bool)
+        #msk3[li0:] = True # mark indices of known 3D locations
+
+        res = self.proc_f2f(
                 img_p, img_c,
                 pose_p, pose_c,
-                kpt_c, des_c, pt2_c,
+                des_p, pt2_p_all,
+                pt3=pt3, msk3=msk3,
+                ref=0
+                )
+        pt3, msk3, (o_pt20, o_pt21), (o_R, o_t) = res
+        print 'proc_f2f validation (of equivalence)'
+        print_Rt(o_R, o_t)
+
+        # as with "ordinary" calls to proc_f2f,
+        # pt3-msk1 will reference pose1
+        # o_pt20, o_pt21 will reference pose0, pose1
+        # o_R, o_t will be the transform from coord 1 to coord0.
+
+        pt3, msk3 = None, None
+        res = self.proc_f2f(
+                img_p, img_c,
+                pose_p, pose_c,
+                des_c, pt2_c,
                 pt3=pt3, msk3=msk3) # test if this works.
+        pt3, msk3, (o_pt20, o_pt21), (o_R, o_t) = res
 
         print 'proc_f2f validation (of equivalence)'
         print_Rt(o_R, o_t)
