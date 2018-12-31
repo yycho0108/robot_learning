@@ -202,7 +202,6 @@ def estimate_plane_ransac(pts,
 
     return best_fit, best_err, best_msk
 
-
 def get_points_color(img, pts, w=3):
     n, m = img.shape[:2]
     pis, pjs = np.round(pts[:,::-1]).T.reshape(2,-1).astype(np.int32)
@@ -432,6 +431,15 @@ class VGraph(object):
         if i is None:
             # automatically set index
             i = self.index
+
+        if i < 0:
+            # rectify index for bounds checking below
+            i += len(self.dat_)
+
+        if (i<0) or (i>self.index):
+            # check bounds; self.index should be the last valid index
+            return None
+
         return self.dat_[i]
 
     def resize(self, c_new):
@@ -565,7 +573,8 @@ class VGraph(object):
         return prv, cur, scale
 
     def update(self, win, pos,
-            cov=None, hard=False, dw=1):
+            cov=None, hard=False,
+            dw=1):
         """
         Update pose[-win:] part of VGraph.
         if hard:=True, then the values are completely overwritten.
@@ -747,6 +756,7 @@ class ClassicalVO(object):
         # define configuration
         self.flag_ = ClassicalVO.VO_DEFAULT
         self.flag_ &= ~ClassicalVO.VO_USE_HOMO # TODO : doesn't really work?
+        #self.flag_ &= ~ClassicalVO.VO_USE_F2M
         #self.flag_ &= ~ClassicalVO.VO_USE_BA
         #self.flag_ |= ClassicalVO.VO_USE_PNP
         #self.flag_ &= ~ClassicalVO.VO_USE_FM_COR # performance
@@ -863,31 +873,32 @@ class ClassicalVO(object):
         self.scales_ = defaultdict(lambda:[])
 
     def pts_nmx(self,
-            pt2_c, pt2_l,
-            rsp_c, rsp_l,
-            k=4,
-            radius=16.0
+            pt_new, pt_ref,
+            rsp_new, rsp_ref,
+            k=16,
+            radius=0.05 # << NOTE : supply valid radius here when dealing with 2D Data
             ):
+
         # NOTE : somewhat confusing;
         # here suffix c=camera, l=landmark.
         # TODO : is it necessary / proper to take octaves into account?
-        if pt2_l.size <= 0:
+        if pt_ref.size <= 0:
             # No registered landmarks to filter with.
-            return np.arange(len(pt2_c))
+            return np.arange(len(pt_new))
 
         # compute nearest neighbors
         neigh = NearestNeighbors(n_neighbors=k, radius=radius)
-        neigh.fit(pt2_l)
+        neigh.fit(pt_ref)
 
         # NOTE : 
         # radius_neighbors would be nice, but indexing is difficult to use
-        # res = neigh.radius_neighbors(pt2_c, return_distance=False)
-        d, i = neigh.kneighbors(pt2_c, return_distance=True)
+        # res = neigh.radius_neighbors(pt_new, return_distance=False)
+        d, i = neigh.kneighbors(pt_new, return_distance=True)
 
         # too far from other landmarks to apply non-max
         msk_d = (d.min(axis=1) >= radius)
         # passed non-max
-        msk_v = np.all(rsp_l[i] <= rsp_c[:,None], axis=1) # 
+        msk_v = np.all(rsp_ref[i] < rsp_new[:,None], axis=1) # 
 
         # format + return results
         msk = (msk_d | msk_v)
@@ -1027,6 +1038,8 @@ class ClassicalVO(object):
         if update_lm:
             # update landmarks from computed correspondences
             pt3_new_c_s = pt3_new_c * scale
+            # TODO : compute appropriate landmark variances from
+            # all the currently associated poses.
             var_lm_new = self.landmarks_.lm_var(self.cvt_,
                     pose, pt3_new_c_s)
             pt3_new_c_0 = self.cvt_.cam_to_map(pt3_new_c_s, pose)
@@ -1763,8 +1776,9 @@ class ClassicalVO(object):
         Scale estimation based on locating the ground plane.
         if scale:=None, scale based on best z-plane will be returned.
         """
+        null_result = (None, scale, guess, (None,None))
         if not (self.flag_ & ClassicalVO.VO_USE_SCALE_GP):
-            return None, scale, guess
+            return null_result
 
         camera_height = self.T_c2b_[2, 3]
 
@@ -1782,7 +1796,7 @@ class ClassicalVO(object):
 
         if len(gp_idx) <= 3: # TODO : magic
             # too few points, abort gp estimate
-            return None, scale, guess
+            return null_result
 
         # update pt_c and pt_p
         pt_c = pt_c[gp_idx]
@@ -1825,7 +1839,7 @@ class ClassicalVO(object):
 
         if len(idx_h) < 16: # TODO : magic number
             # insufficient # of points -- abort
-            return None, scale, guess
+            return null_result
 
         # update pt_c and pt_p
         pt_c = pt_c[idx_h]
@@ -1848,7 +1862,7 @@ class ClassicalVO(object):
         z_idx = np.where(z_val)[0]
         if len(z_idx) <= 0:
             # abort ground-plane estimation.
-            return None, scale, guess
+            return null_result
         # NOTE: honestly don't know why I need to pre-filter by z-norm at all
         perm = zip(Hr,Ht)
         perm = [perm[i] for i in z_idx]
@@ -2147,6 +2161,19 @@ class ClassicalVO(object):
         t_c = T_c2c1[:3,3:]
 
         return R_c, t_c
+    
+    def Rctc2Rbtb(self, R_c, t_c):
+        T_c2c1 = np.eye(4)
+        T_c2c1[:3,:3] = R_c
+        T_c2c1[:3,3:] = t_c.reshape(3,1)
+        T_b2b1 = np.linalg.multi_dot([
+            self.cvt_.T_c2b_,
+            T_c2c1,
+            self.cvt_.T_b2c_
+            ])
+        R_b = T_b2b1[:3,:3]
+        t_b = T_b2b1[:3,3:]
+        return R_b, t_b
 
     def proc_f2f_i(self, fi0, fi1, pt3=None, msk3=None):
         """ call proc_f2f from indices """
@@ -2177,14 +2204,14 @@ class ClassicalVO(object):
         if ref == 0:
             # (des-pt2), (pt3-msk) all refer to img0
 
-            # format input - because it is flipped,
-            # -> pt3 must be in coord0
+            # NOTE : because it is flipped,
+            # pt3 must be in coord0
 
             # flip
             res = self.proc_f2f(img1, img0, pose1, pose0,
                     des1, pt21, pt3, msk3, ref=1)
 
-            pt3, msk3, (o_pt21, o_pt20), (o_R, o_t) = res
+            pt3, msk3, (o_pt21, o_pt20, o_idx), (o_R, o_t) = res
 
             # o_R/o_t is a transform from coord0 to coord1; flip
             # TODO : replace below with more efficient computation
@@ -2199,7 +2226,7 @@ class ClassicalVO(object):
             pt3 = pt3.dot(o_R.T) + o_t.T
 
             # msk3 is fine.
-            return pt3, msk3, (o_pt20, o_pt21), (o_R, o_t)
+            return pt3, msk3, (o_pt20, o_pt21, o_idx), (o_R, o_t)
 
         # ^^ TODO : also input pt3 cov?
         # NOTE :  pt21 **MAY** contain landmark information later.
@@ -2231,7 +2258,9 @@ class ClassicalVO(object):
                     distCoeffs=self.D_*0,
                     )[0][:,0]
 
-        pt20, idx_t = self.track(img1, img0, pt21, pt2=pt20_G) # NOTE: track backwards
+        pt20, idx_t = self.track(img1, img0, pt21, pt2=pt20_G,
+                # TODO : ARG : MXCHECK
+                ) # NOTE: track backwards
 
         # TODO : FM Correction with self.run_fm_cor() ??
 
@@ -2275,7 +2304,7 @@ class ClassicalVO(object):
         # 1. refined 3d positions + masks,
         # 2. observation of the points at the respective poses,
         # 3. observation of the relative pose from p0->p1. NOTE: specified in camera coordinates.
-        return pt3, msk3, (o_pt20, o_pt21), (o_R, o_t)
+        return pt3, msk3, (o_pt20, o_pt21, o_idx), (o_R, o_t)
 
     def __call__(self, img, dt, ax=None):
         msg = ''
@@ -2292,7 +2321,7 @@ class ClassicalVO(object):
         # query graph for processing data (default : neighboring frames only)
         # TODO : currently preparing architecture from cross-frame matching/tracking
         img_p, kpt_p, des_p, pt2_p, rsp_p = self.graph_.get_data(-2) # previous
-        img_c, kpt_c, des_c, pt2_c, _ = self.graph_.get_data(-1) # current
+        img_c, _, _, _, _ = self.graph_.get_data(-1) # current
         # NOTE : as of right now, pt2_c, rsp_c are propagated from pt2_p and rsp_p
         # and are not the results from self.graph_.get_data()
 
@@ -2304,29 +2333,34 @@ class ClassicalVO(object):
             # use predicted scale if scale was not supplied
             scale = sc
 
-
         # query LMK
         idx_l, pt2_l = self.landmarks_.track_points()
+        rsp_l = self.landmarks_.kpt[idx_l, 2] # query responses for nmx
         pt3_l = self.cvt_.map_to_cam(
                 self.landmarks_.pos[idx_l],
                 pose_p
                 ) # pt3 references coord0.
         des_l = self.landmarks_.des[idx_l]
 
+        # collect observations
+        obs = [] 
+
+        # step 1 : initialize with previous keypoints + landmarks
+
+        # TODO / NOTE : maybe apply non-max suppression to pt2_p beforehand
+        # IFF landmark tracking appears to get lost way too quickly
+        # (probably due to matching with other nearby points)
+
         # format inputs
-        li0 = len(pt2_p)
-        pt2_p_all = np.concatenate([pt2_p, pt2_l], axis=0)
-        des_p_all = np.concatenate([des_p, des_l], axis=0)
-        #pt2_p_all = pt2_p
-        #des_p_all = des_p
-        pt3 = None
-        msk3 = None
+        li1 = len(pt2_l) # = end of landmark points
 
-        #pt3  = np.zeros((len(pt2_p_all), 3), dtype=np.float32)
-        #pt3[li0:] = pt3_l # pre-populate known 3D locatinos
-        #msk3 = np.zeros(len(pt2_p_all), dtype=np.bool)
-        #msk3[li0:] = True # mark indices of known 3D locations
-
+        pt2_p_all = np.concatenate([pt2_l, pt2_p], axis=0)
+        des_p_all = np.concatenate([des_l, des_p], axis=0)
+        #rsp_p_all = np.concatenate([rsp_l, rsp_p], axis=0)
+        pt3  = np.zeros((len(pt2_p_all), 3), dtype=np.float32)
+        pt3[:li1] = pt3_l # pre-populate known 3D locations
+        msk3 = np.zeros(len(pt2_p_all), dtype=np.bool)
+        msk3[:li1] = True # mark indices of known 3D locations
         res = self.proc_f2f(
                 img_p, img_c,
                 pose_p, pose_c,
@@ -2334,382 +2368,121 @@ class ClassicalVO(object):
                 pt3=pt3, msk3=msk3,
                 ref=0
                 )
-        pt3, msk3, (o_pt20, o_pt21), (o_R, o_t) = res
-        print 'proc_f2f validation (of equivalence)'
-        print_Rt(o_R, o_t)
-
+        # ^^ proc_f2f with previous-frame configuration.
         # as with "ordinary" calls to proc_f2f,
         # pt3-msk1 will reference pose1
         # o_pt20, o_pt21 will reference pose0, pose1
         # o_R, o_t will be the transform from coord 1 to coord0.
+        pt3, msk3, (o_pt20, o_pt21, o_idx), (R_c, t_c) = res
 
-        pt3, msk3 = None, None
-        res = self.proc_f2f(
-                img_p, img_c,
-                pose_p, pose_c,
-                des_c, pt2_c,
-                pt3=pt3, msk3=msk3) # test if this works.
-        pt3, msk3, (o_pt20, o_pt21), (o_R, o_t) = res
+        #pt3[:li1] = OLD_LMK
+        #pt3[li1:] = NEW_LMK
 
-        print 'proc_f2f validation (of equivalence)'
-        print_Rt(o_R, o_t)
+        obsdata_oldlmk = o_pt21 # cache #TODO : better name please.
 
-        # Estimate #0 : Based on UKF Motion
-        # TODO : is it possible to pass R_c/t_c
-        # as initial guesses to recoverPose()?
+        # preliminary update for pose_c with obtained (o_R, o_t)
+        R_b, t_b = self.Rctc2Rbtb(R_c, t_c)
+        pose_c = self.pRt2pose(pose_p, R_b, t_b)
 
-        # construct t_b/t_c guess
-        dx, dy, dh = (pose_c - pose_p)
-        R_b = tx.euler_matrix(0, 0, dh)[:3,:3]
-        t_b = np.reshape([dx, dy, 0], (3,1))
+        # parse indices
+        # o_idx holds indices of pt21 that contributed to pt3.
+        o_msk_l = (o_idx < li1)
+        o_idx_l = o_idx[o_msk_l]
+        o_idx_p = o_idx[~o_msk_l]
 
-        T_b2b1 = np.eye(4)
-        T_b2b1[:3,:3] = R_b
-        T_b2b1[:3,3:] = t_b
-        T_c2c1 = np.linalg.multi_dot([
-            self.cvt_.T_b2c_,
-            T_b2b1,
-            self.cvt_.T_c2b_
-            ])
-        R_c = T_c2c1[:3,:3]
-        t_c = T_c2c1[:3,3:]
+        o_idx_p0 = o_idx_p - li1 # o_idx_p without offset
 
-        # cache results
-        R_c0 = R_c
-        R_b0 = R_b
-        t_c0 = t_c
-        t_b0 = t_b
-        self.scales_['c0'].append([index, np.linalg.norm(t_c0)])
-        self.scales_['b0'].append([index, np.linalg.norm(t_b0)])
-        pose_c_r = self.pRt2pose(pose_p, R_b, t_b)
-        # == #0 finished ==
+        o_idx_idx_l = np.where(o_msk_l)[0] # index of o_idx that pertains to old landmark
+        o_idx_idx_p = np.where(~o_msk_l)[0] # index of o_idx that pertains to new landmark
+        n_new_lmk = len(o_idx_idx_p) # << new landmarks sourced from prv-cur
 
-        idx_l, pt2_l = self.landmarks_.track_points()
-        rsp_p_l = self.landmarks_.kpt[idx_l, 2] # query responses for nmx
+        # setup indices
+        nlm0 = self.landmarks_.size_
+        nlm1 = nlm0 + n_new_lmk
+        i_lm_old = idx_l[o_idx_l]
+        i_lm_new = np.r_[nlm0:nlm1]
 
-        # == obtain next-frame keypoints ==
-        if self.flag_ & ClassicalVO.VO_USE_TRACK:
-            # opt1 : points by track
-            # NOTE : pyramids not supported. see https://github.com/opencv/opencv/issues/4777
-            # guess
-            if len(idx_l) > 0:
-                pt2_c_l_GUESS, _ = self.cvt_.pt3_pose_to_pt2_msk(
-                        self.landmarks_.pos[idx_l], 
-                        pose_c_r,
-                        distort=False
-                        )
-                pt2_c_l_GUESS = pt2_c_l_GUESS.astype(np.float32)
-            else:
-                pt2_c_l_GUESS = None
+        # unset tracking flag for failed lmk tracks
+        o_nmsk = np.ones(li1, dtype=np.bool)
+        o_nmsk[o_idx_l] = False
+        o_nidx = np.where(o_nmsk)[0]
+        self.landmarks_.untrack(idx_l[o_nidx])
 
-            pt2_c,   idx_t   = self.track(img_p, img_c, pt2_p)
-            pt2_c_l, idx_t_l = self.track(img_p, img_c, pt2_l, pt2_c_l_GUESS)
+        # cache candidate new observations to add
+        # NOTE : appending to obs is NOT final.
+        obs.append((np.arange(n_new_lmk), o_pt20[o_idx_idx_p], index-1) )
+        obs.append((np.arange(n_new_lmk), o_pt21[o_idx_idx_p], index)   )
+        # observations of old landmarks will be handled in proc_f2m_old.
+        # (including visibility graph management)
 
-            # mark points from landmarks that failed to track
-            nmsk_l = np.ones(len(pt2_l), dtype=np.bool)
-            nmsk_l[idx_t_l] = False
-            print_ratio('track', len(idx_t), len(pt2_p))
-            print_ratio('lmk track', len(idx_t_l), len(pt2_l))
-            self.landmarks_.untrack(idx_l[nmsk_l])
+        # setup data at current pose index for refinement
+        des_c = des_p_all[o_idx] # does not get refined.
+        pt2_c = o_pt21 # does not get refined (for obvious reasons)
+        pt3   = pt3[o_idx] # should be all set.
+        msk3  = msk3[o_idx] # should be all 1.
 
-            # non-max suppression on remaining points
-            idx_s = self.pts_nmx(
-                    pt2_c[idx_t], pt2_c_l[idx_t_l],
-                    rsp_p[idx_t], rsp_p_l[idx_t_l],
+        # i=-1 : current frame (already used)
+        # i=-2 : previous frame (already used)
+        # look further back ...
+
+        for i in []:#[-3, -4, -5]:
+            # -1=index, -2=index-1, -3=index-2
+            data = self.graph_.get_data(i)
+            if data is None:
+                # no further history is available
+                break
+
+            # parse data
+            pose_p_i = self.graph_.pos_[i][:3]
+            img_p_i, _, _, _, _ = data
+
+            res = self.proc_f2f(
+                    img_p_i, img_c,
+                    pose_p_i, pose_c,
+                    des_c, pt2_c,
+                    pt3, msk3,
+                    ref=1
                     )
+            # parse output
+            pt3, msk3, (o_pt20, o_pt21, o_idx), (R_c, t_c) = res
 
-            # apply suppression indices
-            idx_t = idx_t[idx_s]
+            # setup indices
+            o_msk_new = (o_idx >= li1)
+            o_idx_new = o_idx[o_msk_new] # index with offset
+            o_idx_idx_new = np.where(o_msk_new)[0]
+            o_idx_new_0 = o_idx_new - li1 # index without offset
 
-            # update points tracking reference
-            self.landmarks_.kpt[idx_l[idx_t_l], :2] = pt2_c_l[idx_t_l]
-        else:
-            # opt2 : points by match
-            # TODO : not currently supporting landmarks extension
-            i1, i2 = self.cvt_.des_des_to_match(des_p, des_c,
-                    cross=(self.flag_ & ClassicalVO.VO_USE_MXCHECK)
-                    )
-            msk_t = np.zeros(len(pt2_p), dtype=np.bool)
-            msk_t[i1] = True
-            pt2_c = np.zeros_like(pt2_p)
-            pt2_c[i1] = self.cvt_.kpt_to_pt(kpt_c[i2])
+            # add to observation cache
+            # ( cannot be added to graph yet )
+            # TODO : o_idx_new_0 or o_idx_idx_new?
+            obs.append( (o_idx_new_0, o_pt20[o_idx_idx_new], index+1+i) )
 
-        # apply additional constraints
-        # TODO : evaluate if the >1px constraint is necessary
-        # msk_d = (np.max(np.abs(pt2_p - pt2_c), axis=-1) > 1.0) # enforce >1px difference
-        # msk_t &= msk_d
-        # =================================
+            # update pose_c (pt3 is updated automatically)
+            R_b, t_b = self.Rctc2Rbtb(R_c, t_c)
+            pose_c = self.pRt2pose(pose_p_i, R_b, t_b)
 
-        # merge data
-        cam_lim = len(idx_s) # offset index
-        pt2_p_all = np.concatenate([
-            pt2_p[idx_t],
-            pt2_l[idx_t_l],
-            ], axis=0) # [N+M,2]
-        pt2_c_all = np.concatenate([
-            pt2_c[idx_t], # new first
-            pt2_c_l[idx_t_l] # old last
-            ], axis=0)
+            # TODO : intelligently merge multiple pose_c estimates
 
-        # undistort
-        pt2_u_p = pt2_p_all
-        pt2_u_c = pt2_c_all
-        # pt2_u_p = self.cvt_.pt2_to_pt2u(pt2_p_all)
-        # pt2_u_c = self.cvt_.pt2_to_pt2u(pt2_c_all)
+        # split pt3 to old and new components; should both be fairly refined by now
+        pt3_old = pt3[o_idx_idx_l]
 
-        F = None
-        if self.flag_ & ClassicalVO.VO_USE_FM_COR:
-            # correct Matches by RANSAC consensus
-            # NOTE : probably invalid to apply undistort() after correction
-            F, msk_f = cv2.findFundamentalMat(
-                    pt2_u_c,
-                    pt2_u_p,
-                    method=self.pEM_['method'],
-                    param1=self.pEM_['threshold'],
-                    param2=self.pEM_['prob'],
-                    )
-            msk_f = msk_f[:,0].astype(np.bool)
-            print_ratio('FM correction', msk_f.sum(), msk_f.size)
+        # apply filter to pt3_new to prevent redundant insertions
+        # TODO : apply other filters (descriptor match, ...)
+        pt3_new = pt3[o_idx_idx_p]
+        rsp_new = rsp_p[o_idx_p0]
 
-            ## compute masks on corresponding indices
-            idx_f_c = np.where(msk_f[:cam_lim])[0]
-            idx_f_l = np.where(msk_f[cam_lim:])[0]
-            idx_f   = np.concatenate([idx_f_c, cam_lim + idx_f_l],axis=0)
-
-            # retro-update corresponding indices
-            # to where pt2_u_p will be, based on idx_f
-            idx_t   = idx_t[idx_f_c]
-            cam_lim = len(idx_t)
-            idx_t_l = idx_t_l[idx_f_l]
-
-            # update pt2_u_c definitions
-            pt2_u_c = pt2_u_c[idx_f]
-            pt2_u_p = pt2_u_p[idx_f]
-
-            pt2_p_all = pt2_p_all[idx_f] # log-only
-            pt2_c_all = pt2_c_all[idx_f]
-
-            #pt2_u_c2, pt2_u_p2 = cv2.correctMatches(F,
-            #        pt2_u_c[None,...],
-            #        pt2_u_p[None,...])
-
-            #pt2_u_c2 = np.squeeze(pt2_u_c2, axis=0)
-            #pt2_u_p2 = np.squeeze(pt2_u_p2, axis=0)
-
-            ## -- will sometimes return NaN.
-            #check_c = np.all(np.isfinite(pt2_u_c2))
-            #check_p = np.all(np.isfinite(pt2_u_p2))
-
-            #if check_c and check_p:
-            #    ## -- viz begin --
-            #    #try:
-            #    #    fig = self.cfig_
-            #    #    cax = fig.gca()
-            #    #except Exception as e:
-            #    #    self.cfig_ = plt.figure()
-            #    #    fig = self.cfig_
-            #    #    cax  = fig.add_subplot(1,1,1)#, projection='3d')
-            #    #cax.cla()
-
-            #    #pp = pt2_u_p
-            #    #pc = pt2_u_c
-            #    #print pp.shape
-            #    #print pc.shape
-
-            #    #col = np.random.uniform(size = (len(pp), 3))
-            #    #cax.quiver(
-            #    #        pp[:,0], pp[:,1],
-            #    #        pc[:,0]-pp[:,0], pc[:,1]-pp[:,1],
-            #    #        angles='xy',
-            #    #        scale=1.0,
-            #    #        scale_units='xy',
-            #    #        color='r',#col,
-            #    #        alpha=0.5,
-            #    #        label='prv',
-            #    #        )
-            #    #pp = pt2_u_p2
-            #    #pc = pt2_u_c2
-
-            #    #print pp.shape
-            #    #print pc.shape
-            #    #cax.quiver(
-            #    #        pp[:,0], pp[:,1],
-            #    #        pc[:,0]-pp[:,0], pc[:,1]-pp[:,1],
-            #    #        angles='xy',
-            #    #        scale=1.0,
-            #    #        scale_units='xy',
-            #    #        color='b',#col,
-            #    #        alpha=0.5,
-            #    #        label='cor'
-            #    #        )
-            #    #cax.legend()
-            #    #plt.pause(0.001)
-            #    ## -- viz end --
-
-            #    pt2_u_c = pt2_u_c2
-            #    pt2_u_p = pt2_u_c2
-
-        # unscaled camera pose + reconstructed points from triangulation
-        idx_e, pt3, R_em, t_em = self.run_EM(
-                pt2_u_c, pt2_u_p,
-                no_gp=False,
-                guess=(R_c0, t_c0)
+        idx_nmx = self.pts_nmx(
+                pt3_new, self.landmarks_.pos,
+                rsp_new, self.landmarks_.kpt[:,2]
                 )
+        print '>> {}/{}'.format(idx_nmx.max(), n_new_lmk)
+        #idx_des = self.filter_by_descriptor( ... )
 
-        # index of idx_e that applies to new (camera) points
-        idx_e_msk_cam = (idx_e < cam_lim)
-        idx_e_msk_lmk = ~idx_e_msk_cam
+        # At this point : highly refined pt3 & pose_c information
 
-        idx_idx_e_cam = np.where(idx_e_msk_cam)[0]
-        idx_idx_e_lmk = np.where(idx_e_msk_lmk)[0]
-
-        idx_e_cam = idx_e[idx_idx_e_cam]
-        idx_e_lmk = idx_e[idx_idx_e_lmk]
-
-        # collect used points for matches + draw
-        msk = np.zeros(len(pt2_p_all), dtype=np.bool)
-        msk[idx_e] = True
-        mim = drawMatches(img_p, img_c, pt2_p_all, pt2_c_all, msk)
-
-        # Estimate #1 : Based on EM Results
-        R_c, t_c_u = R_em, t_em # Camera-frame u-trans
-        scale_b = np.linalg.norm(t_b) # current scale estimate
-        print 'scale_b #0', scale_b
-        scale_c = self.scale_c(scale_b, R_c, t_c_u,
-                guess = t_b0
-                )
-        t_c = t_c_u * scale_c
-
-        T_c2c1 = np.eye(4)
-        T_c2c1[:3,:3] = R_c
-        T_c2c1[:3,3:] = t_c.reshape(3,1)
-
-        T_b2b1 = np.linalg.multi_dot([
-            self.cvt_.T_c2b_,
-            T_c2c1,
-            self.cvt_.T_b2c_
-            ])
-        R_b, t_b = T_b2b1[:3,:3], T_b2b1[:3,3:]
-
-        scale_b = np.linalg.norm(t_b)
+        # TODO : fix naming issues
         scale_c = np.linalg.norm(t_c)
-        print 'scale_b #1', scale_b
-        print 'scale_c #1', scale_c
-
-        # cache results
-        R_c1 = R_c
-        R_b1 = R_b
-        t_c1 = t_c
-        t_b1 = t_b
-        self.scales_['c1'].append([index, np.linalg.norm(t_c1)])
-        self.scales_['b1'].append([index, np.linalg.norm(t_b1)])
-        # == #1 finished ==
-
-        # Estimate #2 : Based on Ground-Plane Estimation
-        # <<-- initial guess, provided defaults in case of abort
-        t_c1_u = (t_c1 / scale_c if scale_c >= np.finfo(np.float32).eps else t_c1)
-
-        H, scale_c2, (R_c, t_c_u), (gpt3, gp_idx) = self.run_GP(
-                pt2_u_c, pt2_u_p,
-                scale_c, guess=(R_c1, t_c1_u)
-                ) # note returned t_c is uvec
-        t_c = t_c_u * scale_c2 # apply scale
-        print 'scale_c #2', scale_c2
-
-        rh = 0.75 # << GP bias
-        if (H is not None) and (F is not None):
-            sF, msk_sF = score_F(pt2_u_c, pt2_u_p, F, self.cvt_)
-            sH, msk_sH = score_H(pt2_u_c, pt2_u_p, H, self.cvt_)
-            rh2 = float(sH) / (sH+sF)
-            print_ratio('RH-gp', sH, sH+sF)
-            if np.isfinite(rh2):
-                rh = rh2
-            else:
-                print pt2_u_c.shape
-                print pt2_u_p.shape
-                print F
-                print H
-                print sH
-                print sF
-                raise ValueError(rh2, "Something is off.")
-        
-        # NOTE: estimate #2 does not produce R_b1 / t_b1
-        # because it does not need to.
-        # cache results
-        R_c2 = R_c
-        t_c2 = t_c
-        self.scales_['c2'].append([index, np.linalg.norm(t_c2)])
-        # == #2 finished ==
-
-        # Estimate #3 : un-intelligently resolve two measurements.
-        # TODO : figure out confidence scaling or variance.
-        # NOTE/TODO : does NOT check for inconsistency in rotation.
-
-        if np.dot(t_c1.ravel(), t_c2.ravel()) < 0:
-            # facing opposite directions
-            # most often happens in pure-rotation scenarios
-            print '\t\t\t>>>>>>>>>>>>>>>>>>>>>>>>>>>WARNING : GP and EM Systems Disagree.'
-            print_Rt(R_c1, t_c1)
-            print_Rt(R_c2, t_c2)
-            print '============================'
-
-            # choose t_c consisent with current motion guess t_c0.
-            score_c1 = (t_c0 * t_c1).sum() / ( np.linalg.norm(t_c0) * np.linalg.norm(t_c1))
-            score_c2 = (t_c0 * t_c2).sum() / ( np.linalg.norm(t_c0) * np.linalg.norm(t_c2))
-            print 'scores', score_c1, score_c2
-            idx = np.argmax([score_c1, score_c2])
-            print('selected : {}'.format(idx))
-            R_c = [R_c1, R_c2][idx]
-            t_c = [t_c1, t_c2][idx]
-        else:
-            # facing the same direction
-            # interpolate the results for time-domain scale stability.
-
-            #alpha = r_h # opt1 : result from score_F & score_H
-            alpha = 0.75 # opt2 : take gp scale with high bias
-            #alpha = lerp(r_h, 1.0, 0.5) # opt2 : boost r_h
-
-            # USE score_F/score_H results
-            # heuristic : generally in favor of GP
-            R_c1_h = np.eye(4)
-            R_c1_h[:3,:3] = R_c1
-            R_c2_h = np.eye(4)
-            R_c2_h[:3,:3] = R_c2
-            q1 = tx.quaternion_from_matrix(R_c1_h)
-            q2 = tx.quaternion_from_matrix(R_c2_h)
-            q = tx.quaternion_slerp(q1, q2, alpha)
-            R_c = tx.quaternion_matrix(q)[:3,:3]
-            t_c = lerp(t_c1, t_c2, alpha) # TODO : better way to fuse?
-            scale_c = np.linalg.norm(t_c)
-        print 'scale_c #3 (lerp)', scale_c
-
-
-        T_c2c1 = np.eye(4)
-        T_c2c1[:3,:3] = R_c
-        T_c2c1[:3,3:] = t_c.reshape(3,1)
-        T_b2b1 = np.linalg.multi_dot([
-            self.cvt_.T_c2b_,
-            T_c2c1,
-            self.cvt_.T_b2c_
-            ])
-        R_b, t_b = T_b2b1[:3,:3], T_b2b1[:3,3:]
-        scale_b = np.linalg.norm(t_b)
-        print 'scale_b #2', scale_b
-
-        # cache results
-        R_c3 = R_c
-        R_b3 = R_b
-        t_c3 = t_c
-        t_b3 = t_b
-
-        print ('proc-f2f validation #2')
-        print_Rt(R_c, t_c)
-
-        self.scales_['c3'].append([index, np.linalg.norm(t_c3)])
-        self.scales_['b3'].append([index, np.linalg.norm(t_b3)])
-        # == #3 finished ==
-
-        pose_c_r = self.pRt2pose(pose_p, R_b, t_b)
+        pose_c_r = pose_c
 
         if self.flag_ & ClassicalVO.VO_USE_F2M:
             # Estimate #4 : Based on Landmarks
@@ -2720,25 +2493,12 @@ class ClassicalVO(object):
             # process old points first and obtain camera motion scale from correspondences
             scale_c, msg = self.proc_f2m_old(
                     pose_c_r, scale_c,
-                    pt3[idx_idx_e_lmk], # new points3
-                    idx_l[idx_t_l[idx_e_lmk - cam_lim]], # landmark indices; NOTE : apply lmk index start offset
-                    pt2_c_all[idx_e_lmk], # points here are needed to update kpt location
-                    pt2_u_c[idx_e_lmk], # undistorted observations, required for obs. adding
+                    pt3_old,
+                    i_lm_old, # landmark indices; NOTE : apply lmk index start offset
+                    obsdata_oldlmk[o_idx_idx_l], # points here are needed to update kpt location
+                    obsdata_oldlmk[o_idx_idx_l], # undistorted observations, required for obs. adding
                     img_c,
                     ax,
-                    msg
-                    )
-
-            # new points
-            kpt_p_cam = kpt_p[idx_t[idx_e_cam]]
-            des_p_cam = des_p[idx_t[idx_e_cam]]
-            # process new points (insert + update untracked old(?))
-            scale_c, n_new_lm = self.proc_f2m_new(
-                    pose_c_r, scale_c, pt3[idx_idx_e_cam],
-                    kpt_p_cam, des_p_cam,
-                    pt2_c_all[idx_e_cam], pt2_u_c[idx_e_cam],
-                    pt2_p_all[idx_e_cam], pt2_u_p[idx_e_cam],
-                    img_c, 
                     msg
                     )
 
@@ -2754,6 +2514,7 @@ class ClassicalVO(object):
                 self.cvt_.T_b2c_
                 ])
             R_b, t_b = T_b2b1[:3,:3], T_b2b1[:3,3:]
+            scale_b = np.linalg.norm(t_b)
             print 'scale_b #3', scale_b
             pose_c_r = self.pRt2pose(pose_p, R_b, t_b)
 
@@ -2768,10 +2529,44 @@ class ClassicalVO(object):
             # == #4 finished ==
 
         # Estimate #5 : return Post-filter results as UKF Posterior
+        # NOTE : This finalizes pose_c.
         pose_c_r = self.graph_.update(1, [pose_c_r])
         # NOTE: estimate #5 does not produce R_c, t_c, R_b, t_c
         # because it is not needed.
         # == #5 finished ==
+
+
+        # == FINALLY ADD NEW LANDMARKS ==
+        # NOTE : f2m_new got folded info f2f,
+        # as the construction of the map itself could be considered part of
+        # frame-to-frame processing; reference of the map (proc_f2m_old) still remains.
+        if self.flag_ & ClassicalVO.VO_USE_F2M:
+            # output = validated pt3
+            pt3_new = pt3_new[idx_nmx]
+            des_new = des_p[o_idx_p0[idx_nmx]]
+            col_new = get_points_color(img_c, pt2_p[o_idx_p0[idx_nmx]], w=1)
+            kpt_new = kpt_p[o_idx_p0[idx_nmx]]
+            # go through obs + add to graph
+            idx_nmx_r = np.arange(len(idx_nmx))
+            for li_X, p2_X, pi in obs:
+                i_X, i_Y = np.intersect1d(idx_nmx, li_X, return_indices=True)[1:]
+                di, p2 = idx_nmx_r[i_X], p2_X[i_Y]
+                self.graph_.add_obs(
+                        self.landmarks_.size_ + di, # apply new landmark offset
+                        p2,
+                        pi)
+            # actually append now
+            self.landmarks_.append_from(
+                    self.cvt_,
+                    pose_c_r,
+                    pt3_new,
+                    des_new,
+                    col_new,
+                    kpt_new
+                    )
+            # how many got added?
+            n_new_lm = len(idx_nmx)
+        # ===============================
 
         # prune
         # NOTE : indexing offset here is 100% because of visualization.
@@ -2793,23 +2588,6 @@ class ClassicalVO(object):
             if ax is not None:
                 self.graph_.draw(ax['prune_1'], self.landmarks_) # post-prune
 
-        # show landmark statistics
-        self.cnt_lm_tot_.append( self.landmarks_.size_ )
-        self.cnt_lm_trk_.append( len(idx_t_l) )
-        self.cnt_lm_new_.append( n_new_lm )
-
-        if ax is not None:
-            ax['cnt'].cla()
-            ax['cnt'].plot(self.cnt_lm_tot_, label='lmk-tot')
-            ax['cnt'].plot(self.cnt_lm_trk_, label='lmk-trk')
-            ax['cnt'].plot(self.cnt_lm_new_, label='lmk-new')
-            ax['cnt'].legend()
-            ax['cnt'].grid()
-            ax['cnt'].set_axisbelow(True)
-            ax['cnt'].set_title('Feature Counts Stat')
-
-        # NOTE!! this vvvv must be called after all cache_BA calls
-        # have been completed.
         if self.flag_ & ClassicalVO.VO_USE_BA:
             ba_win = None
             run_ba = False
@@ -2831,6 +2609,23 @@ class ClassicalVO(object):
                 pose_c_r = self.run_BA(ba_win, ax=ax)
 
         ## === FROM THIS POINT ALL VIZ === 
+        msk = np.ones(len(o_pt20), dtype=np.bool)
+        mim = drawMatches(img_p, img_c, o_pt20, o_pt21, msk=msk)
+
+        # show landmark statistics
+        self.cnt_lm_tot_.append( self.landmarks_.size_ )
+        self.cnt_lm_trk_.append( len(o_idx_l) )
+        self.cnt_lm_new_.append( n_new_lmk )
+
+        if ax is not None:
+            ax['cnt'].cla()
+            ax['cnt'].plot(self.cnt_lm_tot_, label='lmk-tot')
+            ax['cnt'].plot(self.cnt_lm_trk_, label='lmk-trk')
+            ax['cnt'].plot(self.cnt_lm_new_, label='lmk-new')
+            ax['cnt'].legend()
+            ax['cnt'].grid()
+            ax['cnt'].set_axisbelow(True)
+            ax['cnt'].set_title('Feature Counts Stat')
 
         # plot scale
         if ax is not None:
