@@ -33,16 +33,16 @@ class CVORunner(object):
         self.odom_ = odom
         self.scan_ = scan
 
-        self.fig_ = fig = plt.figure(figsize=(16,12), dpi=60)
+        self.fig_ = fig = plt.figure(figsize=(21,12), dpi=64)
 
         nrow = 3
-        ncol = 6
+        ncol = 7
 
         gs = gridspec.GridSpec(nrow,ncol)
         G = plt.subplot
 
         self.ax_ = {
-                'track' : G(gs[0,0]),
+                'track' : G(gs[2,5:7]),
                 'cloud' : G(gs[1,0], projection='3d'),
                 'proj2' : G(gs[2,0]),
                 'main'  : G(gs[0:2,1:3]),
@@ -50,11 +50,12 @@ class CVORunner(object):
                 'ba_0'  : G(gs[0,3]),
                 'ba_1'  : G(gs[0,4]),
                 'ba_2'  : G(gs[0,5]),
+                'ba_3'  : G(gs[0,6]),
                 'prune_0' : G(gs[1,3]),
                 'prune_1' : G(gs[1,4]),
-                'lmk_cnt' : G(gs[2,3:5]),
-                'scale' : G(gs[1,5]),
-                'pnp'   : G(gs[2,5])
+                'cnt' : G(gs[2,3:5]),
+                'scale' : G(gs[1,5:7]),
+                'pnp' : G(gs[0,0]),
                 }
 
         self.map_ = np.empty((0, 2), dtype=np.float32)
@@ -138,7 +139,6 @@ class CVORunner(object):
 
         # if viz, clear everything beforehand
         if viz:
-
             for k in ['track', 'cloud', 'proj2', 'main', 'terr', 'scale',]:
                 self.ax_[k].cla()
                 #'track' : G(gs[0,0]),
@@ -198,12 +198,16 @@ class CVORunner(object):
                 )
 
         # NOTE : index here may be offset by +-1
-        self.ax_['scale'].plot(
-                np.arange(len(self.s_)),
-                self.s_, 
-                label='gt'
-                )
-        self.ax_['scale'].legend()
+        if viz:
+            n_plot = 64
+            di = max(len(self.s_) / n_plot, 1)
+            si= np.arange(1,1+len(self.s_))[::di]
+            self.ax_['scale'].plot(
+                    si,
+                    self.s_[::di], 
+                    label='gt'
+                    )
+            self.ax_['scale'].legend()
 
         if res is None:
             # vo aborted for some unknown reason
@@ -228,7 +232,6 @@ class CVORunner(object):
         ### EVERYTHING FROM HERE IS PLOTTING + VIZ ###
         if viz:
             self.show(aimg, pts3, pts2, scan_c, pts_r, col_p, ('[%d/%d] '%(i,n)) + msg)
-            plt.pause(0.01) # supply enough time to draw everything
 
     def quit(self):
         self.quit_ = True
@@ -243,9 +246,8 @@ class CVORunner(object):
                     self.index_ += 1
                     viz = ( (self.index_ % vfreq) == 0)
                     self.step(viz=viz)
-                else:
-                    # done with processing
-                    plt.pause(0.01)
+                if viz:
+                    plt.pause(0.001)
                 if anim:
                     plt.savefig('/tmp/{:04d}.png'.format(self.index_))
         else:

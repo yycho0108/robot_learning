@@ -501,25 +501,30 @@ class Landmarks(object):
         cnt = self.cnt[idx]
         return (pt2, pos, des, var, cnt, idx)
 
-    def update(self, idx, pos_new, var_new):
-        pos_old = self.pos[idx]
-        var_old = self.var[idx]
+    def update(self, idx, pos_new, var_new, hard=False):
+        if hard:
+            # total overwrite
+            self.pos[idx] = pos_new
+            self.var[idx] = var_new
+        else:
+            # incorporate previous information
+            pos_old = self.pos[idx]
+            var_old = self.var[idx]
 
-        # kalman filter (== multivariate product)
-        y_k = (pos_new - pos_old).reshape(-1,3,1)
-        S_k = var_new + var_old # I think R_k = var_lm_new (measurement noise)
-        K_k = np.matmul(var_old, np.linalg.inv(S_k))
-        x_k = pos_old.reshape(-1,3,1) + np.matmul(K_k, y_k)
-        I = np.eye(3)[None,...] # (1,3,3)
-        P_k = np.matmul(I - K_k, var_old)
+            # kalman filter (== multivariate product)
+            y_k = (pos_new - pos_old).reshape(-1,3,1)
+            S_k = var_new + var_old # I think R_k = var_lm_new (measurement noise)
+            K_k = np.matmul(var_old, np.linalg.inv(S_k))
+            x_k = pos_old.reshape(-1,3,1) + np.matmul(K_k, y_k)
+            I = np.eye(3)[None,...] # (1,3,3)
+            P_k = np.matmul(I - K_k, var_old)
 
-        # TODO : maybe also update mind_ and maxd_
-        # bookkeeping self.src_ maybe?
+            # TODO : maybe also update mind_ and maxd_
+            # bookkeeping self.src_ maybe?
 
-        self.pos[idx] = x_k[...,0]
-        self.var[idx] = P_k
-        np.add.at(self.cnt, idx, 1) # can't trust cnt[idx] to return a view.
-        #self.cnt[idx] += 1
+            self.pos[idx] = x_k[...,0]
+            self.var[idx] = P_k
+            np.add.at(self.cnt, idx, 1) # can't trust cnt[idx] to return a view.
 
     def prune(self, k=3, radius=0.05, keep_last=512):
         """
@@ -633,7 +638,6 @@ class Conversions(object):
         self.D_ = D
         self.T_c2b_ = T_c2b
         self.T_b2c_ = tx.inverse_matrix(T_c2b)
-
         if (det is None) and (des is None):
             # default detector+descriptor=orb
             orb = cv2.ORB_create(
@@ -652,6 +656,21 @@ class Conversions(object):
         if match is None:
             match = self._build_matcher()
             self.match_ = match
+
+        # fields completed post-initialization with first image
+        self.h_ = None
+        self.w_ = None
+        self.U_ = None 
+
+    def initialize(self, shape):
+        h, w = shape[:2]
+        self.h_ = h
+        self.w_ = w
+        self.U_ = cv2.initUndistortRectifyMap(self.K_, self.D_,
+                R=None, newCameraMatrix=self.K_,
+                size=(w,h),
+                m1type=cv2.CV_16SC2
+                )
 
     def _build_matcher(self):
         # define un-exported enums from OpenCV
@@ -680,6 +699,10 @@ class Conversions(object):
             flann = cv2.FlannBasedMatcher(index_params,search_params)
             fn = lambda a,b : flann.knnMatch(np.float32(a), np.float32(b), k=2)
         return fn
+
+    def img_to_imgu(self, img):
+        return cv2.remap(img, self.U_[0], self.U_[1],
+                interpolation=cv2.INTER_LINEAR)
 
     @staticmethod
     def kpt_to_pt(kpt):
@@ -760,9 +783,9 @@ class Conversions(object):
         lm_msk = np.logical_and.reduce([
             pt3_cam[:,2] > 1e-3, # z-positive
             0 <= pt2[:,0],
-            pt2[:,0] < 640, # TODO : hardcoded
+            pt2[:,0] < self.w_, 
             0 <= pt2[:,1],
-            pt2[:,1] < 480 # TODO : hardcoded
+            pt2[:,1] < self.h_
             ])
         return pt2, lm_msk
 
