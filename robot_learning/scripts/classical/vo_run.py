@@ -279,7 +279,7 @@ def main():
     print('idx', idx)
 
     # load data
-    i0 = 300
+    i0 = 0
     di = 1
 
     imgs   = np.load('../../data/train/{}/img.npy'.format(idx))[i0::di]
