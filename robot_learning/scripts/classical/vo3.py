@@ -783,6 +783,22 @@ class ClassicalVO(object):
                     angles=[-np.pi/2-np.deg2rad(10),0.0,-np.pi/2],
                     #angles=[-np.pi/2,0.0,-np.pi/2],
                     translate=[0.174,0,0.113])
+
+        # all heuristics that are used outside of __init__
+        #self.pH_ = dict(
+        #        rad_nmx2=16.0, # 2D Image Coordinates Non-max Radius
+        #        rad_nmx3=0.05, # 3D Physical Coordinates non-max Radius
+        #        max_ferr=2.0,  # Bidirectional Flow Check Threshold for Tracking
+        #        min_s=1e-4, # Minimum SCale for Landmark Processing
+        #        min_np=16   # Minimum # Points required for processing
+        #        k_nmx2=2,   # Max Number of neighbors to suppress for 2D Non-Max
+        #        k_nmx3=2,   # Max Number of neighbors to suppress for 3D Non-Max
+        #        w_g2e =0.5,  # GP vs. EM estimate interpolation weight
+        #        w_f2m =0.2,  # Frame-To-Map Weight
+
+
+
+
         # define "system" parameters
         self.pEM_ = dict(
                 method=cv2.FM_RANSAC,
@@ -805,7 +821,7 @@ class ClassicalVO(object):
                 method='trf',
                 verbose=2,
                 tr_solver='lsmr',
-                f_scale=1.0
+                f_scale=np.deg2rad(5.0)
                 )
         self.pPNP_ = dict(
                 iterationsCount=1000,
@@ -858,7 +874,7 @@ class ClassicalVO(object):
 
         # bundle adjustment + loop closure
         # sort ba pyramid by largest first
-        ba_pyr = [2,4,16,64,256,1024]
+        ba_pyr = [4,16,64,256,1024]#[2,4,16,64,256,1024]
         self.ba_pyr_  = np.sort(ba_pyr)[::-1]
         self.graph_ = VGraph(self.cvt_)
 
@@ -1174,7 +1190,12 @@ class ClassicalVO(object):
             self,
             pose,
             pt3_new, pt2_new,
-            des_new, rsp_new
+            des_new, rsp_new,
+
+            k2=4,
+            r2=16.0,
+            k3=4,
+            r3=0.05
             ):
         """
         Apply a general filter from the landmarks
@@ -1193,12 +1214,12 @@ class ClassicalVO(object):
         # initialize index
         insert_idx = np.arange(len(pt3_new))
 
-        if len(pt3_ref) >= 2: # match with k below
+        if len(pt3_ref) >= k2: # match with k below
             # 1: 3D Non-Max Suppression in euclidean coordinates
             fi1 = self.pts_nmx(
                     pt3_new, pt3_ref,
                     rsp_new, rsp_ref,
-                    k=2,
+                    k=k2,
                     radius=0.05
                     )
 
@@ -1209,12 +1230,12 @@ class ClassicalVO(object):
             rsp_new = rsp_new[fi1]
             insert_idx = insert_idx[fi1]
 
-        if len(pt3_ref) >= 2: # match with k below
+        if len(pt3_ref) >= k3: # match with k below
             # 2: 2D Non-Max Suppression in angular projected coordinates
             fi2 = self.pts_nmx(
                     pt2_new, pt2_ref,
                     rsp_new, rsp_ref,
-                    k=2,
+                    k=k3,
                     radius=16
                     )
 
@@ -1575,26 +1596,45 @@ class ClassicalVO(object):
         lmk = params[n_c*3:].reshape(-1, 3) # landmark positions
 
         # unpack parameters
-        lx, ly, lz = lmk[li].T
-        px, py, ph = pos[ci].T
+        # lx, ly, lz = lmk[li].T
+        x, y, h = pos[ci].T
 
         # observation vector
-        p = self.cvt_.pt_to_pth(obs_pt2).dot(self.cvt_.Ki_.T)
+        p = self.cvt_.pt_to_pth(obs_pt2)
+        p = p.dot(self.cvt_.Ki_.T)
+
         n = p / np.linalg.norm(p, axis=-1, keepdims=True) # normalize
+        n = np.nan_to_num(n)
 
         # convert lmk w.r.t. pos
-        Rzi = np.zeros((len(ph), 3, 3), dtype=np.float32)
-        c = np.cos(ph)
-        s = np.sin(ph)
-        Rzi[:,0,0] = c
-        Rzi[:,0,1] = s
-        Rzi[:,1,0] = -s
-        Rzi[:,1,1] = c
-        Rzi[:,2,2] = 1
+        c = np.cos(h)
+        s = np.sin(h)
 
-        d_lmk = np.stack([lx-px, ly-py, lz], axis=-1)
-        d_lmk = np.matmul(Rzi, d_lmk[...,None])[...,0]
-        nd_lmk = d_lmk / np.linalg.norm(d_lmk, axis=-1, keepdims=True)
+        T_o2b = np.zeros((len(h),4,4), dtype=np.float32)
+
+        # Rotation Part
+        T_o2b[:,0,0] = c
+        T_o2b[:,0,1] = s # NOTE: transposed z-axis rotation.
+        T_o2b[:,1,0] = -s
+        T_o2b[:,1,1] = c
+        T_o2b[:,2,2] = 1
+
+        # Translation part
+        T_o2b[:,0,3] = -y*s - x*c
+        T_o2b[:,1,3] = x*s - y*c
+
+        # Homogeneous part
+        T_o2b[:,3,3] = 1
+
+        lmk_h = self.cvt_.pt_to_pth(lmk[li])
+        lmk_h = reduce(np.matmul, [
+            self.cvt_.T_b2c_,
+            T_o2b,
+            self.cvt_.T_c2b_,
+            lmk_h[...,None]])[...,0] # Nx4
+        lmk_3 = self.cvt_.pth_to_pt(lmk_h)
+        nd_lmk = lmk_3 / np.linalg.norm(lmk_3, axis=-1, keepdims=True)
+        nd_lmk = np.nan_to_num(nd_lmk)
 
         #err = 1.0 - (n * nd_lmk).sum(axis=1)
         err = np.arccos((n * nd_lmk).sum(axis=-1))
@@ -1747,7 +1787,7 @@ class ClassicalVO(object):
                 shape=( len(Wdata)*3, len(Wdata)*3))
 
         # compute BA sparsity structure : deprecated with analytical jac_BA()
-        A = self.sparsity_BA(n_c, n_l, ci, li, s_o=2)
+        A = self.sparsity_BA(n_c, n_l, ci, li, s_o=1)
 
         if ax is not None:
             ## prep data for viz
@@ -1794,9 +1834,9 @@ class ClassicalVO(object):
         # -- opt2 : scipy --
 
         res = least_squares(
-                self.residual_BA, x0,
+                self.residual_BA2, x0,
                 jac_sparsity=A,
-                jac=self.jac_BA,
+                #jac=self.jac_BA,
                 x_scale='jac',
                 args=(n_c, n_l, ci, li, p2),
                 **self.pBA_
@@ -1920,8 +1960,8 @@ class ClassicalVO(object):
         ba_cov_c = ba_cov[:n_c]
         ba_cov_c[:, (0,1,2), (0,1,2)] += (3e-2)**2 # regularization, ~3cm / ~1.7 deg.
         pose_c_r = self.graph_.update(win, pos_opt,
-                cov=ba_cov_c, hard=False
-                #cov=None, hard=False
+                #cov=ba_cov_c, hard=False
+                cov=None, hard=False
                 )
 
         # == landmark updates : hard vs. soft ==
@@ -1929,7 +1969,10 @@ class ClassicalVO(object):
         ba_cov_l[:, (0,1,2), (0,1,2)] += (1e-1)**2 # regularization, ~10cm / ~5.7 deg.
         #self.landmarks_.update(li_u, lmk_opt, hard=True) # opt1:hard update
         self.landmarks_.update(li_u, lmk_opt,
-                ba_cov_l, hard=False) # opt2:soft update
+                #ba_cov_l,
+                #hard=False
+                hard=True
+                ) # opt2:soft update
         # == BA updates complete ==
 
         return pose_c_r
