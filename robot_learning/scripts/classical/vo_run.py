@@ -8,6 +8,7 @@ from scipy.optimize import linear_sum_assignment
 from matplotlib import pyplot as plt
 from matplotlib import gridspec
 from mpl_toolkits.mplot3d import Axes3D
+from argparse import ArgumentParser
 
 from collections import deque
 
@@ -246,6 +247,9 @@ class CVORunner(object):
                     self.index_ += 1
                     viz = ( (self.index_ % vfreq) == 0)
                     self.step(viz=viz)
+                else:
+                    # wait
+                    plt.pause(0.001)
                 if viz:
                     plt.pause(0.001)
                 if anim:
@@ -266,22 +270,58 @@ class CVORunner(object):
         np.save('/tmp/lmk_var.npy', lmk_var)
         np.save('/tmp/lmk_col.npy', lmk_col)
 
+def str2bool(v):
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
 def main():
+    parser = ArgumentParser()
+    parser.add_argument('--index',
+            help='Index of the dataset to run (for now, choose from 27/34/41)',
+            type=int,
+            default=27
+            )
+    parser.add_argument('--auto',
+            help='Whether to run the VO process automatically',
+            type=str2bool,
+            default=True
+            )
+    parser.add_argument('--vfreq',
+            help='Frequency of visualization',
+            type=int,
+            default=16
+            )
+    parser.add_argument('--anim',
+            help='Save the image files in preparation for animation',
+            type=str2bool,
+            default=False
+            )
+    parser.add_argument('--i0',
+            help='Sequence starting index (frames prior to this will be skipped)',
+            type=int,
+            default=0
+            )
+
+    args = parser.parse_args()
+
     # convenience params defined here
-    auto  = True
-    vfreq = 16
-    anim  = False # save figures for later animation
+    idx   = args.index
+    auto  = args.auto
+    vfreq = args.vfreq
+    anim  = args.anim
+    i0    = args.i0
+    di    = 1 # only process 1/(1+di) frames
 
     np.set_printoptions(precision=4)
     #idx = np.random.choice(8)
     # 27, 34, 41 are currently used
-    idx = 27
     print('idx', idx)
 
     # load data
-    i0 = 0
-    di = 1
-
     imgs   = np.load('../../data/train/{}/img.npy'.format(idx))[i0::di]
     #imgs = np.asarray([cv2.resize(e, None, fx=2, fy=2) for e in imgs])
     stamps = np.load('../../data/train/{}/stamp.npy'.format(idx))[i0::di]

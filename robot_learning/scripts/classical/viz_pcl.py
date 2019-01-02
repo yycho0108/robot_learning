@@ -219,8 +219,8 @@ def main():
     #lmk_var = lmk_var[v_idx]
     ##cam_pos = cam_pos[v_idx]
 
-    idx = np.where(lmk_pos[:,2] > -0.01) # plot above ground-plane
-    lmk_pos, lmk_col, lmk_var = [e[idx] for e in (lmk_pos, lmk_col, lmk_var)]
+    #idx = np.where(lmk_pos[:,2] > -0.01) # plot above ground-plane
+    #lmk_pos, lmk_col, lmk_var = [e[idx] for e in (lmk_pos, lmk_col, lmk_var)]
 
     idx = non_max_suppression(lmk_pos, lmk_var, k=16, radius=0.025)
     lmk_pos, lmk_col, lmk_var = [e[idx] for e in (lmk_pos, lmk_col, lmk_var)]

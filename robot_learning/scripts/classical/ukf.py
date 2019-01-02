@@ -11,7 +11,7 @@ from utils.vo_utils import add_p3d, sub_p3d
 def get_QR(pose, dt):
     # Get appropriate Q/R Matrices from current pose.
     # Mostly just deals with getting the right orientation.
-    Q0 = np.diag(np.square([5e-2, 5e-2, 6e-2, 2.5e-2, 2.5e-2, 8e-2]))
+    Q0 = np.diag(np.square([5e-2, 2e-2, 6e-2, 2.5e-2, 1e-2, 8e-1]))
     R0 = np.diag(np.square([5e-2, 7e-2, 4e-2]))
     T = Rmat(pose[-1])
 
