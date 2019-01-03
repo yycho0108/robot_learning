@@ -823,8 +823,8 @@ class ClassicalVO(object):
                 f_scale=1.0
                 )
         self.pPNP_ = dict(
-                iterationsCount=1000,
-                reprojectionError=0.5,
+                iterationsCount=10000,
+                reprojectionError=2.0,
                 confidence=0.99,
                 #flags = cv2.SOLVEPNP_EPNP
                 #flags = cv2.SOLVEPNP_DLS
@@ -2173,7 +2173,7 @@ class ClassicalVO(object):
             tvec0 = T_src[:3, 3:].ravel()
 
             res = cv2.solvePnPRansac(
-                    pt3_map, pt2_cam,
+                    pt3_map[:,None], pt2_cam[:,None],
                     self.K_, 0*self.D_,
                     useExtrinsicGuess = True,
                     rvec=rvec0.copy(),
@@ -2713,7 +2713,7 @@ class ClassicalVO(object):
                     pt2_l_current[ti],
                     pose_c)
             if pose_c_pnp is not None:
-                pose_c = lerp(pose_c, pose_c_pnp, 0.5)
+                pose_c = lerp(pose_c, pose_c_pnp, 0.75)
 
         o_nmsk[ti] = False
         o_nidx = np.where(o_nmsk)[0]
