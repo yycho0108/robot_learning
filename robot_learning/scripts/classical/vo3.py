@@ -759,7 +759,7 @@ class ClassicalVO(object):
         #self.flag_ &= ~ClassicalVO.VO_USE_BA
         #self.flag_ |= ClassicalVO.VO_USE_PNP
         self.flag_ &= ~ClassicalVO.VO_USE_FM_COR # doesn't really work anymore?
-        self.flag_ &= ~ClassicalVO.VO_USE_SCALE_GP
+        #self.flag_ &= ~ClassicalVO.VO_USE_SCALE_GP
 
         # TODO : control stage-level verbosity
 
@@ -1015,15 +1015,15 @@ class ClassicalVO(object):
 
         p_lm_0 = self.landmarks_.pos[lm_idx] # landmark points in cam-map coord.
 
-        # override input pose with PnP information
-        _, pose_pnp = self.run_PNP(p_lm_0, pt2_new, pose)
-        if pose_pnp is not None:
-            # TODO : instead of full override, consider merging them
-            # intelligently?
-            print 'pose-in', pose.ravel()
-            print 'pose-pnp', pose_pnp
-            pose = pose_pnp
-            #print 'pnp scale', np.linalg.norm(np.subtract(pose[:2], self.graph_.pos_[-2][:2]))
+        ## override input pose with PnP information
+        #_, pose_pnp = self.run_PNP(p_lm_0, pt2_new, pose)
+        #if pose_pnp is not None:
+        #    # TODO : instead of full override, consider merging them
+        #    # intelligently?
+        #    print 'pose-in', pose.ravel()
+        #    print 'pose-pnp', pose_pnp
+        #    pose = pose_pnp
+        #    #print 'pnp scale', np.linalg.norm(np.subtract(pose[:2], self.graph_.pos_[-2][:2]))
 
         p_lm_c = self.cvt_.map_to_cam(p_lm_0, pose)
 
@@ -1058,7 +1058,7 @@ class ClassicalVO(object):
         #print(np.exp(robust_mean(np.log(scale_rel))))
 
         # acquire scale corrections ...
-        if len(lm_idx) > 8:
+        if len(lm_idx) > 8 and len(scale_rel) > 0:
             scale_est = scale * robust_mean(scale_rel)
         else:
             # scale estimates are anticipated to be unstable.
@@ -1068,7 +1068,7 @@ class ClassicalVO(object):
         if len(d_lm_old) > 0:
             print_ratio('estimated scale ratio', scale_est, scale)
             # TODO : tune scale interpolation alpha
-            alpha = 0.9 # high trust in ground-plane/ukf based estimate
+            alpha = 0.75 # high trust in ground-plane/ukf based estimate
             # override scale here
             # will smoothing over time hopefully prevent scale drift?
             """
@@ -2237,7 +2237,14 @@ class ClassicalVO(object):
             # ignore exception
             print('PNP Error : {}'.format(e))
             return msg, None
-        return msg, (t_b[0], t_b[1], r_b[-1])
+
+        pose_pnp = np.asarray([t_b[0], t_b[1], r_b[-1]])
+        delta = pose - pose_pnp
+        if np.linalg.norm(delta[:2]) > 0.5:
+            print 'rejecting pnp due to jump : {}'.format(delta)
+            return msg, None
+
+        return msg, pose_pnp
 
     def scale_c(self, s_b, R_c, t_c, guess=None):
         """
@@ -2694,6 +2701,25 @@ class ClassicalVO(object):
                 ) # pt3 references coord0.
         des_l = self.landmarks_.des[idx_l]
 
+        # format inputs
+        li1 = len(pt2_l) # = end of landmark points
+
+        # get refined pose_c_r results from track + PnP
+        o_nmsk = np.ones(li1, dtype=np.bool)
+        pt2_l_current, ti = self.track(img_p, img_c, pt2_l)
+        if len(ti) > 16:
+            _, pose_c_pnp = self.run_PNP(
+                    self.landmarks_.pos[idx_l[ti]],
+                    pt2_l_current[ti],
+                    pose_c)
+            if pose_c_pnp is not None:
+                pose_c = lerp(pose_c, pose_c_pnp, 0.5)
+
+        o_nmsk[ti] = False
+        o_nidx = np.where(o_nmsk)[0]
+        self.landmarks_.untrack(idx_l[o_nidx])
+        print_ratio('LMK Track', len(ti), li1)
+
         # collect observations
         obs = [] 
 
@@ -2729,9 +2755,6 @@ class ClassicalVO(object):
         des_p = des_p[idx_s]
         pt2_p = pt2_p[idx_s]
         rsp_p = rsp_p[idx_s]
-
-        # format inputs
-        li1 = len(pt2_l) # = end of landmark points
 
         pt2_p_all = np.concatenate([pt2_l, pt2_p], axis=0)
         des_p_all = np.concatenate([des_l, des_p], axis=0)
@@ -2788,14 +2811,7 @@ class ClassicalVO(object):
 
         # unset tracking flag for failed lmk tracks
 
-        o_nmsk = np.ones(li1, dtype=np.bool)
-        _, ti = self.track(img_p, img_c, pt2_l)
-        print_ratio('\tti discrepancy', len(ti), len(o_idx_l))
-        o_nmsk[ti] = False
-        o_nidx = np.where(o_nmsk)[0]
-        self.landmarks_.untrack(idx_l[o_nidx])
-        
-        print_ratio('LMK Track', len(o_idx_l), li1)
+ 
 
         # == VIZ TRACK BEGIN ==
         # lfig = self.fig_['trk']
