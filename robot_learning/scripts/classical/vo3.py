@@ -759,6 +759,7 @@ class ClassicalVO(object):
         #self.flag_ &= ~ClassicalVO.VO_USE_BA
         #self.flag_ |= ClassicalVO.VO_USE_PNP
         self.flag_ &= ~ClassicalVO.VO_USE_FM_COR # doesn't really work anymore?
+        self.flag_ &= ~ClassicalVO.VO_USE_SCALE_GP
 
         # TODO : control stage-level verbosity
 
@@ -814,14 +815,12 @@ class ClassicalVO(object):
         self.pBA_ = dict(
                 ftol=1e-4,
                 xtol=np.finfo(float).eps,
-                #loss='linear',
                 loss='huber',
-                #loss='cauchy', # TODO : good loss function?
                 max_nfev=1024,
                 method='trf',
                 verbose=2,
                 tr_solver='lsmr',
-                f_scale=np.deg2rad(5.0)
+                f_scale=1.0
                 )
         self.pPNP_ = dict(
                 iterationsCount=1000,
@@ -874,7 +873,7 @@ class ClassicalVO(object):
 
         # bundle adjustment + loop closure
         # sort ba pyramid by largest first
-        ba_pyr = [4,16,64,256,1024]#[2,4,16,64,256,1024]
+        ba_pyr = [16]#[4,16,64,256,1024]#[2,4,16,64,256,1024]
         self.ba_pyr_  = np.sort(ba_pyr)[::-1]
         self.graph_ = VGraph(self.cvt_)
 
@@ -1012,27 +1011,55 @@ class ClassicalVO(object):
 
         # save input scale ( which has been applied to pt3_new_c )
         scale0 = scale
+        print 'scale0', scale0
 
         p_lm_0 = self.landmarks_.pos[lm_idx] # landmark points in cam-map coord.
+
+        # override input pose with PnP information
+        _, pose_pnp = self.run_PNP(p_lm_0, pt2_new, pose)
+        if pose_pnp is not None:
+            # TODO : instead of full override, consider merging them
+            # intelligently?
+            print 'pose-in', pose.ravel()
+            print 'pose-pnp', pose_pnp
+            pose = pose_pnp
+            #print 'pnp scale', np.linalg.norm(np.subtract(pose[:2], self.graph_.pos_[-2][:2]))
+
         p_lm_c = self.cvt_.map_to_cam(p_lm_0, pose)
-        d_lm_old = np.linalg.norm(p_lm_c, axis=-1)
-        d_lm_new = np.linalg.norm(pt3_new_c, axis=-1)
+
+        d_lm_old = p_lm_c[:,2]#np.linalg.norm(p_lm_c, axis=-1)
+        d_lm_new = pt3_new_c[:,2]#np.linalg.norm(pt3_new_c, axis=-1)
 
         scale_rel = (d_lm_old / d_lm_new).reshape(-1,1)
+        scale_rel = scale_rel[
+                np.logical_and.reduce([
+                    np.isfinite(scale_rel),
+                    scale_rel > 0.0
+                    ])]
 
-        #sax = self.fig_['scale'].gca()
-        #sax.cla()
-        #sax.hist(scale_rel)
-        #plt.pause(0.001)
+        #if len(d_lm_old) > 0:
+        #    sax = self.fig_['scale'].gca()
+        #    sax.cla()
+        #    #sax.hist(scale_rel)
+        #    sidx = np.random.randint(0, len(d_lm_old), min(len(d_lm_old), 32))
+        #    sax.plot(d_lm_old[sidx], 'r+', label='old')
+        #    #sax.plot(d_lm_new, 'bx', label='new')
+        #    sax.plot(d_lm_new[sidx] * scale_rel.mean(), 'c.', label='new-s')
+        #    sax.legend()
+        #    print 'setting limits'
+        #    lo = np.percentile(d_lm_old, 20)
+        #    hi = np.percentile(d_lm_old, 80)
+        #    sax.set_ylim(lo, hi)
+        #    print 'scale_rel', robust_mean(scale_rel)
+        #    plt.pause(0.001)
 
-        scale_rel_std = np.exp(np.log(scale_rel).std()) / scale0
-        print('estimated scale stability', scale_rel_std)
+        #scale_rel_std = np.exp(np.log(scale_rel).std()) / scale0
+        #print('estimated scale stability', scale_rel_std)
         #print(np.exp(robust_mean(np.log(scale_rel))))
 
         # acquire scale corrections ...
         if len(lm_idx) > 8:
-            # TODO : is logarithmic mean better than naive mean?
-            scale_est = scale * np.exp(robust_mean(np.log(scale_rel)))
+            scale_est = scale * robust_mean(scale_rel)
         else:
             # scale estimates are anticipated to be unstable.
             # use input scale
@@ -1041,7 +1068,7 @@ class ClassicalVO(object):
         if len(d_lm_old) > 0:
             print_ratio('estimated scale ratio', scale_est, scale)
             # TODO : tune scale interpolation alpha
-            alpha = 0.2 # high trust in ground-plane/ukf based estimate
+            alpha = 0.9 # high trust in ground-plane/ukf based estimate
             # override scale here
             # will smoothing over time hopefully prevent scale drift?
             """
@@ -1052,7 +1079,8 @@ class ClassicalVO(object):
             all of these estimates are un-intelligently
             combined to produce the final result.
             """
-
+            scale = np.exp(lerp(np.log(scale), np.log(scale_est), alpha))
+            """
             if (scale < 5e-3) and (scale_est / scale) > 2.0:
                 # TODO : Magic ^^
                 # disable scale interpolation
@@ -1062,6 +1090,7 @@ class ClassicalVO(object):
             else:
                 # logarithmic interpolation
                 scale = np.exp(lerp(np.log(scale), np.log(scale_est), alpha))
+            """
         else:
             # implicit : scale = scale
             pass
@@ -1637,7 +1666,8 @@ class ClassicalVO(object):
         nd_lmk = np.nan_to_num(nd_lmk)
 
         #err = 1.0 - (n * nd_lmk).sum(axis=1)
-        err = np.arccos((n * nd_lmk).sum(axis=-1))
+        #err = np.arccos((n * nd_lmk).sum(axis=-1))
+        err = 1.0 - np.sqrt( (n * nd_lmk).sum(axis=-1) )
 
         return err.ravel()
 
@@ -1787,7 +1817,7 @@ class ClassicalVO(object):
                 shape=( len(Wdata)*3, len(Wdata)*3))
 
         # compute BA sparsity structure : deprecated with analytical jac_BA()
-        A = self.sparsity_BA(n_c, n_l, ci, li, s_o=1)
+        A = self.sparsity_BA(n_c, n_l, ci, li, s_o=2)
 
         if ax is not None:
             ## prep data for viz
@@ -1822,7 +1852,6 @@ class ClassicalVO(object):
             n_c, n_l,
             ci, li, p2))
         err0 = np.sqrt(err0s.mean())
-        print 'err0', self.residual_BA2(x0,n_c,n_l,ci,li,p2).sum()
 
         ## actually run BA
         # -- opt1 : custom --
@@ -1834,9 +1863,9 @@ class ClassicalVO(object):
         # -- opt2 : scipy --
 
         res = least_squares(
-                self.residual_BA2, x0,
+                self.residual_BA, x0,
                 jac_sparsity=A,
-                #jac=self.jac_BA,
+                jac=self.jac_BA,
                 x_scale='jac',
                 args=(n_c, n_l, ci, li, p2),
                 **self.pBA_
@@ -1853,7 +1882,6 @@ class ClassicalVO(object):
             n_c, n_l,
             ci, li, p2))
         err1 = np.sqrt(err1s.mean())
-        print 'err1', self.residual_BA2(x1,n_c,n_l,ci,li,p2).sum()
         #print err0, err1
 
         if ax is not None:
@@ -2128,7 +2156,7 @@ class ClassicalVO(object):
             p_min=16, ax=None, msg=''):
 
         if len(pt3_map) < p_min or len(pt2_cam) < p_min:
-            return msg
+            return msg, None
 
         try:
             # construct extrinsic guess
@@ -2143,29 +2171,26 @@ class ClassicalVO(object):
 
             rvec0 = cv2.Rodrigues(T_src[:3,:3])[0]
             tvec0 = T_src[:3, 3:].ravel()
-            #res = cv2.solvePnPRansac(
-            #        pt_map, pt_cam,
-            #        self.K_, 0*self.D_,
-            #        useExtrinsicGuess = True,
-            #        rvec=rvec0.copy(),
-            #        tvec=tvec0.copy(),
-            #        **self.pPNP_
-            #        )
-            #suc, rvec, tvec, inliers = res
-            #rvec = rvec0
-            #tvec = tvec0
-            #idx = np.random.choice(len(pt_map), size=4, replace=False)
-            #idx = np.s_[:len(pt_map)]
-            res = cv2.solvePnP(
+
+            res = cv2.solvePnPRansac(
                     pt3_map, pt2_cam,
                     self.K_, 0*self.D_,
                     useExtrinsicGuess = True,
                     rvec=rvec0.copy(),
                     tvec=tvec0.copy(),
-                    flags=self.pPNP_['flags']
+                    **self.pPNP_
                     )
-            suc, rvec, tvec = res
-            inliers = np.arange(len(pt3_map))
+            suc, rvec, tvec, inliers = res
+            #res = cv2.solvePnP(
+            #        pt3_map, pt2_cam,
+            #        self.K_, 0*self.D_,
+            #        useExtrinsicGuess = True,
+            #        rvec=rvec0.copy(),
+            #        tvec=tvec0.copy(),
+            #        flags=self.pPNP_['flags']
+            #        )
+            #suc, rvec, tvec = res
+            #inliers = np.arange(len(pt3_map))
 
             if suc:
                 # parse output from solvePnP
@@ -2206,12 +2231,13 @@ class ClassicalVO(object):
                             color='g',
                             alpha=0.75
                             )
+            else:
+                return msg, None
         except Exception as e:
             # ignore exception
             print('PNP Error : {}'.format(e))
-            pass
-
-        return msg
+            return msg, None
+        return msg, (t_b[0], t_b[1], r_b[-1])
 
     def scale_c(self, s_b, R_c, t_c, guess=None):
         """
@@ -2564,7 +2590,7 @@ class ClassicalVO(object):
 
         # stage 2 : GP
         # guess based on em or c0 ?? Is it double-dipping to use R_em/t_em for GP?
-        res = self.run_GP(pt21[idx_t], pt20[idx_t], sc0, guess=(R_c0, t_c0) )
+        res = self.run_GP(pt21[idx_t], pt20[idx_t], sc0, guess=(R_em, t_em_u) )
         H, sc2, (R_gp, t_gp_u), (pt3_gp_u, idx_g) = res # parse run_GP
         t_gp_u /= np.linalg.norm(t_gp_u)
         if idx_g is not None:
@@ -2599,6 +2625,7 @@ class ClassicalVO(object):
         # ( >> TODO << : incorporate confidence information )
         # NOTE: can't use msk3 for o_msk, which is aggregate info.
         if pt3_em_u is not None:
+            print('applied scale', sc)
             pt3_em = pt3_em_u * sc
             pt3[idx_e] = np.where(
                     msk3[idx_e,None],
@@ -2656,7 +2683,7 @@ class ClassicalVO(object):
         else:
             # scale will be automatically figured out
             scale = None
-            scale_alpha = 0.9 # = high trust towards measurements
+            scale_alpha = 0.5 # = high trust towards measurements
 
         # query LMK
         idx_l, pt2_l = self.landmarks_.track_points()
@@ -2812,7 +2839,7 @@ class ClassicalVO(object):
         # i=-1 : current frame (already used -- ?)
         # i=-2 : previous frame (already used)
         # look further back for new information.
-        for di in [-3]:#[-1, -3]:#[-3, -4, -5]:
+        for di in []:#[-1, -3]:#[-3, -4, -5]:
             # -1=index, -2=index-1, -3=index-2
             data = self.graph_.get_data(di)
             if data is None:
@@ -2909,7 +2936,7 @@ class ClassicalVO(object):
             #tax.plot(o_pt21_l[:,0], o_pt21_l[:,1], 'rx', label='obs')
             #plt.pause(0.001)
 
-            scale_c, msg = self.proc_f2m_old(
+            scale_c_2, msg = self.proc_f2m_old(
                     pose_c_r, scale_c,
                     pt3_l,
                     i_lm_old, # landmark indices; NOTE : apply lmk index start offset
@@ -2920,9 +2947,15 @@ class ClassicalVO(object):
                     msg
                     )
 
+            # scale corrections
+            pt3_new *= (scale_c_2 / scale_c)
+            scale_c = scale_c_2
+            print('scale_c', scale_c)
+
             # update transforms with new scale_c information from proc_f2m.
             # (scale_c fusion happenes automatically within proc_f2m)
             t_c = t_c / np.linalg.norm(t_c) * scale_c
+            #print('t_c', t_c, np.linalg.norm(t_c))
             T_c2c1 = np.eye(4)
             T_c2c1[:3,:3] = R_c
             T_c2c1[:3,3:] = t_c
@@ -2932,6 +2965,7 @@ class ClassicalVO(object):
                 self.cvt_.T_b2c_
                 ])
             R_b, t_b = T_b2b1[:3,:3], T_b2b1[:3,3:]
+            #print('t_b', t_b)
             scale_b = np.linalg.norm(t_b)
             print 'scale_b #3', scale_b
             pose_c_r = self.pRt2pose(pose_p, R_b, t_b)
@@ -2948,6 +2982,7 @@ class ClassicalVO(object):
 
         # Estimate #5 : return Post-filter results as UKF Posterior
         # NOTE : This finalizes pose_c.
+        #print('pose_c_r - update', pose_c_r)
         pose_c_r = self.graph_.update(1, [pose_c_r])
         # NOTE: estimate #5 does not produce R_c, t_c, R_b, t_c
         # because it is not needed.
