@@ -154,7 +154,6 @@ def parse_CVPNP(rvec, tvec, T_c2b, T_b2c):
 
     return np.asarray([t_b[0], t_b[1], r_b[-1]])
 
-
 def proj_TRI(
         params,
         K, T_b2c, T_c2b
@@ -373,7 +372,9 @@ def form_guess(xyh, T_b2c, T_c2b):
 def solve_TRI(
         pt_a, pt_b,
         K, Ki, T_b2c, T_c2b,
-        guess):
+        guess,
+        verbose=2
+        ):
 
     if isinstance(guess, tuple):
         # input (R,t)
@@ -410,21 +411,20 @@ def solve_TRI(
     dl0 = l0[:,2]
     x0 = np.concatenate([ [m0, dh0], dl0])
 
-    bx_lo = np.concatenate([
-            dp0 - [0.3, 0.3, np.deg2rad(60.0)],
-            np.full((len(l0) *3), -np.inf)
-            ])
-    bx_hi = np.concatenate([
-            dp0 + [0.3, 0.3, np.deg2rad(60.0)],
-            np.full((len(l0) *3), np.inf)
-            ])
+    #bx_lo = np.concatenate([
+    #        dp0 - [0.3, 0.3, np.deg2rad(60.0)],
+    #        np.full((len(l0) *3), -np.inf)
+    #        ])
+    #bx_hi = np.concatenate([
+    #        dp0 + [0.3, 0.3, np.deg2rad(60.0)],
+    #        np.full((len(l0) *3), np.inf)
+    #        ])
 
     # un-parametrize
-    tmp0 = np.asarray([np.cos(x0[0]), np.sin(x0[0]), x0[1]])
-    tmp1 = np.einsum('ij,...j,...->...i',
-            Ki, to_h(pt_a), x0[2:]) #3x3 x Nx3 x N
-
-    print('\tdp0 : {}'.format(tmp0.ravel()))
+    # tmp0 = np.asarray([np.cos(x0[0]), np.sin(x0[0]), x0[1]])
+    # tmp1 = np.einsum('ij,...j,...->...i',
+    #         Ki, to_h(pt_a), x0[2:]) #3x3 x Nx3 x N
+    # print('\tdp0 : {}'.format(tmp0.ravel()))
     #print('tri-pt3 (u) : {}'.format(tx.unit_vector(tmp1[0].ravel())))
 
     res = least_squares(
@@ -443,10 +443,10 @@ def solve_TRI(
             #    ],
             #loss='huber',
             #loss='cauchy',
-            loss='linear',
+            loss='huber',
             method='trf',
             tr_solver='lsmr',
-            verbose=2,
+            verbose=verbose,
             f_scale=1.0
             )
 
@@ -456,10 +456,90 @@ def solve_TRI(
     dp1 = np.asarray([np.cos(x1[0]), np.sin(x1[0]), x1[1]])
     l1  = np.einsum('ij,...j,...->...i',
             Ki, to_h(pt_a), x1[2:]) #3x3 x Nx3 x N
-
-    print('\tdp1 : {}'.format(dp1.ravel()))
     #print('tri-pt3 (u) : {}'.format(tx.unit_vector(l1[0].ravel())))
     return form_guess(dp1, T_b2c, T_c2b), l1
+
+tfig=None
+
+def solve_TRI_fast(
+        pt_a, pt_b,
+        K, Ki, T_b2c, T_c2b, guess):
+    #global tfig
+
+    n_it  = 16 # max # of iterations
+    n_sub = 8 # subset to run optimization on
+
+    best_err = np.inf
+    best_guess = guess
+    best_pt4 = None
+
+    for i in range(n_it):
+        # choose random subset
+        idx = np.random.choice(
+                len(pt_a), n_sub,
+                replace=( len(pt_a) < n_sub )
+                )
+
+        # run least squares
+        guess, l1 = solve_TRI(
+                pt_a[idx], pt_b[idx],
+                K, Ki, T_b2c, T_c2b, best_guess,
+                verbose=0
+                )
+
+        # evaluate on whole set
+        dp0 = parse_guess(guess, T_b2c, T_c2b)
+        m0 = np.arctan2(dp0[1], dp0[0])
+        dh0 = dp0[2]
+
+        # form matrices
+        T_b2o = tx.compose_matrix(
+        translate=(dp0[0],dp0[1],0),
+        angles=(0,0,dp0[-1])
+        )
+        T_o2b = tx.inverse_matrix(T_b2o)
+        Tcc = np.linalg.multi_dot([
+                T_b2c,
+                T_o2b,
+                T_c2b
+                ]) 
+
+        # triangulate all points
+        l0 = cv2.triangulatePoints(
+            K.dot(np.eye(3,4)), K.dot(Tcc[:3]),
+            pt_a[None,...],
+            pt_b[None,...]).astype(np.float32)
+        dl0 = l0[2,:] / l0[3,:]
+        x0 = np.concatenate([[m0, dh0], dl0])
+
+
+        e = err_TRI(x0, pt_a, pt_b, K, Ki, T_b2c, T_c2b)
+        e2 = e.reshape(-1,2)
+        e = np.linalg.norm(e2, axis=-1)
+        e = np.clip(e, 0.0, 5.0) # clip error
+        err = e.mean()
+
+        #try:
+        #    ax = tfig.gca()
+        #except Exception:
+        #    tfig = plt.figure()
+        #    ax = tfig.gca()
+        #ax.cla()
+        #ax.hist(e)
+        #plt.pause(0.001)
+
+        print('err : {}/{}={}'.format(err, best_err, err/best_err))
+
+        if err < best_err:
+            best_err = err
+            best_guess = guess
+            best_pt4 = l0.T
+            
+    return solve_TRI(
+                pt_a, pt_b,
+                K, Ki, T_b2c, T_c2b, best_guess,
+                verbose=2
+                )
 
 def main():
     from tests.test_fmat import generate_valid_points

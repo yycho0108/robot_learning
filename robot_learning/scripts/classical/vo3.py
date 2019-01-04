@@ -32,7 +32,7 @@ from scipy.optimize._lsq.least_squares import construct_loss_function
 
 from ukf import build_ukf, build_ekf, get_QR
 from ba import ba_J, ba_J_v2, schur_trick
-from opt import solve_PNP, solve_TRI
+from opt import solve_PNP, solve_TRI, solve_TRI_fast
 
 def print_ratio(msg, a, b):
     as_int = np.issubdtype(type(a), np.integer)
@@ -2345,7 +2345,7 @@ class ClassicalVO(object):
             return null_result
 
         # EXPERIMENTAL : least-squares
-        (R, t), pt3 = solve_TRI(pt2_u_p, pt2_u_c,
+        (R, t), pt3 = solve_TRI_fast(pt2_u_p, pt2_u_c,
                 self.cvt_.K_, self.cvt_.Ki_,
                 self.cvt_.T_b2c_, self.cvt_.T_c2b_,
                 guess)
