@@ -32,6 +32,7 @@ from scipy.optimize._lsq.least_squares import construct_loss_function
 
 from ukf import build_ukf, build_ekf, get_QR
 from ba import ba_J, ba_J_v2, schur_trick
+from opt import solve_PNP
 
 def print_ratio(msg, a, b):
     as_int = np.issubdtype(type(a), np.integer)
@@ -417,7 +418,7 @@ class VGraph(object):
         # 1. process data
         img = self.cvt_.img_to_imgu(img) # undistort
         kpt = self.cvt_.img_to_kpt(img,
-                subpix=None
+                subpix=True
                 )
         kpt, des = self.cvt_.img_kpt_to_kpt_des(img, kpt)
         pt2 = self.cvt_.kpt_to_pt(kpt)
@@ -873,7 +874,7 @@ class ClassicalVO(object):
 
         # bundle adjustment + loop closure
         # sort ba pyramid by largest first
-        ba_pyr = [16]#[4,16,64,256,1024]#[2,4,16,64,256,1024]
+        ba_pyr = [4,16,64,256,1024]#[4,16,64,256,1024]#[2,4,16,64,256,1024]
         self.ba_pyr_  = np.sort(ba_pyr)[::-1]
         self.graph_ = VGraph(self.cvt_)
 
@@ -1719,6 +1720,7 @@ class ClassicalVO(object):
         pt2_h = self.project_BA(pos[c_i], lmk[l_i], return_h=True)
         ts.append(time.time())
         #err   = obs_pt2 - pt2_h
+        # Note : minus sign here is critical if residual_BA returns y - f(x).
         J = -ba_J_v2(pos[c_i], lmk[l_i], self.K_,
                 self.cvt_.T_b2c_[:3,:3], self.cvt_.T_b2c_[:3,3:], pt2_h) # Nx2x6
         ts.append(time.time())
@@ -2144,6 +2146,7 @@ class ClassicalVO(object):
         gpt3_base = gpt3.dot(self.cvt_.T_c2b_[:3,:3].T)
         h_gp = robust_mean(-gpt3_base[:,2])
         scale_gp = (camera_height / h_gp)
+        #print 'gp std', (gpt3_base[:,2] * scale_gp).std()
         print 'gp-ransac scale', scale_gp
         if np.isfinite(scale_gp) and scale_gp > 0:
             # project just in case scale < 0...
@@ -2172,6 +2175,18 @@ class ClassicalVO(object):
             rvec0 = cv2.Rodrigues(T_src[:3,:3])[0]
             tvec0 = T_src[:3, 3:].ravel()
 
+            res = cv2.solvePnP(
+                    pt3_map, pt2_cam,
+                    self.K_, 0*self.D_,
+                    useExtrinsicGuess = True,
+                    rvec=rvec0.copy(),
+                    tvec=tvec0.copy(),
+                    flags=self.pPNP_['flags']
+                    )
+            suc, rvec01, tvec01 = res
+            if suc:
+                rvec0, tvec0 = rvec01, tvec01
+
             res = cv2.solvePnPRansac(
                     pt3_map[:,None], pt2_cam[:,None],
                     self.K_, 0*self.D_,
@@ -2181,15 +2196,6 @@ class ClassicalVO(object):
                     **self.pPNP_
                     )
             suc, rvec, tvec, inliers = res
-            #res = cv2.solvePnP(
-            #        pt3_map, pt2_cam,
-            #        self.K_, 0*self.D_,
-            #        useExtrinsicGuess = True,
-            #        rvec=rvec0.copy(),
-            #        tvec=tvec0.copy(),
-            #        flags=self.pPNP_['flags']
-            #        )
-            #suc, rvec, tvec = res
             #inliers = np.arange(len(pt3_map))
 
             if suc:
@@ -2240,7 +2246,7 @@ class ClassicalVO(object):
 
         pose_pnp = np.asarray([t_b[0], t_b[1], r_b[-1]])
         delta = pose - pose_pnp
-        if np.linalg.norm(delta[:2]) > 0.5:
+        if np.linalg.norm(delta[:2]) > 0.2:
             print 'rejecting pnp due to jump : {}'.format(delta)
             return msg, None
 
@@ -2707,16 +2713,25 @@ class ClassicalVO(object):
         # get refined pose_c_r results from track + PnP
         o_nmsk = np.ones(li1, dtype=np.bool)
         pt2_l_current, ti = self.track(img_p, img_c, pt2_l)
-        if len(ti) > 16:
-            _, pose_c_pnp = self.run_PNP(
+        if len(ti) > 16: # TODO : magic
+            pose_c_pnp = solve_PNP(
                     self.landmarks_.pos[idx_l[ti]],
                     pt2_l_current[ti],
-                    pose_c)
+                    self.cvt_.K_,
+                    self.cvt_.T_b2c_,
+                    self.cvt_.T_c2b_,
+                    guess = pose_c
+                    )
+            #_, pose_c_pnp = self.run_PNP(
+            #        self.landmarks_.pos[idx_l[ti]],
+            #        pt2_l_current[ti],
+            #        pose_c, ax=ax)
             if pose_c_pnp is not None:
                 pose_c = lerp(pose_c, pose_c_pnp, 0.75)
 
         o_nmsk[ti] = False
         o_nidx = np.where(o_nmsk)[0]
+        self.landmarks_.kpt[idx_l[ti],:2] = pt2_l_current[ti]
         self.landmarks_.untrack(idx_l[o_nidx])
         print_ratio('LMK Track', len(ti), li1)
 
@@ -2836,7 +2851,7 @@ class ClassicalVO(object):
         # == VIZ TRACK END ==
 
         # update tracking points for successful lmk tracks
-        self.landmarks_.kpt[idx_l[o_idx_l],:2] = o_pt21_l
+        # self.landmarks_.kpt[idx_l[o_idx_l],:2] = o_pt21_l
 
         # cache candidate new observations to add
         # NOTE : appending to obs is NOT final;
@@ -2855,7 +2870,7 @@ class ClassicalVO(object):
         # i=-1 : current frame (already used -- ?)
         # i=-2 : previous frame (already used)
         # look further back for new information.
-        for di in []:#[-1, -3]:#[-3, -4, -5]:
+        for di in [-3]:#[-1, -3]:#[-3, -4, -5]:
             # -1=index, -2=index-1, -3=index-2
             data = self.graph_.get_data(di)
             if data is None:
@@ -3155,12 +3170,16 @@ class ClassicalVO(object):
         #s_xy_r = s_xy / d_lm_c # relative conf.
         #idx  = np.argsort(s_xy_r)
         #pt3_m = self.landmarks_.pos_[idx[:512]]
+
         pt3_m = self.landmarks_.pos
         col_m = self.landmarks_.col
+        pt3_m_b = pt3_m.dot(self.T_c2b_[:3,:3].T) + self.T_c2b_[:3,3]
+        #col_m = (pt3_m_b[:,2] - pt3_m_b[:,2].min()) / (np.max(pt3_m_b[:,2]) - pt3_m_b[:,2].min())
+
 
         # filter by height
         # convert to base_link coordinates
-        # pt3_m_b = pt3_m.dot(self.T_c2b_[:3,:3].T) + self.T_c2b_[:3,3]
+        #pt3_m_b = pt3_m.dot(self.T_c2b_[:3,:3].T) + self.T_c2b_[:3,3]
         #pt3_viz_msk = np.logical_and.reduce([
         #    -0.2 <= pt3_m_b[:,2],
         #    pt3_m_b[:,2] < 5.0])

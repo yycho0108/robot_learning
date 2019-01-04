@@ -95,7 +95,7 @@ class VoGUI(object):
         ymin = min(cy1,cy2)
         ymax = max(cy1,cy2)
 
-        r_lim = 8.0 # TODO : hardcoded
+        r_lim = 20.0 # TODO : hardcoded
         ax.set_xlim(xmin-r_lim, xmax+r_lim)
         ax.set_ylim(ymin-r_lim, ymax+r_lim)
         ax.grid()
