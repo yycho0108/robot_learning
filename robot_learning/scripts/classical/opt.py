@@ -123,14 +123,14 @@ def solve_PNP(
             jac=jac_PNP,
             x_scale='jac',
             args=(pt3, pt2, K, T_b2c, T_c2b),
-            ftol=1e-8,
+            ftol=1e-4,
             xtol=np.finfo(float).eps,
             max_nfev=8192,
             bounds=[
                 guess - [0.2, 0.2, np.deg2rad(60.0)], # << enforced bounds to prevent jumps
                 guess + [0.2, 0.2, np.deg2rad(60.0)]
                 ],
-            loss='huber',
+            loss='soft_l1',
             method='trf',
             tr_solver='lsmr',
             verbose=1,
@@ -367,6 +367,7 @@ def form_guess(xyh, T_b2c, T_c2b):
         ])
     Rc = Tcc[:3,:3]
     tc = Tcc[:3,3:]
+    tc /= np.linalg.norm(tc)
     return (Rc, tc)
 
 def solve_TRI(
@@ -398,6 +399,7 @@ def solve_TRI(
     # ensure unit translation
     Tcc[:3,3:] /= np.linalg.norm(Tcc[:3,3:])
 
+    # form initial guess
     l0 = cv2.triangulatePoints(
             K.dot(np.eye(3,4)), K.dot(Tcc[:3]),
             pt_a[None,...],
@@ -441,8 +443,6 @@ def solve_TRI(
             #    guess - [0.2, 0.2, np.deg2rad(60.0)], # << enforced bounds to prevent jumps
             #    guess + [0.2, 0.2, np.deg2rad(60.0)]
             #    ],
-            #loss='huber',
-            #loss='cauchy',
             loss='huber',
             method='trf',
             tr_solver='lsmr',
@@ -459,19 +459,54 @@ def solve_TRI(
     #print('tri-pt3 (u) : {}'.format(tx.unit_vector(l1[0].ravel())))
     return form_guess(dp1, T_b2c, T_c2b), l1
 
-tfig=None
-
 def solve_TRI_fast(
         pt_a, pt_b,
-        K, Ki, T_b2c, T_c2b, guess):
-    #global tfig
-
-    n_it  = 16 # max # of iterations
-    n_sub = 8 # subset to run optimization on
-
+        K, Ki, T_b2c, T_c2b, guess,
+        n_it = 4, # max # of iterations
+        n_sub = 32 # point subset to run optimization on
+        ):
     best_err = np.inf
     best_guess = guess
-    best_pt4 = None
+    best_pt3 = None
+
+    # == evaluate input == 
+    # evaluate on whole set
+    dp0 = parse_guess(guess, T_b2c, T_c2b)
+    m0 = np.arctan2(dp0[1], dp0[0])
+    dh0 = dp0[2]
+
+    # form matrices
+    T_b2o = tx.compose_matrix(
+    translate=(dp0[0],dp0[1],0),
+    angles=(0,0,dp0[-1])
+    )
+    T_o2b = tx.inverse_matrix(T_b2o)
+    Tcc = np.linalg.multi_dot([
+            T_b2c,
+            T_o2b,
+            T_c2b
+            ]) 
+
+    # triangulate all points
+    l0 = cv2.triangulatePoints(
+        K.dot(np.eye(3,4)), K.dot(Tcc[:3]),
+        pt_a[None,...],
+        pt_b[None,...]).astype(np.float32)
+    dl0 = l0[2,:] / l0[3,:]
+    x0 = np.concatenate([[m0, dh0], dl0])
+
+    e = err_TRI(x0, pt_a, pt_b, K, Ki, T_b2c, T_c2b)
+    e2 = e.reshape(-1,2)
+    e = np.linalg.norm(e2, axis=-1)
+    e = np.clip(e, 0.0, 5.0) # clip error
+    err = e.mean()
+
+    print('err : {:.2f}/{:.2f}={:.1f}%'.format(err, best_err, 100*err/best_err))
+
+    if err < best_err:
+        best_err = err
+        best_guess = guess
+        best_pt3 = l0[:3].T / l0[3:].T
 
     for i in range(n_it):
         # choose random subset
@@ -512,38 +547,29 @@ def solve_TRI_fast(
         dl0 = l0[2,:] / l0[3,:]
         x0 = np.concatenate([[m0, dh0], dl0])
 
-
         e = err_TRI(x0, pt_a, pt_b, K, Ki, T_b2c, T_c2b)
         e2 = e.reshape(-1,2)
         e = np.linalg.norm(e2, axis=-1)
         e = np.clip(e, 0.0, 5.0) # clip error
         err = e.mean()
 
-        #try:
-        #    ax = tfig.gca()
-        #except Exception:
-        #    tfig = plt.figure()
-        #    ax = tfig.gca()
-        #ax.cla()
-        #ax.hist(e)
-        #plt.pause(0.001)
-
-        print('err : {}/{}={}'.format(err, best_err, err/best_err))
+        print('err : {:.2f}/{:.2f}={:.1f}%'.format(err, best_err, 100*err/best_err))
 
         if err < best_err:
             best_err = err
             best_guess = guess
-            best_pt4 = l0.T
-            
-    return solve_TRI(
-                pt_a, pt_b,
-                K, Ki, T_b2c, T_c2b, best_guess,
-                verbose=2
-                )
+            best_pt3 = l0[:3].T / l0[3:].T
+
+    #return solve_TRI(
+    #            pt_a, pt_b,
+    #            K, Ki, T_b2c, T_c2b, best_guess,
+    #            verbose=2
+    #            )
+    return best_guess, best_pt3
 
 def main():
     from tests.test_fmat import generate_valid_points
-    #np.random.seed(0)
+    np.random.seed(3)
 
     # define testing parameters
     n = 100
@@ -585,6 +611,8 @@ def main():
     Rcc = Tcc[:3,:3]
     tcc = Tcc[:3,3:]
 
+    sc = np.linalg.norm(tcc)
+
     # generate landmark points + pose
     # ensure points are valid
 
@@ -623,7 +651,7 @@ def main():
     print 'gt-pt3', pt3[0]
     print 'gt-pt3 (u)', tx.unit_vector(pt3[0])
 
-    plt.plot(pt3[:,2] / pt3[0,2], 'rx', label='depth0')
+    plt.plot(pt3[:,2], 'rx', label='depth0')
     # == TRI BEG ==
     pt2_a = cv2.projectPoints(
             pt3, np.zeros(3), np.zeros(3),
@@ -641,11 +669,6 @@ def main():
     #print guess
     #print parse_guess(form_guess(guess, T_b2c, T_c2b), T_b2c, T_c2b)
 
-    (R1, t1), l1 = solve_TRI(pt2_a, pt2_b, K, Ki, T_b2c, T_c2b,
-            form_guess(guess, T_b2c, T_c2b)
-            #p
-            )
-
     # alt : cv2
     E, _ = cv2.findEssentialMat(pt2_b, pt2_a, K,
             method=cv2.FM_RANSAC,
@@ -653,6 +676,8 @@ def main():
             threshold=1.0)
     n_in, R, t, msk_r, pt3_e = recover_pose(E, K,
             pt2_b, pt2_a)
+    guess = (R, t)
+
     Tcc = np.eye(4)
     Tcc[:3,:3] = R
     Tcc[:3,3:] = t.reshape(3,1)
@@ -663,14 +688,32 @@ def main():
         ])
     R = Tbb[:3,:3]
     t = Tbb[:3, 3]
+
+    (R1, t1), l1 = solve_TRI(pt2_a, pt2_b, K, Ki, T_b2c, T_c2b,
+            guess
+            #form_guess(guess, T_b2c, T_c2b)
+            #p
+            )
+    Tcc = np.eye(4)
+    Tcc[:3,:3] = R1
+    Tcc[:3,3:] = t1.reshape(3,1)
+    Tbb = np.linalg.multi_dot([
+        T_c2b,
+        Tcc,
+        T_b2c
+        ])
+    R1 = Tbb[:3,:3]
+    t1 = Tbb[:3, 3]
+    print('TRI : {} {}'.format(t1[:2].ravel(), tx.euler_from_matrix(R1)[-1]))
+
     print('E : {} {}'.format(t[:2], tx.euler_from_matrix(R)[-1]))
     idx_r = np.where(msk_r)[0]
     pt3_e = pt3_e.T
 
-    plt.plot(l1[:,2] / l1[0,2], 'b+', label='depth1')
-    plt.plot(idx_r, pt3_e[:,2] / pt3_e[0,2], 'c.', label='depth2')
+    plt.plot(l1[:,2] * sc, 'b+', label='depth1')
+    plt.plot(idx_r, pt3_e[:,2]*sc, 'c.', label='depth2')
 
-    tmp = (pt3[:,2] / pt3[0,2])
+    tmp = (pt3[:,2])
 
     plt.gca().set_ylim(tmp.min(), tmp.max())
     plt.legend()

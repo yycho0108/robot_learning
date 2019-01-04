@@ -2345,11 +2345,11 @@ class ClassicalVO(object):
             return null_result
 
         # EXPERIMENTAL : least-squares
-        (R, t), pt3 = solve_TRI_fast(pt2_u_p, pt2_u_c,
-                self.cvt_.K_, self.cvt_.Ki_,
-                self.cvt_.T_b2c_, self.cvt_.T_c2b_,
-                guess)
-        return np.arange(len(pt2_u_p)), pt3, (R,t)
+        # (R, t), pt3 = solve_TRI_fast(pt2_u_p, pt2_u_c,
+        #         self.cvt_.K_, self.cvt_.Ki_,
+        #         self.cvt_.T_b2c_, self.cvt_.T_c2b_,
+        #         guess)
+        # return np.arange(len(pt2_u_p)), pt3, (R,t)
 
         # == opt 1 : essential ==
         # NOTE ::: findEssentialMat() is run on ngp_idx (Not tracking Ground Plane)
@@ -2417,6 +2417,12 @@ class ClassicalVO(object):
                     pt2_u_c[idx_e], pt2_u_p[idx_e], guess=guess,
                     log=False
                     )
+            # least-squares refinement
+            (R, t), pt3 = solve_TRI_fast(pt2_u_p[idx_e][msk_r], pt2_u_c[idx_e][msk_r],
+                    self.cvt_.K_, self.cvt_.Ki_,
+                    self.cvt_.T_b2c_, self.cvt_.T_c2b_,
+                    guess = (R,t) )
+            pt3 = pt3.T
             print_ratio('essentialmat', len(idx_e), msk_e.size)
             idx_p = idx_e
 
@@ -2733,7 +2739,7 @@ class ClassicalVO(object):
             #        pt2_l_current[ti],
             #        pose_c, ax=ax)
             if pose_c_pnp is not None:
-                pose_c = lerp(pose_c, pose_c_pnp, 0.8)
+                pose_c = lerp(pose_c, pose_c_pnp, 0.5)
 
             if ax is not None:
                 ax['main'].plot(
