@@ -32,7 +32,7 @@ from scipy.optimize._lsq.least_squares import construct_loss_function
 
 from ukf import build_ukf, build_ekf, get_QR
 from ba import ba_J, ba_J_v2, schur_trick
-from opt import solve_PNP
+from opt import solve_PNP, solve_TRI
 
 def print_ratio(msg, a, b):
     as_int = np.issubdtype(type(a), np.integer)
@@ -2341,9 +2341,15 @@ class ClassicalVO(object):
             pt2_u_c = pt2_u_c[ngp_idx]
             pt2_u_p = pt2_u_p[ngp_idx]
 
-
         if len(pt2_u_c) <= 5:
             return null_result
+
+        # EXPERIMENTAL : least-squares
+        (R, t), pt3 = solve_TRI(pt2_u_p, pt2_u_c,
+                self.cvt_.K_, self.cvt_.Ki_,
+                self.cvt_.T_b2c_, self.cvt_.T_c2b_,
+                guess)
+        return np.arange(len(pt2_u_p)), pt3, (R,t)
 
         # == opt 1 : essential ==
         # NOTE ::: findEssentialMat() is run on ngp_idx (Not tracking Ground Plane)
