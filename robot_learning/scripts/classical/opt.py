@@ -1,6 +1,7 @@
 import numpy as np
 from tf import transformations as tx
 from scipy.optimize import least_squares
+from scipy.sparse import bsr_matrix, csr_matrix
 from scipy.linalg import block_diag
 import cv2
 from matplotlib import pyplot as plt
@@ -130,11 +131,12 @@ def solve_PNP(
                 guess - [0.2, 0.2, np.deg2rad(60.0)], # << enforced bounds to prevent jumps
                 guess + [0.2, 0.2, np.deg2rad(60.0)]
                 ],
-            loss='soft_l1',
+            #loss='cauchy', # << ??
+            loss='huber'
             method='trf',
             tr_solver='lsmr',
             verbose=1,
-            f_scale=1.0
+            f_scale=2.0
             )
     return res.x
 
@@ -334,9 +336,9 @@ def jac_TRI(
             )
     J_l = J_l.reshape(-1, n)
 
-    J = np.concatenate([J_p, J_l], axis=-1)
+    J = np.concatenate([J_p, J_l], axis=-1) # << pretty sparse
 
-    return J
+    return csr_matrix(J)
 
 def parse_guess(guess, T_b2c, T_c2b):
     Rc, tc = guess
@@ -434,8 +436,8 @@ def solve_TRI(
             jac=jac_TRI,
             x_scale='jac',
             args=(pt_a, pt_b, K, Ki, T_b2c, T_c2b),
-            ftol=1e-6,
-            xtol=np.finfo(float).eps,
+            ftol=1e-4,
+            xtol=1e-4,
             max_nfev=1024,
             # TODO : enforce bounds?
             #bounds = [bx_lo, bx_hi],
@@ -462,7 +464,7 @@ def solve_TRI(
 def solve_TRI_fast(
         pt_a, pt_b,
         K, Ki, T_b2c, T_c2b, guess,
-        n_it = 4, # max # of iterations
+        n_it = 8, # max # of iterations
         n_sub = 32 # point subset to run optimization on
         ):
     best_err = np.inf
@@ -498,7 +500,7 @@ def solve_TRI_fast(
     e = err_TRI(x0, pt_a, pt_b, K, Ki, T_b2c, T_c2b)
     e2 = e.reshape(-1,2)
     e = np.linalg.norm(e2, axis=-1)
-    e = np.clip(e, 0.0, 5.0) # clip error
+    e = np.clip(e, 0.0, 64.0) # clip error
     err = e.mean()
 
     print('err : {:.2f}/{:.2f}={:.1f}%'.format(err, best_err, 100*err/best_err))
@@ -550,7 +552,7 @@ def solve_TRI_fast(
         e = err_TRI(x0, pt_a, pt_b, K, Ki, T_b2c, T_c2b)
         e2 = e.reshape(-1,2)
         e = np.linalg.norm(e2, axis=-1)
-        e = np.clip(e, 0.0, 5.0) # clip error
+        e = np.clip(e, 0.0, 64.0) # clip error
         err = e.mean()
 
         print('err : {:.2f}/{:.2f}={:.1f}%'.format(err, best_err, 100*err/best_err))

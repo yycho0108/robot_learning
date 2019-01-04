@@ -757,7 +757,7 @@ class ClassicalVO(object):
         # define configuration
         self.flag_ = ClassicalVO.VO_DEFAULT
         self.flag_ &= ~ClassicalVO.VO_USE_HOMO # TODO : doesn't really work?
-        self.flag_ &= ~ClassicalVO.VO_USE_BA
+        #self.flag_ &= ~ClassicalVO.VO_USE_BA
         #self.flag_ |= ClassicalVO.VO_USE_PNP
         self.flag_ &= ~ClassicalVO.VO_USE_FM_COR # doesn't really work anymore?
         #self.flag_ &= ~ClassicalVO.VO_USE_SCALE_GP
@@ -797,9 +797,6 @@ class ClassicalVO(object):
         #        k_nmx3=2,   # Max Number of neighbors to suppress for 3D Non-Max
         #        w_g2e =0.5,  # GP vs. EM estimate interpolation weight
         #        w_f2m =0.2,  # Frame-To-Map Weight
-
-
-
 
         # define "system" parameters
         self.pEM_ = dict(
@@ -874,7 +871,7 @@ class ClassicalVO(object):
 
         # bundle adjustment + loop closure
         # sort ba pyramid by largest first
-        ba_pyr = [4,16,64,256,1024]#[4,16,64,256,1024]#[2,4,16,64,256,1024]
+        ba_pyr = [16]#[4,16,64,256,1024]#[4,16,64,256,1024]#[2,4,16,64,256,1024]
         self.ba_pyr_  = np.sort(ba_pyr)[::-1]
         self.graph_ = VGraph(self.cvt_)
 
@@ -1059,7 +1056,7 @@ class ClassicalVO(object):
         #print(np.exp(robust_mean(np.log(scale_rel))))
 
         # acquire scale corrections ...
-        if len(lm_idx) > 8 and len(scale_rel) > 0:
+        if len(lm_idx) > 8 and len(scale_rel) > 8:
             scale_est = scale * robust_mean(scale_rel)
         else:
             # scale estimates are anticipated to be unstable.
@@ -1069,7 +1066,7 @@ class ClassicalVO(object):
         if len(d_lm_old) > 0:
             print_ratio('estimated scale ratio', scale_est, scale)
             # TODO : tune scale interpolation alpha
-            alpha = 0.75 # high trust in ground-plane/ukf based estimate
+            alpha = 0.25 # high trust in ground-plane/ukf based estimate
             # override scale here
             # will smoothing over time hopefully prevent scale drift?
             """
@@ -2418,7 +2415,7 @@ class ClassicalVO(object):
                     log=False
                     )
             # least-squares refinement
-            (R, t), pt3 = solve_TRI_fast(pt2_u_p[idx_e][msk_r], pt2_u_c[idx_e][msk_r],
+            (R, t), pt3 = solve_TRI_fast(pt2_u_p[idx_e[msk_r]], pt2_u_c[idx_e[msk_r]],
                     self.cvt_.K_, self.cvt_.Ki_,
                     self.cvt_.T_b2c_, self.cvt_.T_c2b_,
                     guess = (R,t) )
