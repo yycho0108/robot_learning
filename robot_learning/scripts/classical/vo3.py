@@ -757,7 +757,7 @@ class ClassicalVO(object):
         # define configuration
         self.flag_ = ClassicalVO.VO_DEFAULT
         self.flag_ &= ~ClassicalVO.VO_USE_HOMO # TODO : doesn't really work?
-        #self.flag_ &= ~ClassicalVO.VO_USE_BA
+        self.flag_ &= ~ClassicalVO.VO_USE_BA
         #self.flag_ |= ClassicalVO.VO_USE_PNP
         self.flag_ &= ~ClassicalVO.VO_USE_FM_COR # doesn't really work anymore?
         #self.flag_ &= ~ClassicalVO.VO_USE_SCALE_GP
@@ -2727,7 +2727,26 @@ class ClassicalVO(object):
             #        pt2_l_current[ti],
             #        pose_c, ax=ax)
             if pose_c_pnp is not None:
-                pose_c = lerp(pose_c, pose_c_pnp, 0.75)
+                pose_c = lerp(pose_c, pose_c_pnp, 0.8)
+
+            if ax is not None:
+                ax['main'].plot(
+                        [pose_c_pnp[0]],
+                        [pose_c_pnp[1]],
+                        'go',
+                        label='pnp',
+                        alpha=1.0
+                        )
+                ax['main'].quiver(
+                        [pose_c_pnp[0]],
+                        [pose_c_pnp[1]],
+                        [np.cos(pose_c_pnp[-1])],
+                        [np.sin(pose_c_pnp[-1])],
+                        angles='xy',
+                        #scale=1,
+                        color='g',
+                        alpha=0.75
+                        )
 
         o_nmsk[ti] = False
         o_nidx = np.where(o_nmsk)[0]

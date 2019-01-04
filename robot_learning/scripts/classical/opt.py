@@ -1,6 +1,7 @@
 import numpy as np
 from tf import transformations as tx
 from scipy.optimize import least_squares
+from scipy.linalg import block_diag
 import cv2
 
 def to_h(x):
@@ -118,20 +119,20 @@ def solve_PNP(
     res = least_squares(
             err_PNP, guess,
             jac=jac_PNP,
-            #x_scale='jac',
+            x_scale='jac',
             args=(pt3, pt2, K, T_b2c, T_c2b),
             ftol=1e-8,
             xtol=np.finfo(float).eps,
             max_nfev=8192,
             bounds=[
-                guess - [0.3, 0.3, np.deg2rad(30.0)], # << enforced bounds to prevent jumps
-                guess + [0.3, 0.3, np.deg2rad(30.0)]
+                guess - [0.2, 0.2, np.deg2rad(60.0)], # << enforced bounds to prevent jumps
+                guess + [0.2, 0.2, np.deg2rad(60.0)]
                 ],
-            loss='linear',
+            loss='huber',
             method='trf',
             tr_solver='lsmr',
             verbose=1,
-            f_scale=2.0
+            f_scale=1.0
             )
     return res.x
 
@@ -151,13 +152,267 @@ def parse_CVPNP(rvec, tvec, T_c2b, T_b2c):
 
     return np.asarray([t_b[0], t_b[1], r_b[-1]])
 
+
+def proj_TRI(
+        params,
+        K, T_b2c, T_c2b
+        ):
+    # parse params
+    dp = params[:3] # -> [3], (dx,dy,dh)
+    l  = params[3:].reshape(-1,3) # -> [N,3], (x,y,z)
+
+    n = len(l)
+
+    dx, dy, dh = dp.T
+    c, s = np.cos(dh), np.sin(dh)
+
+    l_h = to_h(l)
+
+    # construct T from b2 coord -> b1 coord
+    Tbb = np.zeros((4,4), dtype=np.float32)
+
+    # rot
+    Tbb[0,0] = c
+    Tbb[0,1] = -s
+    Tbb[1,0] = s
+    Tbb[1,1] = c
+    Tbb[2,2] = 1
+
+    # trans
+    Tbb[0,3] = dx
+    Tbb[1,3] = dy
+
+    # homogeneous
+    Tbb[3,3] = 1
+
+    # a-projection (homogeneous)
+    y_h_a = np.einsum(
+            'ij,jk,...k->...i',
+            K, #3x3
+            np.eye(3,4), #3x4
+            to_h(l) # Nx4(x1)
+            ) #-> Nx3
+
+    # b-projection (homogeneous)
+    y_h_b = np.einsum(
+            'ij,jk,kl,lm,...m->...i',
+            K, # 3x3
+            T_b2c[:3], # 3x4
+            Tbb, # 4x4
+            T_c2b, # 4x4
+            l_h # Nx4
+            ) # -> Nx3
+
+    return y_h_a, y_h_b, Tbb
+
+def err_TRI(
+        params,
+        pt_a, pt_b,
+        K, T_b2c, T_c2b
+        ):
+    # parse params
+    dp = params[:3] # -> [3], (dx,dy,dh)
+    l  = params[3:].reshape(-1,3) # -> [N,3], (x,y,z)
+    n = len(l)
+
+    y_h_a, y_h_b, _ = proj_TRI(params, K, T_b2c, T_c2b)
+
+    # convert to non-homogeneous repr.
+    y_a = y_h_a[...,:-1] / y_h_a[...,-1:]
+    y_b = y_h_b[...,:-1] / y_h_b[...,-1:]
+
+    e_a = y_a - pt_a
+    e_b = y_b - pt_b
+
+    e = np.concatenate([e_a.ravel(), e_b.ravel()], axis=0)
+    return e
+
+def jac_TRI(
+        params,
+        pt_a, pt_b,
+        K, T_b2c, T_c2b
+        ):
+    # parse params
+    dp = params[:3] # -> [3], (dx,dy,dh)
+    l  = params[3:].reshape(-1,3) # -> [N,3], (x,y,z)
+
+    n = len(l) # == len(pt_a)
+
+    dx, dy, dh = dp.T
+    c, s = np.cos(dh), np.sin(dh)
+
+    l_h = to_h(l)
+
+    # construct T from b2 coord -> b1 coord
+    Tbb = np.zeros((4,4), dtype=np.float32)
+
+    # rot
+    Tbb[0,0] = c
+    Tbb[0,1] = -s
+    Tbb[1,0] = s
+    Tbb[1,1] = c
+    Tbb[2,2] = 1
+
+    # trans
+    Tbb[0,3] = dx
+    Tbb[1,3] = dy
+
+    # homogeneous
+    Tbb[3,3] = 1
+
+    # a-projection (homogeneous)
+    y_h_a = np.einsum(
+            'ij,jk,...k->...i',
+            K, #3x3
+            np.eye(3,4), #3x4
+            to_h(l) # Nx4(x1)
+            ) #-> Nx3
+
+    # b-projection (homogeneous)
+    y_h_b = np.einsum(
+            'ij,jk,kl,lm,...m->...i',
+            K, # 3x3
+            T_b2c[:3], # 3x4
+            Tbb, # 4x4
+            T_c2b, # 4x4
+            l_h # Nx4
+            ) # -> Nx3
+
+    y_h_a, y_h_b, Tbb = proj_TRI(params, K, T_b2c, T_c2b)
+
+    J_h_a = jac_h(y_h_a)
+    J_h_b = jac_h(y_h_b)
+
+    J_ea_dp = np.zeros((n,2,3), dtype=np.float32) # -> Nx2x3 (dp doesn't influence ea)
+    J_ea_dp = J_ea_dp.reshape(-1,3)
+
+    J_eb_dp = np.einsum('...ij,jk,kl,lmn,mo,...o->...in',
+            J_h_a, # Nx2x3
+            K, # 3x3
+            T_b2c[:3], # 3x4
+            dTdp(dp), # 4x4x3
+            T_c2b, # 4x4
+            l_h, # Nx4
+            optimize=True
+            ) # -> Nx2x3
+    J_eb_dp = J_eb_dp.reshape(-1,3)
+
+    J_ea_dl = np.einsum('...ij,jk->...ik',
+            J_h_b, # Nx2x3
+            K, #3x3
+            ) # -> Nx2x3 ( should be Nx2 x Nx3 )
+    J_ea_dl = block_diag(*J_ea_dl)
+    #J_ea_dl = bsr_matrix(
+    #        (J_ea_dl, bix, bip),
+    #        shape=(n*2,n*3),
+    #        blocksize=(2,3)
+    #        )
+    J_eb_dl = np.einsum('...ij,jk,kl,lm,mn,no->...io',
+            J_h_b, #Nx2x3
+            K, #3x3
+            T_b2c[:3], #3x4
+            Tbb, #4x4
+            T_c2b, #4x4
+            np.eye(4,3), #4x3, d(x_h)/d(x)
+            optimize=True
+            ) # -> Nx2x3 ( should be Nx2 x Nx3 )
+    J_eb_dl = block_diag(*J_eb_dl)
+    #J_eb_dl = bsr_matrix(
+    #        (J_eb_dl, bix, bip),
+    #        shape=(n*2,n*3),
+    #        blocksize=(2,3)
+    #        )
+
+    # objective : (Nx4)x3
+    # (# target : (2xNx2) = ea(Nx2) + eb(Nx2) )
+    # (# params : (1+N)x3 = p(1x3) + l(Nx3) )
+    # ( -> objective : (Nx4 x 3+Nx3)
+    J_dp = np.concatenate([J_ea_dp, J_eb_dp], axis=0) # 2x(Nx2) x 2x3
+    J_dl = np.concatenate([J_ea_dl, J_eb_dl], axis=0) # 2x(Nx2) x Nx3
+    J    = np.concatenate([J_dp, J_dl], axis=1) # 2x(Nx2) x (2+N)x3
+
+    return J
+
+def solve_TRI(
+        pt_a, pt_b,
+        K, T_b2c, T_c2b,
+        guess):
+    dp0 = guess.copy()
+
+    T_b2o = tx.compose_matrix(
+            translate=(guess[0],guess[1],0),
+            angles=(0,0,guess[-1])
+            )
+    T_o2b = tx.inverse_matrix(T_b2o)
+    Tcc = np.linalg.multi_dot([
+            T_b2c,
+            T_o2b,
+            T_c2b
+            ])
+
+    # ensure unit translation
+    Tcc[:3,3:] /= np.linalg.norm(Tcc[:3,3:])
+
+    l0 = cv2.triangulatePoints(
+            K.dot(np.eye(3,4)), K.dot(Tcc[:3]),
+            pt_a[None,...],
+            pt_b[None,...]).astype(np.float32)
+    l0[:3] /= l0[3:]
+    l0 = l0[:3].T
+    print('tri-pt3 (orig, u)', tx.unit_vector(l0[0].ravel()))
+
+    x0 = np.concatenate([dp0.ravel(), l0.ravel()], axis=0)
+
+    bx_lo = np.concatenate([
+            guess - [0.3, 0.3, np.deg2rad(60.0)],
+            np.full((len(l0) *3), -np.inf)
+            ])
+    bx_hi = np.concatenate([
+            guess + [0.3, 0.3, np.deg2rad(60.0)],
+            np.full((len(l0) *3), np.inf)
+            ])
+
+    res = least_squares(
+            err_TRI, x0,
+            jac=jac_TRI,
+            x_scale='jac',
+            args=(pt_a, pt_b, K, T_b2c, T_c2b),
+            ftol=1e-15,
+            xtol=np.finfo(float).eps,
+            max_nfev=128,
+            # TODO : enforce bounds?
+            bounds = [bx_lo, bx_hi],
+            #bounds=[
+            #    guess - [0.2, 0.2, np.deg2rad(60.0)], # << enforced bounds to prevent jumps
+            #    guess + [0.2, 0.2, np.deg2rad(60.0)]
+            #    ],
+            loss='huber',
+            method='trf',
+            tr_solver='lsmr',
+            verbose=2,
+            f_scale=0.01
+            )
+
+    x1 = res.x
+
+    dp1 = x1[:3]
+
+    print('dp1 : {}'.format(dp1.ravel()))
+    print('\tdp1(u) : {}'.format(tx.unit_vector(dp1[:2]), dp1[-1]))
+
+    l1  = x1[3:].reshape(-1, 3)
+    #print('tri-pt3 : {}'.format(l1[0].ravel() ))
+    print('\ttri-pt3 (u) : {}'.format(tx.unit_vector(l1[0].ravel()[:2]), l1[-1]))
+    return res.x
+
+
 def main():
     from tests.test_fmat import generate_valid_points
-    np.random.seed(0)
+    #np.random.seed(0)
 
     # define testing parameters
     n = 100
-    s_noise = 0.1
+    s_noise = [0.2, 0.2, 0.05]
 
     # camera intrinsic/extrinsic parameters
     Ks = (1.0 / 1.0)
@@ -170,12 +425,13 @@ def main():
                     translate=[0.174,0,0.113])
     T_b2c = tx.inverse_matrix(T_c2b)
     # generate pose
-    p = np.random.uniform(-np.pi, np.pi, size=3)
+    p = 0.5 * np.random.uniform(-np.pi, np.pi, size=3)
     x,y,h = p
 
-    print 'ground truth', p
+    print '\tground truth : {}'.format(p)
+    print '\tground truth(u) : {}'.format(tx.unit_vector(p[:2]), p[-1])
     guess = np.random.normal(p, scale=s_noise)
-    print 'guess', guess
+    print '\tguess : {}'.format(guess)
 
     R = tx.euler_matrix(0, 0, h)[:3,:3]
     T_b2o = tx.compose_matrix(
@@ -191,8 +447,6 @@ def main():
         ])
     Rcc = Tcc[:3,:3]
     tcc = Tcc[:3,3:]
-
-    Tcci = tx.inverse_matrix(Tcc)
 
     # generate landmark points + pose
     # ensure points are valid
@@ -228,8 +482,22 @@ def main():
     pt2 = pt2[msk]
     print 'input points validity', msk.sum(), msk.size
 
+    print 'gt-pt3', pt3[0]
+    print 'gt-pt3 (u)', tx.unit_vector(pt3[0])
+
     pnp = solve_PNP(pt3, pt2, K, T_b2c, T_c2b,
             guess)
+
+    pt2_a = cv2.projectPoints(
+            pt3, np.zeros(3), np.zeros(3),
+            cameraMatrix=K, distCoeffs=np.zeros(5)
+            )[0][:,0] # I projection
+    pt2_b = pt2 # Tcc projection
+
+    x1 = solve_TRI(pt2_a, pt2_b, K, T_b2c, T_c2b,
+            guess
+            #p
+            )
 
     # comparison
 

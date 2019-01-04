@@ -276,7 +276,7 @@ def str2bool(v):
     elif v.lower() in ('no', 'false', 'f', 'n', '0'):
         return False
     else:
-        raise argparse.ArgumentTypeError('Boolean value expected.')
+        return True
 
 def main():
     parser = ArgumentParser()
@@ -288,7 +288,9 @@ def main():
     parser.add_argument('--auto',
             help='Whether to run the VO process automatically',
             type=str2bool,
-            default=True
+            default=True,
+            const=True,
+            nargs='?'
             )
     parser.add_argument('--vfreq',
             help='Frequency of visualization',
@@ -298,7 +300,9 @@ def main():
     parser.add_argument('--anim',
             help='Save the image files in preparation for animation',
             type=str2bool,
-            default=False
+            default=False,
+            const=True,
+            nargs='?'
             )
     parser.add_argument('--i0',
             help='Sequence starting index (frames prior to this will be skipped)',
@@ -307,6 +311,7 @@ def main():
             )
 
     args = parser.parse_args()
+    print('received args : {}'.format(args))
 
     # convenience params defined here
     idx   = args.index
