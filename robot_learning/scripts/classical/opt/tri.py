@@ -371,6 +371,40 @@ def solve_TRI_fast(
     #            )
     return best_guess, best_pt3
 
+#def solve_TRI_sys(
+#        pt_a, pt_b,
+#        K, Ki,
+#        n_it = 8, # max # of iterations
+#        n_sub = 32 # point subset to run optimization on
+#        ):
+#    n = len(pt_a)
+#
+#    pa = pt_a.dot(Ki[:2,:2].T) + Ki[:2,2:].T # Nx2
+#    th_a  = np.arctan2(pa[:,0], 1)
+#    phi_a = np.arctan2(pa[:,1], 1)
+#
+#    pb = pt_b.dot(Ki[:2,:2].T) + Ki[:2,2:].T # Nx2
+#    th_b  = np.arctan2(pb[:,0], 1)
+#    phi_b = np.arctan2(pb[:,1], 1)
+#
+#    S = np.sin(phi_a) / np.sin(phi_b) #N
+#    S = S[:,None] # Nx1
+#    Oa = np.stack([np.cos(th_a), np.sin(th_a)], axis=-1) #Nx2
+#    Ob = np.stack([np.cos(th_b), np.sin(th_b)], axis=-1) #Nx2
+#
+#    A = np.c_[S*Ob, np.eye(n,n)] # Nx(2+N)
+#    # x = (N+2) x (2)
+#    b = Oa # Nx2
+#    res = np.linalg.lstsq(A, b)
+#
+#    x, e, r, s = np.linalg.lstsq(A, b)
+#
+#    R = x[:2].T
+#    print 'R', R, np.arctan2(R[1,0],R[0,0])
+#    dim = x[2:]
+#    d = np.linalg.norm(dim, axis=-1) # depth of each point
+#    m = dim / d[:,None]
+
 def Rctc2Rbtb(Rc, tc, T_c2b, T_b2c):
     Tcc = np.eye(4)
     Tcc[:3,:3] = Rc
@@ -437,6 +471,8 @@ def main():
     guess_e = (Rc_e, tc_e) # Rc/tc
 
     print('E : {} {}'.format(sc * tb_e[:2], tx.euler_from_matrix(Rb_e)[-1]))
+
+    solve_TRI_sys(pt2_a, pt2_b, K, Ki)
 
     # TRI validation
     (Rc_t, tc_t), pt3_t = solve_TRI(pt2_a, pt2_b, K, Ki, T_b2c, T_c2b,

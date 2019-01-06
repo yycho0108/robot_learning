@@ -35,6 +35,18 @@ from opt.ba import ba_J, ba_J_v2, schur_trick
 from opt.opt import solve_PNP
 from opt.tri import solve_TRI, solve_TRI_fast
 
+def drawlines(img1,img2,lines,pts1,pts2,cols):
+    ''' img1 - image on which we draw the epilines for the points in img2
+        lines - corresponding epilines '''
+    r,c = img1.shape[:2]
+    for r,pt1,pt2,color in zip(lines,pts1,pts2,cols):
+        x0,y0 = map(int, [0, -r[2]/r[1] ])
+        x1,y1 = map(int, [c, -(r[2]+r[0]*c)/r[1] ])
+        img1 = cv2.line(img1, (x0,y0), (x1,y1), color,1)
+        img1 = cv2.circle(img1,tuple(pt1),5,color,-1)
+        img2 = cv2.circle(img2,tuple(pt2),5,color,-1)
+    return img1,img2
+
 def print_ratio(msg, a, b):
     as_int = np.issubdtype(type(a), np.integer)
     if b == 0:
@@ -837,7 +849,7 @@ class ClassicalVO(object):
         self.pEM_ = dict(
                 method=cv2.FM_RANSAC,
                 prob=0.999,
-                threshold=0.5)
+                threshold=1.0)
         self.pLK_ = dict(
                 winSize = (12,6),
                 maxLevel = 4, # == effective winsize up to 32*(2**4) = 512x256
@@ -926,7 +938,8 @@ class ClassicalVO(object):
             pt_new, pt_ref,
             rsp_new, rsp_ref,
             k=16,
-            radius=1.0 # << NOTE : supply valid radius here when dealing with 2D Data
+            radius=1.0, # << NOTE : supply valid radius here when dealing with 2D Data
+            thresh=1.0
             ):
 
         # NOTE : somewhat confusing;
@@ -948,7 +961,7 @@ class ClassicalVO(object):
         # too far from other landmarks to apply non-max
         msk_d = (d.min(axis=1) >= radius)
         # passed non-max
-        msk_v = np.all(rsp_ref[i] < rsp_new[:,None], axis=1) # 
+        msk_v = np.all(rsp_ref[i] < thresh*rsp_new[:,None], axis=1) # 
 
         # format + return results
         msk = (msk_d | msk_v)
@@ -1276,7 +1289,7 @@ class ClassicalVO(object):
         # initialize index
         insert_idx = np.arange(len(pt3_new))
 
-        if len(pt3_ref) >= k2: # match with k below
+        if len(pt2_new) > 0 and len(pt3_ref) >= k2: # match with k below
             # 1: 3D Non-Max Suppression in euclidean coordinates
             fi1 = self.pts_nmx(
                     pt3_new, pt3_ref,
@@ -1292,7 +1305,7 @@ class ClassicalVO(object):
             rsp_new = rsp_new[fi1]
             insert_idx = insert_idx[fi1]
 
-        if len(pt3_ref) >= k3: # match with k below
+        if len(pt2_new) > 0 and len(pt3_ref) >= k3: # match with k below
             # 2: 2D Non-Max Suppression in angular projected coordinates
             fi2 = self.pts_nmx(
                     pt2_new, pt2_ref,
@@ -2175,10 +2188,10 @@ class ClassicalVO(object):
         gpt3 = gpt3.T # TODO : gpt3 not used
 
         # least-squares refinement (?)
-        # (R, t), gpt3 = solve_TRI(pt_p[msk_r], pt_c[msk_r],
-        #         self.cvt_.K_, self.cvt_.Ki_,
-        #         self.cvt_.T_b2c_, self.cvt_.T_c2b_,
-        #         guess = (R,t) )
+        #(R, t), gpt3 = solve_TRI(pt_p[msk_r], pt_c[msk_r],
+        #        self.cvt_.K_, self.cvt_.Ki_,
+        #        self.cvt_.T_b2c_, self.cvt_.T_c2b_,
+        #        guess = (R,t) )
 
         # convert w.r.t base_link
         gpt3_base = gpt3.dot(self.cvt_.T_c2b_[:3,:3].T)
@@ -2456,11 +2469,11 @@ class ClassicalVO(object):
                     log=False
                     )
             # least-squares refinement
-            # (R, t), pt3 = solve_TRI(pt2_u_p[idx_e[msk_r]], pt2_u_c[idx_e[msk_r]],
-            #         self.cvt_.K_, self.cvt_.Ki_,
-            #         self.cvt_.T_b2c_, self.cvt_.T_c2b_,
-            #         guess = (R,t) )
-            # pt3 = pt3.T
+            #(R, t), pt3 = solve_TRI(pt2_u_p[idx_e[msk_r]], pt2_u_c[idx_e[msk_r]],
+            #        self.cvt_.K_, self.cvt_.Ki_,
+            #        self.cvt_.T_b2c_, self.cvt_.T_c2b_,
+            #        guess = (R,t) )
+            #pt3 = pt3.T
             print_ratio('essentialmat', len(idx_e), msk_e.size)
             idx_p = idx_e
 
@@ -2595,7 +2608,7 @@ class ClassicalVO(object):
         # NOTE: distort=false assuming images and points are all pre-undistorted
         pt20_G = pt21.copy() # expected pt2 locations @ pose0
 
-        if len(idx3) > 0:
+        if False:#len(idx3) > 0:
             # fill in guesses if 3D information for pts exists
             pt20_G[idx3] = cv2.projectPoints(
                     # project w.r.t pose0.
@@ -2608,7 +2621,7 @@ class ClassicalVO(object):
                     distCoeffs=self.D_*0,
                     )[0][:,0]
 
-        pt20, idx_t = self.track(img1, img0, pt21, pt2=pt20_G) # NOTE: track backwards
+        pt20, idx_t = self.track(img1, img0, pt21, pt2=None) # NOTE: track backwards
 
         # TODO : FM Correction with self.run_fm_cor() ??
         F = None
@@ -2641,6 +2654,31 @@ class ClassicalVO(object):
             pt21_f = np.squeeze(pt21_f, axis=0)
             pt20_f = np.squeeze(pt20_f, axis=0)
 
+            ## EPILINES VIZ ##
+            # idx_t_v = np.random.choice(idx_t, size=32)
+
+            # img1v = img1.copy()
+            # img2v = img0.copy()
+            # pt2_1v = pt21[idx_t_v]
+            # pt2_2v = pt20[idx_t_v]
+
+            # lines1 = cv2.computeCorrespondEpilines(pt2_2v.reshape(-1,1,2), 2, F)\
+            #         .reshape(-1,3)
+            # lines2 = cv2.computeCorrespondEpilines(pt2_1v.reshape(-1,1,2), 1, F)\
+            #         .reshape(-1,3)
+
+            # efig = self.fig_['epi']
+            # eax = efig.gca()
+            # 
+            # cols = [tuple(np.random.randint(0,255,3).tolist()) for _ in idx_t_v]
+
+            # drawlines(img1v, img2v, lines1, pt2_1v, pt2_2v, cols)
+            # drawlines(img2v, img1v, lines2, pt2_2v, pt2_1v, cols)
+
+            # eax.imshow( np.concatenate([img1v,img2v], axis=1))
+
+            # plt.pause(0.001)
+
             ## -- will sometimes return NaN.
             ck0 = np.all(np.isfinite(pt20_f))
             ck1 = np.all(np.isfinite(pt21_f))
@@ -2666,71 +2704,6 @@ class ClassicalVO(object):
         if idx_g is not None:
             idx_g = idx_t[idx_g]
         # ^ note pt3_gp_u also in camera (pose1) coord
-
-        if True:
-            #tmp_P = np.concatenate([o_R, o_t.reshape(3,1)], axis=1)
-            print R_gp, R_gp.dtype
-            R1,R2,P1,P2,Q,vpxroi1,vpxroi2 = cv2.stereoRectify(
-                    self.cvt_.K_.astype(np.float64), np.zeros(5),
-                    self.cvt_.K_.astype(np.float64), np.zeros(5),
-                    imageSize=(640,480),
-                    R=R_em.astype(np.float64),
-                    T=t_em_u.reshape(3,1).astype(np.float64),
-                    #flags=cv2.CALIB_ZERO_DISPARITY,
-                    flags=0,
-                    alpha=0.0,
-                    )
-
-            #H1 = np.linalg.multi_dot([
-            #    self.cvt_.K_, R1, self.cvt_.Ki_
-            #    ])
-            #H2 = np.linalg.multi_dot([
-            #    self.cvt_.K_, R2, self.cvt_.Ki_
-            #    ])
-            #S = rectify_shearing(H1,H2, (640,480),
-            #        self.cvt_)
-            #R1 = np.linalg.multi_dot([
-            #    self.cvt_.Ki_, S, H1, self.cvt_.K_
-            #    ])
-            #R2 = np.linalg.multi_dot([
-            #    self.cvt_.Ki_, S, H2, self.cvt_.K_
-            #    ])
-
-            #_, H1, H2 = cv2.stereoRectifyUncalibrated(
-            #        pt21[idx_t], pt20[idx_t],
-            #        F,
-            #        (640,480)
-            #        )
-            #R1 = np.linalg.multi_dot([
-            #    self.cvt_.Ki_, H1, self.cvt_.K_])
-            #R2 = np.linalg.multi_dot([
-            #    self.cvt_.Ki_, H2, self.cvt_.K_])
-
-            U0 = cv2.initUndistortRectifyMap(
-                    self.K_, np.zeros(5),
-                    R=R1, newCameraMatrix=P1,
-                    size=(640,480),
-                    m1type=cv2.CV_16SC2
-                    )
-            U1 = cv2.initUndistortRectifyMap(
-                    self.K_, np.zeros(5),
-                    R=R2, newCameraMatrix=P2,
-                    size=(640,480),
-                    m1type=cv2.CV_16SC2
-                    )
-            img0_s = cv2.remap(img0, U0[0], U0[1],
-                    interpolation=cv2.INTER_LINEAR)
-            img1_s = cv2.remap(img1, U1[0], U1[1],
-                    interpolation=cv2.INTER_LINEAR)
-
-            sax = self.fig_['stereo'].gca()
-            sax.cla()
-            sax.imshow(np.concatenate([
-                img0_s[...,::-1],
-                img1_s[...,::-1],
-                ], axis=1
-                ))
-            plt.pause(0.001)
 
         # stage 2.5 : Restore pt20/pt21
         if self.flag_ & ClassicalVO.VO_USE_FM_COR:
@@ -2765,9 +2738,9 @@ class ClassicalVO(object):
         # ( >> TODO << : incorporate confidence information )
         # NOTE: can't use msk3 for o_msk, which is aggregate info.
 
-        _, i_e, i_g = np.intersect1d(idx_e, idx_g,
-                return_indices=True) # idx_e[i_e] == idx_g[i_g]
-
+        # == VIZ : em/gp points comparison ==
+        #_, i_e, i_g = np.intersect1d(idx_e, idx_g,
+        #        return_indices=True) # idx_e[i_e] == idx_g[i_g]
         #tfig = self.fig_['pt3']
         #tax  = tfig.gca(projection='3d')
         #tax.cla()
@@ -2776,6 +2749,7 @@ class ClassicalVO(object):
         #tax.legend()
         #plt.pause(0.001)
         #print 'discrepancy >>', t_em_u, t_gp_u
+        # == VIZ END ==
 
         if pt3_em_u is not None:
             pt3_em = pt3_em_u * sc
@@ -2800,14 +2774,6 @@ class ClassicalVO(object):
         # 2.  parse indices
         o_idx = np.where(o_msk)[0]
         o_pt20, o_pt21 = pt20[o_idx], pt21[o_idx]
-
-        # ???
-        h, w = img0.shape[:2]
-
-        print('size', w, h)
-        # experimental : try stereo rectification
-        print 'o_R', o_R
-        print 'o_t', o_t
 
         # NOTE : final result
         # 1. refined 3d positions + masks,
@@ -2894,6 +2860,27 @@ class ClassicalVO(object):
                         alpha=0.75
                         )
 
+        # == VIZ TRACK BEGIN ==
+        # lfig = self.fig_['trk']
+        # lax = lfig.gca()
+
+        # lax.cla()
+        # lax.imshow(img_c)
+        # lax.plot(pt2_l_current[:,0], pt2_l_current[:,1], 'r+', label='new')
+        # lax.plot(pt2_l[ti,0], pt2_l[ti,1], 'bx', label='old')
+        # lax.quiver(
+        #         pt2_l[ti,0], pt2_l[ti,1],
+        #         pt2_l_current[ti,0] - pt2_l[ti,0], pt2_l_current[ti,1] - pt2_l[ti,1],
+        #         angles='xy',
+        #         scale=1.0,
+        #         scale_units='xy'
+        #         )
+        # if not lax.yaxis_inverted():
+        #     lax.invert_yaxis()
+        # lax.legend()
+        # plt.pause(0.001)
+        # == VIZ TRACK END ==
+
         o_nmsk[ti] = False
         o_nidx = np.where(o_nmsk)[0]
         self.landmarks_.kpt[idx_l[ti],:2] = pt2_l_current[ti]
@@ -2913,7 +2900,8 @@ class ClassicalVO(object):
                 pt2_p, pt2_l,
                 rsp_p, rsp_l,
                 k=4,
-                radius=16.0
+                radius=16.0,
+                thresh=0.5 # 0.0=reject all neighborhoods; 1.0=equal response
                 )
         # == NMX VIS START ==
         #nfig = self.fig_['nmx']
@@ -2928,7 +2916,6 @@ class ClassicalVO(object):
         #nax.legend()
         #plt.pause(0.001)
         # == NMX VIS END ==
-
 
         # NOTE : var-names overwritten with sliced version
         kpt_p = kpt_p[idx_s]
@@ -2957,6 +2944,21 @@ class ClassicalVO(object):
         # o_pt20, o_pt21 will reference pose0, pose1
         # o_R, o_t will be the transform from coord 1 to coord0.
         scale, pt3, msk3, (o_pt20, o_pt21, o_idx), (R_c, t_c) = res
+        # TODO : augment ^ with tracked points
+
+        #vfig = self.fig_['lmk-viz']
+        #vax = vfig.gca()
+        #vax.cla()
+        #vax.imshow( img_c )
+        #h = vax.scatter(
+        #        o_pt21[:,0], o_pt21[:,1],
+        #        c = np.clip(pt3[o_idx,2], 0, 10.0), # color by depth
+        #        vmin=0.0,
+        #        vmax=10.0
+        #        )
+        #cb = vfig.colorbar(h)
+        #plt.pause(0.001)
+        #cb.remove()
 
         #print 'proc_f2f results', np.linalg.norm(t_c)
 
@@ -2993,28 +2995,6 @@ class ClassicalVO(object):
 
  
 
-        # == VIZ TRACK BEGIN ==
-        # lfig = self.fig_['trk']
-        # lax = lfig.gca()
-
-        # lax.cla()
-        # lax.imshow(img_c)
-        # lax.plot(o_pt21_l[:,0], o_pt21_l[:,1], 'r+', label='new')
-        # tmp_old_pt = self.landmarks_.kpt[idx_l[o_idx_l],:2]
-        # lax.plot(tmp_old_pt[:,0], tmp_old_pt[:,1], 'bx', label='old')
-        # lax.quiver(
-        #         tmp_old_pt[:,0], tmp_old_pt[:,1],
-        #         o_pt21_l[:,0] - tmp_old_pt[:,0], o_pt21_l[:,1] - tmp_old_pt[:,1],
-        #         angles='xy',
-        #         scale=1.0,
-        #         scale_units='xy'
-        #         )
-        # if not lax.yaxis_inverted():
-        #     lax.invert_yaxis()
-        # lax.legend()
-        # plt.pause(0.001)
-        # == VIZ TRACK END ==
-
         # update tracking points for successful lmk tracks
         # self.landmarks_.kpt[idx_l[o_idx_l],:2] = o_pt21_l
 
@@ -3035,7 +3015,7 @@ class ClassicalVO(object):
         # i=-1 : current frame (already used -- ?)
         # i=-2 : previous frame (already used)
         # look further back for new information.
-        for di in []:#[-1, -3]:#[-3, -4, -5]:
+        for di in [-3]:#[-1, -3]:#[-3, -4, -5]:
             # TODO : restore
             # -1=index, -2=index-1, -3=index-2
             data = self.graph_.get_data(di)
@@ -3089,7 +3069,7 @@ class ClassicalVO(object):
         des_new = des_p[o_idx_p0]
 
 
-        if len(o_idx_l) >= 256:
+        if len(o_idx_l) >= 256 and len(pt2_new) > 8:
             # enough tracked landmarks; filter
             idx_f = self.filter_pts(
                     pose_c,
