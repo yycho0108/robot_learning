@@ -31,8 +31,9 @@ from scipy.optimize._lsq.common import scale_for_robust_loss_function
 from scipy.optimize._lsq.least_squares import construct_loss_function
 
 from ukf import build_ukf, build_ekf, get_QR
-from ba import ba_J, ba_J_v2, schur_trick
-from opt import solve_PNP, solve_TRI, solve_TRI_fast
+from opt.ba import ba_J, ba_J_v2, schur_trick
+from opt.opt import solve_PNP
+from opt.tri import solve_TRI, solve_TRI_fast
 
 def print_ratio(msg, a, b):
     as_int = np.issubdtype(type(a), np.integer)
@@ -219,6 +220,40 @@ def get_points_color(img, pts, w=3):
     # opt 2 : rms
     cols = np.sqrt(np.mean(np.square(cols),axis=(1,2)))
     return np.asarray(cols, dtype=img.dtype)
+
+def rectify_shearing(H1, H2, imsize, cvt):
+    """Compute shearing transform than can be applied after the rectification
+    transform to reduce distortion.
+    See :
+    http://scicomp.stackexchange.com/questions/2844/shearing-and-hartleys-rectification
+    "Computing rectifying homographies for stereo vision" by Loop & Zhang
+    """
+    w = imsize[0]
+    h = imsize[1]
+
+    a = ((w-1)/2., 0., 1.)
+    b = (w-1., (h-1.)/2., 1.)
+    c = ((w-1.)/2., h-1., 1.)
+    d = (0., (h-1.)/2., 1.)
+
+    ap = cvt.pth_to_pt(H1.dot(a))
+    bp = cvt.pth_to_pt(H1.dot(b))
+    cp = cvt.pth_to_pt(H1.dot(c))
+    dp = cvt.pth_to_pt(H1.dot(d))
+
+    x = bp - dp
+    y = cp - ap
+
+    k1 = (h*h*x[1]*x[1] + w*w*y[1]*y[1]) / (h*w*(x[1]*y[0] - x[0]*y[1]))
+    k2 = (h*h*x[0]*x[1] + w*w*y[0]*y[1]) / (h*w*(x[0]*y[1] - x[1]*y[0]))
+
+    if k1 < 0:
+        k1 *= -1
+        k2 *= -1
+
+    return np.array([[k1, k2, 0],
+                     [0, 1, 0],
+                     [0, 0, 1]], dtype=float)
 
 def score_H(pt1, pt2, H, cvt, sigma=1.0):
     """ Homography model symmetric transfer error. """
@@ -759,7 +794,7 @@ class ClassicalVO(object):
         self.flag_ &= ~ClassicalVO.VO_USE_HOMO # TODO : doesn't really work?
         #self.flag_ &= ~ClassicalVO.VO_USE_BA
         #self.flag_ |= ClassicalVO.VO_USE_PNP
-        self.flag_ &= ~ClassicalVO.VO_USE_FM_COR # doesn't really work anymore?
+        #self.flag_ &= ~ClassicalVO.VO_USE_FM_COR # doesn't really work anymore?
         #self.flag_ &= ~ClassicalVO.VO_USE_SCALE_GP
 
         # TODO : control stage-level verbosity
@@ -802,7 +837,7 @@ class ClassicalVO(object):
         self.pEM_ = dict(
                 method=cv2.FM_RANSAC,
                 prob=0.999,
-                threshold=1.0)
+                threshold=0.5)
         self.pLK_ = dict(
                 winSize = (12,6),
                 maxLevel = 4, # == effective winsize up to 32*(2**4) = 512x256
@@ -2139,6 +2174,12 @@ class ClassicalVO(object):
                 pt_c, pt_p, return_index=True, guess=guess, log=False)
         gpt3 = gpt3.T # TODO : gpt3 not used
 
+        # least-squares refinement (?)
+        # (R, t), gpt3 = solve_TRI(pt_p[msk_r], pt_c[msk_r],
+        #         self.cvt_.K_, self.cvt_.Ki_,
+        #         self.cvt_.T_b2c_, self.cvt_.T_c2b_,
+        #         guess = (R,t) )
+
         # convert w.r.t base_link
         gpt3_base = gpt3.dot(self.cvt_.T_c2b_[:3,:3].T)
         h_gp = robust_mean(-gpt3_base[:,2])
@@ -2415,11 +2456,11 @@ class ClassicalVO(object):
                     log=False
                     )
             # least-squares refinement
-            (R, t), pt3 = solve_TRI_fast(pt2_u_p[idx_e[msk_r]], pt2_u_c[idx_e[msk_r]],
-                    self.cvt_.K_, self.cvt_.Ki_,
-                    self.cvt_.T_b2c_, self.cvt_.T_c2b_,
-                    guess = (R,t) )
-            pt3 = pt3.T
+            # (R, t), pt3 = solve_TRI(pt2_u_p[idx_e[msk_r]], pt2_u_c[idx_e[msk_r]],
+            #         self.cvt_.K_, self.cvt_.Ki_,
+            #         self.cvt_.T_b2c_, self.cvt_.T_c2b_,
+            #         guess = (R,t) )
+            # pt3 = pt3.T
             print_ratio('essentialmat', len(idx_e), msk_e.size)
             idx_p = idx_e
 
@@ -2547,6 +2588,7 @@ class ClassicalVO(object):
         idx3 = np.where(msk3)[0]
         # compose initial dR&dt guess
         R_c0, t_c0 = self.pp2RcTc(pose0, pose1)
+
         sc0 = np.linalg.norm(t_c0)
 
         # track
@@ -2570,6 +2612,11 @@ class ClassicalVO(object):
 
         # TODO : FM Correction with self.run_fm_cor() ??
         F = None
+        ck0 = False
+        ck1 = False
+        pt20_tmp = None
+        pt21_tmp = None
+
         if self.flag_ & ClassicalVO.VO_USE_FM_COR:
             # correct Matches by RANSAC consensus
             F, msk_f = cv2.findFundamentalMat(
@@ -2588,20 +2635,21 @@ class ClassicalVO(object):
 
             # NOTE : invalid to apply undistort() after correction
             # NOTE : below code will work, but validity is questionable.
+            pt21_f, pt20_f = cv2.correctMatches(F,
+                    pt21[None,idx_t],
+                    pt20[None,idx_t])
+            pt21_f = np.squeeze(pt21_f, axis=0)
+            pt20_f = np.squeeze(pt20_f, axis=0)
 
-            #pt21_f, pt20_f = cv2.correctMatches(F,
-            #        pt21[None,idx_t],
-            #        pt20[None,idx_t])
-            #pt21_f = np.squeeze(pt21_f, axis=0)
-            #pt20_f = np.squeeze(pt20_f, axis=0)
+            ## -- will sometimes return NaN.
+            ck0 = np.all(np.isfinite(pt20_f))
+            ck1 = np.all(np.isfinite(pt21_f))
 
-            ### -- will sometimes return NaN.
-            #ck0 = np.all(np.isfinite(pt20_f))
-            #ck1 = np.all(np.isfinite(pt21_f))
-
-            #if ck0 and ck1:
-            #    pt20[idx_t] = pt20_f
-            #    pt21[idx_t] = pt21_f
+            if ck0 and ck1:
+                pt20_tmp = pt20[idx_t]
+                pt21_tmp = pt21[idx_t]
+                pt20[idx_t] = pt20_f
+                pt21[idx_t] = pt21_f
 
         # stage 1 : EM
         res = self.run_EM(pt21[idx_t], pt20[idx_t], no_gp=False, guess=(R_c0, t_c0) )
@@ -2619,8 +2667,78 @@ class ClassicalVO(object):
             idx_g = idx_t[idx_g]
         # ^ note pt3_gp_u also in camera (pose1) coord
 
-        # stage 3 : resolve scale based on guess + GP measurement
+        if True:
+            #tmp_P = np.concatenate([o_R, o_t.reshape(3,1)], axis=1)
+            print R_gp, R_gp.dtype
+            R1,R2,P1,P2,Q,vpxroi1,vpxroi2 = cv2.stereoRectify(
+                    self.cvt_.K_.astype(np.float64), np.zeros(5),
+                    self.cvt_.K_.astype(np.float64), np.zeros(5),
+                    imageSize=(640,480),
+                    R=R_em.astype(np.float64),
+                    T=t_em_u.reshape(3,1).astype(np.float64),
+                    #flags=cv2.CALIB_ZERO_DISPARITY,
+                    flags=0,
+                    alpha=0.0,
+                    )
 
+            #H1 = np.linalg.multi_dot([
+            #    self.cvt_.K_, R1, self.cvt_.Ki_
+            #    ])
+            #H2 = np.linalg.multi_dot([
+            #    self.cvt_.K_, R2, self.cvt_.Ki_
+            #    ])
+            #S = rectify_shearing(H1,H2, (640,480),
+            #        self.cvt_)
+            #R1 = np.linalg.multi_dot([
+            #    self.cvt_.Ki_, S, H1, self.cvt_.K_
+            #    ])
+            #R2 = np.linalg.multi_dot([
+            #    self.cvt_.Ki_, S, H2, self.cvt_.K_
+            #    ])
+
+            #_, H1, H2 = cv2.stereoRectifyUncalibrated(
+            #        pt21[idx_t], pt20[idx_t],
+            #        F,
+            #        (640,480)
+            #        )
+            #R1 = np.linalg.multi_dot([
+            #    self.cvt_.Ki_, H1, self.cvt_.K_])
+            #R2 = np.linalg.multi_dot([
+            #    self.cvt_.Ki_, H2, self.cvt_.K_])
+
+            U0 = cv2.initUndistortRectifyMap(
+                    self.K_, np.zeros(5),
+                    R=R1, newCameraMatrix=P1,
+                    size=(640,480),
+                    m1type=cv2.CV_16SC2
+                    )
+            U1 = cv2.initUndistortRectifyMap(
+                    self.K_, np.zeros(5),
+                    R=R2, newCameraMatrix=P2,
+                    size=(640,480),
+                    m1type=cv2.CV_16SC2
+                    )
+            img0_s = cv2.remap(img0, U0[0], U0[1],
+                    interpolation=cv2.INTER_LINEAR)
+            img1_s = cv2.remap(img1, U1[0], U1[1],
+                    interpolation=cv2.INTER_LINEAR)
+
+            sax = self.fig_['stereo'].gca()
+            sax.cla()
+            sax.imshow(np.concatenate([
+                img0_s[...,::-1],
+                img1_s[...,::-1],
+                ], axis=1
+                ))
+            plt.pause(0.001)
+
+        # stage 2.5 : Restore pt20/pt21
+        if self.flag_ & ClassicalVO.VO_USE_FM_COR:
+            if ck0 and ck1:
+                pt20[idx_t] = pt20_tmp
+                pt21[idx_t] = pt21_tmp
+
+        # stage 3 : resolve scale based on guess + GP measurement
 
         # interpolation factor between
         # ground-plane estimates vs. essentialmat estimates
@@ -2646,8 +2764,20 @@ class ClassicalVO(object):
         # 2. fill in pt3 information + mark indices
         # ( >> TODO << : incorporate confidence information )
         # NOTE: can't use msk3 for o_msk, which is aggregate info.
+
+        _, i_e, i_g = np.intersect1d(idx_e, idx_g,
+                return_indices=True) # idx_e[i_e] == idx_g[i_g]
+
+        #tfig = self.fig_['pt3']
+        #tax  = tfig.gca(projection='3d')
+        #tax.cla()
+        #tax.plot(pt3_em_u[i_e,0], pt3_em_u[i_e,1], pt3_em_u[i_e,2], 'rx', label='em')
+        #tax.plot(pt3_gp_u[i_g,0], pt3_gp_u[i_g,1], pt3_gp_u[i_g,2], 'b+', label='gp')
+        #tax.legend()
+        #plt.pause(0.001)
+        #print 'discrepancy >>', t_em_u, t_gp_u
+
         if pt3_em_u is not None:
-            print('applied scale', sc)
             pt3_em = pt3_em_u * sc
             pt3[idx_e] = np.where(
                     msk3[idx_e,None],
@@ -2667,10 +2797,17 @@ class ClassicalVO(object):
             msk3[idx_g] = True
             o_msk[idx_g] = True
 
-
         # 2.  parse indices
         o_idx = np.where(o_msk)[0]
         o_pt20, o_pt21 = pt20[o_idx], pt21[o_idx]
+
+        # ???
+        h, w = img0.shape[:2]
+
+        print('size', w, h)
+        # experimental : try stereo rectification
+        print 'o_R', o_R
+        print 'o_t', o_t
 
         # NOTE : final result
         # 1. refined 3d positions + masks,
@@ -2898,7 +3035,8 @@ class ClassicalVO(object):
         # i=-1 : current frame (already used -- ?)
         # i=-2 : previous frame (already used)
         # look further back for new information.
-        for di in [-3]:#[-1, -3]:#[-3, -4, -5]:
+        for di in []:#[-1, -3]:#[-3, -4, -5]:
+            # TODO : restore
             # -1=index, -2=index-1, -3=index-2
             data = self.graph_.get_data(di)
             if data is None:

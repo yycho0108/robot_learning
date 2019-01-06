@@ -852,7 +852,7 @@ class Conversions(object):
     @staticmethod
     def pth_to_pt(pth):
         # copied
-        return (pth[:, :-1] / pth[:, -1:])
+        return (pth[..., :-1] / pth[..., -1:])
 
     @staticmethod
     def pose_to_T(pose):
