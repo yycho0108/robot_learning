@@ -8,6 +8,8 @@ from matplotlib import pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from common import jac_h, to_h, generate_data
 
+from ransac import RANSACModel
+
 def proj_TRI(
         params,
         pt_a,

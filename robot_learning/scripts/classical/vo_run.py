@@ -17,7 +17,7 @@ try:
 except ImportError:
   from pathlib2 import Path  # python 2 backport
 
-from vo3 import ClassicalVO
+from vo import ClassicalVO
 from gui import VoGUI
 
 sys.path.append('../')
@@ -71,6 +71,7 @@ class CVORunner(object):
         self.s_  = []
 
         #self.gui_ = VoGUI()
+        self.auto_ = False
         self.quit_ = False
 
     def handle_key(self, event):
@@ -79,9 +80,13 @@ class CVORunner(object):
             self.index_ += 1
             if self.index_ < self.n_:
                 self.step(viz=True)
+
         if k in ['q', 'escape']:
             self.quit_ = True
             sys.exit(0)
+
+        if k in ['a']:
+            self.auto_ = (not self.auto_)
 
     def scan_to_pt(self, scan):
         r, mask = scan[:,0], scan[:,1]
@@ -241,8 +246,10 @@ class CVORunner(object):
         #self.gui_.run()
         self.fig_.canvas.mpl_connect('key_press_event', self.handle_key)
         self.fig_.canvas.mpl_connect('close_event', sys.exit)
-        if auto:
-            while not self.quit_:
+        self.auto_ = auto
+
+        while not self.quit_:
+            if self.auto_:
                 if self.index_ < self.n_:
                     self.index_ += 1
                     viz = ( (self.index_ % vfreq) == 0)
@@ -250,12 +257,15 @@ class CVORunner(object):
                 else:
                     # wait
                     plt.pause(0.001)
+
                 if viz:
+                    # NOTE : this means keystrokes are handled at v_freq, not every frame.
+                    # can be pretty frustratting.
                     plt.pause(0.001)
                 if anim:
                     plt.savefig('/tmp/{:04d}.png'.format(self.index_))
-        else:
-            plt.show()
+            else:
+                plt.pause(0.001)
 
         # save ...
         cam_pos = np.stack([self.tx_, self.ty_, self.th_], axis=-1)

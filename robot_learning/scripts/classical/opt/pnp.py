@@ -7,6 +7,7 @@ import cv2
 from matplotlib import pyplot as plt
 
 from common import jac_h, to_h, generate_data
+from ransac import RANSACModel
 
 def dTdp(p):
     # T = (4x4)
@@ -93,7 +94,9 @@ def jac_PNP(p, pt3, pt2, K, T_b2c, T_c2b):
 def solve_PNP(
         pt3, pt2, # << observations
         K, T_b2c, T_c2b, # << camera intrinsic/extrinsic parameters
-        guess): # << independent variable to optimize
+        guess,
+        verbose=1
+        ): # << independent variable to optimize
     res = least_squares(
             err_PNP, guess,
             jac=jac_PNP,
@@ -110,7 +113,7 @@ def solve_PNP(
             loss='huber',
             method='trf',
             tr_solver='lsmr',
-            verbose=1,
+            verbose=verbose,
             f_scale=2.0
             )
     return res.x
@@ -131,7 +134,50 @@ def parse_CVPNP(rvec, tvec, T_c2b, T_b2c):
 
     return np.asarray([t_b[0], t_b[1], r_b[-1]])
 
+class PNPSolverRANSAC(object):
+    def __init__(self, cvt,
+            thresh=1.0,
+            prob=0.99,
+            ):
+        self.cvt_ = cvt
+        self.ransac_ = RANSACModel(
+                n_model=3,
+                model_fn=self.model_fn,
+                err_fn=self.err_fn,
+                thresh=thresh,
+                prob=prob
+                )
+
+    def model_fn(self, idx):
+        model = solve_PNP(
+                self.pt3_[idx],
+                self.pt2_[idx],
+                self.cvt_.K_,
+                self.cvt_.T_b2c_,
+                self.cvt_.T_c2b_,
+                self.guess_,
+                verbose=0)
+        return model
+
+    def err_fn(self, model):
+        err = err_PNP(model,
+                self.pt3_, self.pt2_,
+                self.cvt_.K_,
+                self.cvt_.T_b2c_,
+                self.cvt_.T_c2b_)
+        return np.linalg.norm(err.reshape(-1,2), axis=-1)
+
+    def __call__(self, pt3, pt2, guess, max_it=128):
+        # cache data
+        self.pt3_ = pt3
+        self.pt2_ = pt2
+        self.guess_ = guess
+
+        n_it, res = self.ransac_(len(pt3), max_it)
+        return n_it, res['model'], res['inl'], 
+
 def main():
+    np.random.seed( 0 )
     # default K
     K = np.reshape([
         499.114583, 0.000000, 325.589216,
@@ -146,6 +192,11 @@ def main():
     T_b2c = tx.inverse_matrix(T_c2b)
 
     pt3, pt2a, pt2b, pose = generate_data(n=128, K=K, T_c2b=T_c2b)
+
+    # garble some data
+    pt2a = np.random.normal(pt2a, scale=0.1)
+    pt2b = np.random.normal(pt2b, scale=2.0)
+
     guess = np.random.normal(pose, scale=(0.5,0.2,np.deg2rad(30.0)))
 
     pnp = solve_PNP(pt3, pt2b, K, T_b2c, T_c2b,
@@ -174,6 +225,8 @@ def main():
             iterationsCount=10000,
             reprojectionError=2.0,
             confidence=0.99,
+            flags=cv2.SOLVEPNP_EPNP
+            #flags=cv2.SOLVEPNP_ITERATIVE
             )
     _, rvec_cv, tvec_cv, _ = pnp_cv
 
