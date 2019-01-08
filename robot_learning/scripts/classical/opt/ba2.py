@@ -232,14 +232,17 @@ class BASolver(object):
                 vals['T_bs_bd'], # Nx4x4
                 T_c_b, # 4x4
                 np.eye(4,3), # 4x3
-                j_i)[..., None] #Nx3
+                j_i,
+                optimize=True
+                )[..., None] #Nx3
 
         # J_s objective : Nx2 x 3
         J_s = np.einsum('...ab,...bcd,ce,...e->...ad',
                 j_lhs, # Nx2x4
                 j_s, # Nx4x4x3
                 T_c_b, # 4x4
-                vals['lmk_s_h'] # Nx4
+                vals['lmk_s_h'], # Nx4
+                optimize=True
                 )
 
         # J_d objective : Nx2 x 3
@@ -247,7 +250,8 @@ class BASolver(object):
                 j_lhs, # Nx2x4
                 j_d, # Nx4x4x3
                 T_c_b, # 4x4
-                vals['lmk_s_h'] # Nx4
+                vals['lmk_s_h'], # Nx4
+                optimize=True
                 )
 
         return J_i, J_s, J_d
@@ -318,6 +322,9 @@ class BASolver(object):
         J = csr_matrix(J)
         return J
 
+    def sparsity_i(self):
+        pass
+
     def jac_i(self, params,
             n_c, n_l,
             i_s, i_d, i_i,
@@ -363,8 +370,6 @@ class BASolver(object):
         J_l[np.arange(n_o), :, i_i, :] = J_i
 
         J = csr_matrix(J)
-        # print J.nnz, J.shape
-
         return J
 
     def __call__(self,
@@ -376,24 +381,33 @@ class BASolver(object):
         n_c = len( pos )
         n_l = len( lmk )
 
+        ## == primary 'FAST' BA ==
         x0 = np.concatenate([pos.ravel(), lmk.ravel()], axis=0)
-
-        xs = np.concatenate([
-                    np.repeat([0.01, 0.01, np.deg2rad(1.0)], n_c),
-                    np.full(n_l, 0.03)], axis=0)
-
         res = least_squares(
                 self.err_i, x0,
-                #jac_sparsity=A,
                 jac=self.jac_i,
-                #x_scale='jac',
-                x_scale=xs,
                 args=(n_c, n_l, i_s, i_d, i_i, pt_s, pt_d),
                 **self.pBA_
                 )
-
         pos_r = res.x[:n_c*s_c].reshape(-1, s_c)
         lmk_r = res.x[n_c*s_c:].reshape(-1, s_l)
+
+        ## == secondary 'SLOW' BA ==
+
+        # x scale
+        # xs = np.concatenate([
+        #             np.repeat([0.01, 0.01, np.deg2rad(1.0)], n_c),
+        #             np.full(n_l, 0.2)], axis=0)
+        # pBA['x_scale'] = xs
+        # pBA['ftol'] = 1e-6
+        # pBA['loss'] = 'linear'
+        # x0 = np.concatenate([pos_r.ravel(), lmk_r.ravel()], axis=0)
+        # res = least_squares(
+        #         self.err_i, x0,
+        #         jac=self.jac_i,
+        #         args=(n_c, n_l, i_s, i_d, i_i, pt_s, pt_d),
+        #         **pBA
+        #         )
 
         ## == pose-only BA BEG ==
         #x0 = pos_r.ravel()
@@ -570,8 +584,8 @@ def main():
 
     # BA parameters
     pBA = dict(
-            ftol=1e-6,
-            xtol=np.finfo(float).eps,
+            ftol=1e-4,
+            xtol=np.finfo(np.float32).eps,
             loss='soft_l1',
             max_nfev=8192,
             method='trf',
