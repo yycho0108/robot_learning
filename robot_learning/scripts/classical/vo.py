@@ -446,6 +446,10 @@ class ClassicalVO(object):
         self.scales_ = defaultdict(lambda:[])
 
         # ??
+        self.ba_ = BASolver(
+                self.cvt_.K_, self.cvt_.Ki_,
+                self.cvt_.T_c2b_, self.cvt_.T_b2c_,
+                self.pBA_)
         self.pnp_ = PNPSolverRANSAC(self.cvt_,
                 thresh=1.0,
                 prob=0.999
@@ -1425,6 +1429,17 @@ class ClassicalVO(object):
         #        **self.pBA_
         #        )
         # -- opt2 : scipy --
+
+        res = self.ba_(
+                pos = p0, 
+                lmk = self.landmarks_.dpt[li_u],
+                i_s = ?, # << must obtain from graph
+                i_d = ?, # << must obtain from graph
+                i_i = ?, # << must obtain from graph
+                pt_s,
+                pt_d,
+                self.pBA_
+                )
 
         res = least_squares(
                 self.residual_BA, x0,

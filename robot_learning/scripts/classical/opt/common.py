@@ -8,6 +8,9 @@ def to_h(x):
             constant_values=1.0
             )
 
+def from_h(x):
+    return x[...,:-1] / x[...,-1:]
+
 def jac_h(x_h):
     # x = NxD
     # x_h = Nx(D+1) = [x0,x1,... s]
