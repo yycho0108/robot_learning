@@ -43,7 +43,16 @@ def rec(src, pt_s,
             T_b2o, T_c2b, to_h(lmk_s)))
 
 class BASolver(object):
-    def __init__(self, K, Ki, T_c_b, T_b_c, pBA):
+    def __init__(self,
+            # camera params
+            K, Ki,
+            T_c_b, T_b_c,
+            # BA params
+            pBA,
+            # smoothing params
+            smooth=True,
+            s_scale=1.0
+            ):
         # camera intrinsic/extrinsic parameters
         self.K_ = K
         self.Ki_ = Ki
@@ -52,6 +61,9 @@ class BASolver(object):
 
         # scipy least_squares BA parameters
         self.pBA_ = pBA
+
+        self.smooth_ = smooth
+        self.s_scale_ = s_scale
 
     def Tbb(self, src, dst):
         """
@@ -186,13 +198,18 @@ class BASolver(object):
             src, dst,
             inv_d,
             pt_s, pt_d,
-            ravel=True
+            ravel=True,
+            #clip=1e3
+            clip=None
             ):
         pt_d_r = self.project(src, dst, inv_d, pt_s)
 
         res = (pt_d_r - pt_d)
         if ravel:
             res = res.ravel()
+
+        if clip is not None:
+            res = np.clip(res, -clip, clip)
         return res
 
     def jac(self, src, dst, inv_d, pt_s, pt_d):
@@ -283,11 +300,33 @@ class BASolver(object):
         """ err() from sparse indices """
         pos = params[:n_c*s_c].reshape(-1, s_c) # should be n_c x 3
         lid = params[n_c*s_c:].reshape(-1, s_l) # should be n_l x 1
-        return self.err_i_p(pos, lid,
+
+        e0 = self.err_i_p(pos, lid,
                 n_c, n_l,
                 i_s, i_d, i_i,
                 pt_s, pt_d,
-                s_c, s_l)
+                s_c, s_l) # Nx2
+
+        if self.smooth_:
+            e1 = self.err_s(pos) # 
+            return np.concatenate([e0, e1], axis=0)
+        else:
+            return e0
+
+    def err_s(self, pos, s_c=3):
+        # smoothing error
+        pos = pos.reshape(-1, s_c)
+        return self.s_scale_ * np.diff(pos, axis=0).ravel()
+
+    def jac_s(self, pos, s_c=3):
+        # smoothing jacobian
+        n = len(pos)
+        J = np.zeros((n-1, s_c, n, s_c), dtype=np.float32)
+
+        J[np.arange(n-1), :, np.arange(n-1), :] = -self.s_scale_
+        J[np.arange(n-1), :, np.arange(1,n), :] = self.s_scale_
+
+        return J.reshape((n-1)*s_c, n*s_c) # (N-1)x3 x Nx3
 
     def jac_i_p(self, pos, lid,
             n_c, n_l,
@@ -356,21 +395,42 @@ class BASolver(object):
         # err@o_i = err (lmk[i_i], pt[i_s], pt[i_d])
 
         # allocate space for jacobian
-        J = np.zeros(
-                (n_o*s_o, n_c*s_c + n_l*s_l),
-                dtype=np.float32)
-        # print 'Js', J.shape
+        if self.smooth_:
+            J = np.zeros(
+                    (n_o*s_o + (n_c-1)*s_c, n_c*s_c + n_l*s_l),
+                    dtype=np.float32)
 
-        # slice, for more intuitive indexing
-        J_c = J[:, :n_c*s_c].reshape(n_o, s_o, n_c, s_c) # Nx2xPx3
-        J_l = J[:, n_c*s_c:].reshape(n_o, s_o, n_l, s_l) # Nx2xLx1
+            J0 = J[:n_o*s_o] # regular part
+            J1 = J[n_o*s_o:] # smoothing part!
 
-        J_c[np.arange(n_o), :, i_s, :] = J_s 
-        J_c[np.arange(n_o), :, i_d, :] = J_d
-        J_l[np.arange(n_o), :, i_i, :] = J_i
+            # slice, for more intuitive indexing
+            J_c = J0[:, :n_c*s_c].reshape(n_o, s_o, n_c, s_c) # Nx2xPx3
+            J_l = J0[:, n_c*s_c:].reshape(n_o, s_o, n_l, s_l) # Nx2xLx1
 
-        J = csr_matrix(J)
-        return J
+            J_c[np.arange(n_o), :, i_s, :] = J_s 
+            J_c[np.arange(n_o), :, i_d, :] = J_d
+            J_l[np.arange(n_o), :, i_i, :] = J_i
+
+            J_smooth = self.jac_s(pos)
+            J1[:, :n_c*s_c] = J_smooth
+
+            J = csr_matrix(J)
+            return J
+        else:
+            J = np.zeros(
+                    (n_o*s_o, n_c*s_c + n_l*s_l),
+                    dtype=np.float32)
+
+            # slice, for more intuitive indexing
+            J_c = J[:, :n_c*s_c].reshape(n_o, s_o, n_c, s_c) # Nx2xPx3
+            J_l = J[:, n_c*s_c:].reshape(n_o, s_o, n_l, s_l) # Nx2xLx1
+
+            J_c[np.arange(n_o), :, i_s, :] = J_s 
+            J_c[np.arange(n_o), :, i_d, :] = J_d
+            J_l[np.arange(n_o), :, i_i, :] = J_i
+
+            J = csr_matrix(J)
+            return J
 
     def __call__(self,
             pos, lmk,
@@ -381,11 +441,15 @@ class BASolver(object):
         n_c = len( pos )
         n_l = len( lmk )
 
-        ## == primary 'FAST' BA ==
+        ## == primary 'FAST' BA? ==
+        xs = np.concatenate([
+                    0.2 * np.repeat([0.03, 0.03, np.deg2rad(3.0)], n_c),
+                    lmk], axis=0)
         x0 = np.concatenate([pos.ravel(), lmk.ravel()], axis=0)
         res = least_squares(
                 self.err_i, x0,
                 jac=self.jac_i,
+                x_scale=xs,
                 args=(n_c, n_l, i_s, i_d, i_i, pt_s, pt_d),
                 **self.pBA_
                 )
@@ -567,7 +631,7 @@ def gen_obs(
     return pt_s, pt_d, d_s, i_s, i_d, i_i, i_i_u, i_i_idx
 
 def main():
-    np.random.seed( 2 )
+    np.random.seed( 3 )
 
     # default K
     K = np.reshape([
@@ -584,10 +648,13 @@ def main():
 
     # BA parameters
     pBA = dict(
-            ftol=1e-4,
+            ftol=1e-5,
             xtol=np.finfo(np.float32).eps,
             loss='soft_l1',
-            max_nfev=8192,
+            #loss='huber',
+            #loss='cauchy',
+            #x_scale='jac',
+            max_nfev=1024,
             method='trf',
             verbose=2,
             tr_solver='lsmr',
@@ -603,7 +670,7 @@ def main():
 
     # generate observations
     pt_s, pt_d, d_s, i_s, i_d, i_i, i_i_u, i_i_i = gen_obs(pos, lmk,
-        K, Ki, T_c2b, T_b2c, n=8192 * 4)
+        K, Ki, T_c2b, T_b2c, n=8192)
 
     print '# lmk', len(d_s)
     print '# obs', len(pt_s)
@@ -614,7 +681,7 @@ def main():
     # perturb data
     pos_g = np.random.normal(
             pos,
-            scale=(0.2, 0.2, np.deg2rad(10.0))
+            scale=(0.1, 0.1, np.deg2rad(5.0))
             )
 
     # err validation
@@ -636,6 +703,8 @@ def main():
     e0r = e0.ravel()
     
     e0 = np.linalg.norm(e0, axis=-1)
+    #plt.hist(e0r)
+    #plt.show()
 
     pos_r, di_s_r , res = solver(
             pos_g, di_s,
